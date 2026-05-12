@@ -28,7 +28,8 @@ a {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -162,4 +163,26 @@ input {
 .empty {
   padding: 32px;
   text-align: center;
+}
+
+.quick-test-card {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 18px;
+}
+
+.quick-test-card code {
+  background: #eef1f7;
+  border-radius: 8px;
+  padding: 2px 6px;
+}
+
+.json-input {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  min-height: 220px;
+  padding: 12px;
+  resize: vertical;
+  width: 100%;
 }
