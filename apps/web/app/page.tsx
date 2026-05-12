@@ -1,6 +1,9 @@
 import Link from "next/link";
 
 export default function HomePage() {
+  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "https://api.agentflow.autowiz.net";
+  const goHighLevelConnectUrl = `${apiBaseUrl}/oauth/gohighlevel/start`;
+
   return (
     <section className="panel" style={{ padding: 32 }}>
       <p className="eyebrow">MVP foundation</p>
@@ -16,9 +19,14 @@ export default function HomePage() {
         <span className="badge">Calls excluded</span>
         <span className="badge">No stored tags/custom fields</span>
       </div>
-      <Link className="button" href="/threads">
-        Open pending replies
-      </Link>
+      <div className="badge-row">
+        <Link className="button" href="/threads">
+          Open pending replies
+        </Link>
+        <a className="button secondary" href={goHighLevelConnectUrl}>
+          Connect GoHighLevel
+        </a>
+      </div>
     </section>
   );
 }
