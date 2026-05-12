@@ -22,6 +22,7 @@ export const webhookEventStatusEnum = pgEnum("webhook_event_status", [
   "processed",
   "failed"
 ]);
+export const ghlUserTypeEnum = pgEnum("ghl_user_type", ["Company", "Location"]);
 
 export const agencies = pgTable("agencies", {
   id: uuid("id")
@@ -166,6 +167,35 @@ export const webhookEvents = pgTable(
       table.idempotencyKey
     ),
     statusIdx: index("webhook_events_status_idx").on(table.status)
+  })
+);
+
+export const ghlOAuthInstallations = pgTable(
+  "ghl_oauth_installations",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    companyId: text("company_id").notNull(),
+    locationId: text("location_id").notNull().default(""),
+    userId: text("user_id"),
+    userType: ghlUserTypeEnum("user_type").notNull(),
+    accessToken: text("access_token").notNull(),
+    refreshToken: text("refresh_token").notNull(),
+    tokenType: text("token_type").notNull().default("Bearer"),
+    scope: text("scope"),
+    refreshTokenId: text("refresh_token_id"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    raw: jsonb("raw").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    companyLocationUnique: uniqueIndex(
+      "ghl_oauth_installations_company_location_user_type_unique"
+    ).on(table.companyId, table.locationId, table.userType),
+    companyIdx: index("ghl_oauth_installations_company_id_idx").on(table.companyId),
+    locationIdx: index("ghl_oauth_installations_location_id_idx").on(table.locationId)
   })
 );
 

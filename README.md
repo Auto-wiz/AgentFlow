@@ -30,6 +30,30 @@ Production secrets are configured through Wrangler:
 wrangler secret put DATABASE_URL
 wrangler secret put GHL_WEBHOOK_SECRET
 wrangler secret put GHL_API_TOKEN
+wrangler secret put GHL_CLIENT_ID
+wrangler secret put GHL_CLIENT_SECRET
+```
+
+Set these Worker variables in the Cloudflare dashboard or as `[vars]` in
+`apps/api/wrangler.toml` for OAuth/install routing:
+
+```txt
+GHL_INSTALL_URL
+GHL_OAUTH_REDIRECT_URI
+GHL_OAUTH_USER_TYPE
+FRONTEND_BASE_URL
+```
+
+GoHighLevel OAuth redirect URL:
+
+```txt
+https://api.agentflow.autowiz.net/oauth/gohighlevel/callback
+```
+
+Install flow entrypoint:
+
+```txt
+https://api.agentflow.autowiz.net/oauth/gohighlevel/start
 ```
 
 ## Validation

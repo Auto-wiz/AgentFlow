@@ -1,6 +1,16 @@
-import { createDb, agencies, contacts, locations, messages, threads, webhookEvents } from "@agentflow/db";
+import {
+  createDb,
+  agencies,
+  contacts,
+  ghlOAuthInstallations,
+  locations,
+  messages,
+  threads,
+  webhookEvents
+} from "@agentflow/db";
 import type { ContactOnDemandDetails, MessageChannel, MessageDirection, NormalizedGhlWebhookEvent } from "@agentflow/shared";
 import { and, desc, eq, or } from "drizzle-orm";
+import type { Context } from "hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
@@ -9,11 +19,31 @@ type Env = {
   GHL_WEBHOOK_SECRET?: string;
   GHL_API_TOKEN?: string;
   GHL_API_BASE_URL?: string;
+  GHL_CLIENT_ID?: string;
+  GHL_CLIENT_SECRET?: string;
+  GHL_INSTALL_URL?: string;
+  GHL_OAUTH_REDIRECT_URI?: string;
+  GHL_OAUTH_USER_TYPE?: string;
+  FRONTEND_BASE_URL?: string;
   MESSAGE_QUEUE: Queue<NormalizedGhlWebhookEvent>;
 };
 
 type HonoBindings = {
   Bindings: Env;
+};
+
+type GhlOAuthTokenResponse = {
+  accessToken: string;
+  refreshToken: string;
+  tokenType: string;
+  expiresIn: number;
+  scope: string | null;
+  refreshTokenId: string | null;
+  userType: "Company" | "Location";
+  companyId: string;
+  locationId: string | null;
+  userId: string | null;
+  raw: unknown;
 };
 
 const app = new Hono<HonoBindings>();
@@ -28,6 +58,95 @@ app.use(
 );
 
 app.get("/health", (c) => c.json({ ok: true }));
+
+app.get("/oauth/gohighlevel/start", (c) => {
+  if (!c.env.GHL_INSTALL_URL) {
+    return c.json({ error: "GHL_INSTALL_URL is not configured" }, 500);
+  }
+
+  const state = crypto.randomUUID();
+  const installUrl = new URL(c.env.GHL_INSTALL_URL);
+  installUrl.searchParams.set("state", state);
+
+  if (c.env.GHL_OAUTH_REDIRECT_URI) {
+    installUrl.searchParams.set("redirect_uri", c.env.GHL_OAUTH_REDIRECT_URI);
+  }
+
+  setCookie(c, {
+    name: "ghl_oauth_state",
+    value: state,
+    maxAge: 600
+  });
+  return c.redirect(installUrl.toString());
+});
+
+app.get("/oauth/gohighlevel/callback", async (c) => {
+  const code = c.req.query("code");
+  const error = c.req.query("error");
+  const state = c.req.query("state");
+  const storedState = getCookie(c.req.raw.headers, "ghl_oauth_state");
+
+  if (error) {
+    return redirectToFrontend(c, `/settings/integrations?ghl=error&reason=${encodeURIComponent(error)}`);
+  }
+
+  if (!code) {
+    return c.json({ error: "Missing OAuth code" }, 400);
+  }
+
+  if (state && storedState && state !== storedState) {
+    return c.json({ error: "Invalid OAuth state" }, 400);
+  }
+
+  const missing = ["GHL_CLIENT_ID", "GHL_CLIENT_SECRET", "GHL_OAUTH_REDIRECT_URI"].filter(
+    (key) => !c.env[key as keyof Env]
+  );
+  if (missing.length > 0) {
+    return c.json({ error: "Missing OAuth configuration", missing }, 500);
+  }
+
+  const tokenResponse = await exchangeGhlOAuthCode(c.env, code);
+  const db = createDb(c.env.DATABASE_URL);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + tokenResponse.expiresIn * 1000);
+
+  await db
+    .insert(ghlOAuthInstallations)
+    .values({
+      companyId: tokenResponse.companyId,
+      locationId: tokenResponse.locationId ?? "",
+      userId: tokenResponse.userId ?? null,
+      userType: tokenResponse.userType,
+      accessToken: tokenResponse.accessToken,
+      refreshToken: tokenResponse.refreshToken,
+      tokenType: tokenResponse.tokenType,
+      scope: tokenResponse.scope ?? null,
+      refreshTokenId: tokenResponse.refreshTokenId ?? null,
+      expiresAt,
+      raw: tokenResponse.raw,
+      updatedAt: now
+    })
+    .onConflictDoUpdate({
+      target: [
+        ghlOAuthInstallations.companyId,
+        ghlOAuthInstallations.locationId,
+        ghlOAuthInstallations.userType
+      ],
+      set: {
+        userId: tokenResponse.userId ?? null,
+        accessToken: tokenResponse.accessToken,
+        refreshToken: tokenResponse.refreshToken,
+        tokenType: tokenResponse.tokenType,
+        scope: tokenResponse.scope ?? null,
+        refreshTokenId: tokenResponse.refreshTokenId ?? null,
+        expiresAt,
+        raw: tokenResponse.raw,
+        updatedAt: now
+      }
+    });
+
+  return redirectToFrontend(c, "/settings/integrations?ghl=connected");
+});
 
 app.post("/webhooks/gohighlevel", async (c) => {
   const rawBody = await c.req.text();
@@ -231,6 +350,93 @@ app.post("/threads/:id/read", async (c) => {
 
   return c.json({ ok: true });
 });
+
+async function exchangeGhlOAuthCode(
+  env: Env,
+  code: string
+): Promise<GhlOAuthTokenResponse> {
+  const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
+  const response = await fetch(`${baseUrl}/oauth/token`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      client_id: env.GHL_CLIENT_ID,
+      client_secret: env.GHL_CLIENT_SECRET,
+      grant_type: "authorization_code",
+      code,
+      user_type: env.GHL_OAUTH_USER_TYPE ?? "Company",
+      redirect_uri: env.GHL_OAUTH_REDIRECT_URI
+    })
+  });
+
+  const raw = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = asRecord(raw);
+    throw new Error(
+      `GoHighLevel token exchange failed: ${stringValue(error.message ?? response.status)}`
+    );
+  }
+
+  const token = asRecord(raw);
+  const userType = stringValue(token.userType);
+  const companyId = stringValue(token.companyId);
+
+  if (
+    !stringValue(token.access_token) ||
+    !stringValue(token.refresh_token) ||
+    !companyId ||
+    (userType !== "Company" && userType !== "Location")
+  ) {
+    throw new Error("GoHighLevel token response is missing required fields");
+  }
+
+  return {
+    accessToken: stringValue(token.access_token),
+    refreshToken: stringValue(token.refresh_token),
+    tokenType: stringValue(token.token_type) || "Bearer",
+    expiresIn: Number(token.expires_in ?? 86400),
+    scope: stringOrNull(token.scope),
+    refreshTokenId: stringOrNull(token.refreshTokenId),
+    userType,
+    companyId,
+    locationId: stringOrNull(token.locationId),
+    userId: stringOrNull(token.userId),
+    raw
+  };
+}
+
+function redirectToFrontend(c: Context<HonoBindings>, path: string) {
+  const baseUrl = c.env.FRONTEND_BASE_URL ?? new URL(c.req.url).origin;
+  return c.redirect(new URL(path, baseUrl).toString());
+}
+
+function setCookie(
+  c: Context<HonoBindings>,
+  cookie: { name: string; value: string; maxAge: number }
+) {
+  c.header(
+    "Set-Cookie",
+    `${cookie.name}=${cookie.value}; Max-Age=${cookie.maxAge}; Path=/; HttpOnly; Secure; SameSite=Lax`
+  );
+}
+
+function getCookie(headers: Headers, name: string): string | null {
+  const cookieHeader = headers.get("cookie");
+  if (!cookieHeader) {
+    return null;
+  }
+
+  for (const cookie of cookieHeader.split(";")) {
+    const [cookieName, ...cookieValue] = cookie.trim().split("=");
+    if (cookieName === name) {
+      return cookieValue.join("=");
+    }
+  }
+  return null;
+}
 
 async function processWebhookEvent(env: Env, event: NormalizedGhlWebhookEvent) {
   const db = createDb(env.DATABASE_URL);
