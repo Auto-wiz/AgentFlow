@@ -65,6 +65,13 @@ OutboundMessage
 AppointmentCreate
 AppointmentUpdate
 AppointmentDelete
+InvoiceCreate
+InvoiceUpdate
+InvoiceSent
+InvoicePaid
+InvoicePartiallyPaid
+InvoiceVoid
+InvoiceDelete
 ```
 
 Install flow entrypoint:

@@ -237,6 +237,51 @@ export const appointments = pgTable(
   })
 );
 
+export const invoices = pgTable(
+  "invoices",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => locations.id, { onDelete: "cascade" }),
+    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    ghlInvoiceId: text("ghl_invoice_id").notNull(),
+    status: text("status"),
+    liveMode: boolean("live_mode"),
+    amountPaid: integer("amount_paid"),
+    amountDue: integer("amount_due"),
+    total: integer("total"),
+    currency: text("currency"),
+    altId: text("alt_id"),
+    altType: text("alt_type"),
+    name: text("name"),
+    title: text("title"),
+    invoiceNumber: text("invoice_number"),
+    issueDate: timestamp("issue_date", { withTimezone: true }),
+    dueDate: timestamp("due_date", { withTimezone: true }),
+    ghlCreatedAt: timestamp("ghl_created_at", { withTimezone: true }),
+    ghlUpdatedAt: timestamp("ghl_updated_at", { withTimezone: true }),
+    lastEventType: text("last_event_type").notNull(),
+    isDeleted: boolean("is_deleted").notNull().default(false),
+    raw: jsonb("raw").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    invoicePerLocationUnique: uniqueIndex("invoices_location_id_ghl_invoice_id_unique").on(
+      table.locationId,
+      table.ghlInvoiceId
+    ),
+    locationIdx: index("invoices_location_id_idx").on(table.locationId),
+    contactIdx: index("invoices_contact_id_idx").on(table.contactId),
+    statusIdx: index("invoices_status_idx").on(table.status),
+    amountDueIdx: index("invoices_amount_due_idx").on(table.amountDue),
+    dueDateIdx: index("invoices_due_date_idx").on(table.dueDate)
+  })
+);
+
 export const agenciesRelations = relations(agencies, ({ many }) => ({
   locations: many(locations)
 }));
@@ -249,7 +294,8 @@ export const locationsRelations = relations(locations, ({ one, many }) => ({
   contacts: many(contacts),
   threads: many(threads),
   messages: many(messages),
-  appointments: many(appointments)
+  appointments: many(appointments),
+  invoices: many(invoices)
 }));
 
 export const contactsRelations = relations(contacts, ({ one, many }) => ({
@@ -259,7 +305,8 @@ export const contactsRelations = relations(contacts, ({ one, many }) => ({
   }),
   threads: many(threads),
   messages: many(messages),
-  appointments: many(appointments)
+  appointments: many(appointments),
+  invoices: many(invoices)
 }));
 
 export const threadsRelations = relations(threads, ({ one, many }) => ({
@@ -296,6 +343,17 @@ export const appointmentsRelations = relations(appointments, ({ one }) => ({
   }),
   contact: one(contacts, {
     fields: [appointments.contactId],
+    references: [contacts.id]
+  })
+}));
+
+export const invoicesRelations = relations(invoices, ({ one }) => ({
+  location: one(locations, {
+    fields: [invoices.locationId],
+    references: [locations.id]
+  }),
+  contact: one(contacts, {
+    fields: [invoices.contactId],
     references: [contacts.id]
   })
 }));

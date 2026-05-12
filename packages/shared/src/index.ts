@@ -87,10 +87,47 @@ export type NormalizedGhlInstallWebhookEvent = NormalizedGhlBaseWebhookEvent & {
   timestamp: string | null;
 };
 
+export type NormalizedGhlInvoiceWebhookEvent = NormalizedGhlBaseWebhookEvent & {
+  kind: "invoice";
+  location: {
+    ghlLocationId: string;
+  };
+  agency: {
+    ghlAgencyId: string;
+  };
+  contact: {
+    ghlContactId: string | null;
+    name: string | null;
+    email: string | null;
+    phone: string | null;
+    companyName: string | null;
+  };
+  invoice: {
+    ghlInvoiceId: string;
+    status: string | null;
+    liveMode: boolean | null;
+    amountPaid: number | null;
+    amountDue: number | null;
+    total: number | null;
+    currency: string | null;
+    altId: string | null;
+    altType: string | null;
+    name: string | null;
+    title: string | null;
+    invoiceNumber: string | null;
+    issueDate: string | null;
+    dueDate: string | null;
+    createdAt: string | null;
+    updatedAt: string | null;
+    eventAction: string;
+  };
+};
+
 export type NormalizedGhlWebhookEvent =
   | NormalizedGhlMessageWebhookEvent
   | NormalizedGhlAppointmentWebhookEvent
-  | NormalizedGhlInstallWebhookEvent;
+  | NormalizedGhlInstallWebhookEvent
+  | NormalizedGhlInvoiceWebhookEvent;
 
 export type ContactOnDemandDetails = {
   tags: string[];

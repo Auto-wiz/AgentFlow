@@ -4,6 +4,7 @@ import {
   appointments,
   contacts,
   ghlOAuthInstallations,
+  invoices,
   locations,
   messages,
   threads,
@@ -15,6 +16,7 @@ import type {
   MessageDirection,
   NormalizedGhlAppointmentWebhookEvent,
   NormalizedGhlInstallWebhookEvent,
+  NormalizedGhlInvoiceWebhookEvent,
   NormalizedGhlMessageWebhookEvent,
   NormalizedGhlWebhookEvent
 } from "@agentflow/shared";
@@ -79,7 +81,14 @@ app.get("/webhooks/gohighlevel", (c) =>
       "OutboundMessage",
       "AppointmentCreate",
       "AppointmentUpdate",
-      "AppointmentDelete"
+      "AppointmentDelete",
+      "InvoiceCreate",
+      "InvoiceUpdate",
+      "InvoiceSent",
+      "InvoicePaid",
+      "InvoicePartiallyPaid",
+      "InvoiceVoid",
+      "InvoiceDelete"
     ],
     callsExcluded: true
   })
@@ -475,6 +484,11 @@ async function processWebhookEvent(env: Env, event: NormalizedGhlWebhookEvent) {
     return;
   }
 
+  if (event.kind === "invoice") {
+    await processInvoiceWebhookEvent(env, event);
+    return;
+  }
+
   await processInstallWebhookEvent(env, event);
 }
 
@@ -767,6 +781,132 @@ async function processInstallWebhookEvent(env: Env, event: NormalizedGhlInstallW
     .where(eq(webhookEvents.idempotencyKey, event.idempotencyKey));
 }
 
+async function processInvoiceWebhookEvent(env: Env, event: NormalizedGhlInvoiceWebhookEvent) {
+  const db = createDb(env.DATABASE_URL);
+  const now = new Date();
+
+  const [agency] = await db
+    .insert(agencies)
+    .values({
+      ghlAgencyId: event.agency.ghlAgencyId,
+      updatedAt: now
+    })
+    .onConflictDoUpdate({
+      target: agencies.ghlAgencyId,
+      set: { updatedAt: now }
+    })
+    .returning({ id: agencies.id });
+
+  if (!agency) {
+    throw new Error("Failed to upsert agency");
+  }
+
+  const [location] = await db
+    .insert(locations)
+    .values({
+      agencyId: agency.id,
+      ghlLocationId: event.location.ghlLocationId,
+      updatedAt: now
+    })
+    .onConflictDoUpdate({
+      target: locations.ghlLocationId,
+      set: {
+        agencyId: agency.id,
+        updatedAt: now
+      }
+    })
+    .returning({ id: locations.id });
+
+  if (!location) {
+    throw new Error("Failed to upsert location");
+  }
+
+  let contactId: string | null = null;
+  if (event.contact.ghlContactId) {
+    const nameParts = splitContactName(event.contact.name);
+    const [contact] = await db
+      .insert(contacts)
+      .values({
+        locationId: location.id,
+        ghlContactId: event.contact.ghlContactId,
+        firstName: nameParts.firstName,
+        lastName: nameParts.lastName,
+        email: event.contact.email,
+        phone: event.contact.phone,
+        updatedAt: now
+      })
+      .onConflictDoUpdate({
+        target: [contacts.locationId, contacts.ghlContactId],
+        set: {
+          firstName: nameParts.firstName,
+          lastName: nameParts.lastName,
+          email: event.contact.email,
+          phone: event.contact.phone,
+          updatedAt: now
+        }
+      })
+      .returning({ id: contacts.id });
+    contactId = contact?.id ?? null;
+  }
+
+  await db
+    .insert(invoices)
+    .values({
+      locationId: location.id,
+      contactId,
+      ghlInvoiceId: event.invoice.ghlInvoiceId,
+      status: event.invoice.status,
+      liveMode: event.invoice.liveMode,
+      amountPaid: normalizeMoneyAmount(event.invoice.amountPaid),
+      amountDue: normalizeMoneyAmount(event.invoice.amountDue),
+      total: normalizeMoneyAmount(event.invoice.total),
+      currency: event.invoice.currency,
+      altId: event.invoice.altId,
+      altType: event.invoice.altType,
+      name: event.invoice.name,
+      title: event.invoice.title,
+      invoiceNumber: event.invoice.invoiceNumber,
+      issueDate: parseNullableDate(event.invoice.issueDate),
+      dueDate: parseNullableDate(event.invoice.dueDate),
+      ghlCreatedAt: parseNullableDate(event.invoice.createdAt),
+      ghlUpdatedAt: parseNullableDate(event.invoice.updatedAt),
+      lastEventType: event.eventType,
+      isDeleted: event.invoice.eventAction === "delete",
+      raw: event.raw,
+      updatedAt: now
+    })
+    .onConflictDoUpdate({
+      target: [invoices.locationId, invoices.ghlInvoiceId],
+      set: {
+        contactId,
+        status: event.invoice.status,
+        liveMode: event.invoice.liveMode,
+        amountPaid: normalizeMoneyAmount(event.invoice.amountPaid),
+        amountDue: normalizeMoneyAmount(event.invoice.amountDue),
+        total: normalizeMoneyAmount(event.invoice.total),
+        currency: event.invoice.currency,
+        altId: event.invoice.altId,
+        altType: event.invoice.altType,
+        name: event.invoice.name,
+        title: event.invoice.title,
+        invoiceNumber: event.invoice.invoiceNumber,
+        issueDate: parseNullableDate(event.invoice.issueDate),
+        dueDate: parseNullableDate(event.invoice.dueDate),
+        ghlCreatedAt: parseNullableDate(event.invoice.createdAt),
+        ghlUpdatedAt: parseNullableDate(event.invoice.updatedAt),
+        lastEventType: event.eventType,
+        isDeleted: event.invoice.eventAction === "delete",
+        raw: event.raw,
+        updatedAt: now
+      }
+    });
+
+  await db
+    .update(webhookEvents)
+    .set({ status: "processed", processedAt: now, error: null })
+    .where(eq(webhookEvents.idempotencyKey, event.idempotencyKey));
+}
+
 async function fetchContactDetailsOnDemand(
   env: Env,
   ghlContactId: string
@@ -820,6 +960,10 @@ async function normalizeGhlWebhook(
 
   if (eventLower.includes("appointment")) {
     return normalizeAppointmentWebhook(root, headers, rawBody, eventType);
+  }
+
+  if (eventLower.includes("invoice")) {
+    return normalizeInvoiceWebhook(root, headers, rawBody, eventType);
   }
 
   return normalizeMessageWebhook(root, headers, rawBody, eventType);
@@ -987,6 +1131,65 @@ async function normalizeInstallWebhook(
   };
 }
 
+async function normalizeInvoiceWebhook(
+  root: Record<string, any>,
+  headers: Headers,
+  rawBody: string,
+  eventType: string
+): Promise<NormalizedGhlInvoiceWebhookEvent | null> {
+  const contactDetails = asRecord(root.contactDetails);
+  const ghlLocationId = stringValue(root.locationId ?? root.altId);
+  const ghlInvoiceId = stringValue(root._id ?? root.id ?? root.invoiceId);
+
+  if (!ghlLocationId || !ghlInvoiceId) {
+    return null;
+  }
+
+  const idempotencyHeader = getWebhookIdempotencyHeader(headers);
+  const idempotencyKey =
+    idempotencyHeader ??
+    `${eventType}:${ghlLocationId}:${ghlInvoiceId}:${stringValue(root.updatedAt ?? root.createdAt) || (await sha256Hex(rawBody))}`;
+
+  return {
+    kind: "invoice",
+    idempotencyKey,
+    eventType,
+    location: {
+      ghlLocationId
+    },
+    agency: {
+      ghlAgencyId: stringValue(root.companyId ?? root.agencyId) || "default"
+    },
+    contact: {
+      ghlContactId: stringOrNull(contactDetails.id ?? root.contactId),
+      name: stringOrNull(contactDetails.name),
+      email: stringOrNull(contactDetails.email),
+      phone: stringOrNull(contactDetails.phoneNo ?? contactDetails.phone),
+      companyName: stringOrNull(contactDetails.companyName)
+    },
+    invoice: {
+      ghlInvoiceId,
+      status: stringOrNull(root.status),
+      liveMode: typeof root.liveMode === "boolean" ? root.liveMode : null,
+      amountPaid: numberOrNull(root.amountPaid),
+      amountDue: numberOrNull(root.amountDue),
+      total: numberOrNull(root.total),
+      currency: stringOrNull(root.currency),
+      altId: stringOrNull(root.altId),
+      altType: stringOrNull(root.altType),
+      name: stringOrNull(root.name),
+      title: stringOrNull(root.title),
+      invoiceNumber: stringOrNull(root.invoiceNumber),
+      issueDate: stringOrNull(root.issueDate),
+      dueDate: stringOrNull(root.dueDate),
+      createdAt: stringOrNull(root.createdAt),
+      updatedAt: stringOrNull(root.updatedAt),
+      eventAction: normalizeInvoiceEventAction(eventType)
+    },
+    raw: root
+  };
+}
+
 async function verifyWebhookSignature(
   rawBody: string,
   headers: Headers,
@@ -1100,6 +1303,58 @@ function parseNullableDate(value: string | null): Date | null {
 
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function numberOrNull(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function normalizeMoneyAmount(value: number | null): number | null {
+  return value == null ? null : Math.round(value);
+}
+
+function normalizeInvoiceEventAction(eventType: string) {
+  const normalized = eventType.toLowerCase();
+  if (normalized.includes("paid") && normalized.includes("partial")) {
+    return "partially_paid";
+  }
+  if (normalized.includes("paid")) {
+    return "paid";
+  }
+  if (normalized.includes("sent")) {
+    return "sent";
+  }
+  if (normalized.includes("void")) {
+    return "void";
+  }
+  if (normalized.includes("delete")) {
+    return "delete";
+  }
+  if (normalized.includes("update")) {
+    return "update";
+  }
+  return "create";
+}
+
+function splitContactName(name: string | null) {
+  if (!name) {
+    return { firstName: null, lastName: null };
+  }
+
+  const [firstName, ...rest] = name.trim().split(/\s+/);
+  return {
+    firstName: firstName || null,
+    lastName: rest.length > 0 ? rest.join(" ") : null
+  };
 }
 
 function getWebhookIdempotencyHeader(headers: Headers): string | null {
