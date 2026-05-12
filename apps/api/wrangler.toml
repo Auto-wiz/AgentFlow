@@ -3,6 +3,9 @@ main = "src/index.ts"
 compatibility_date = "2026-05-12"
 compatibility_flags = ["nodejs_compat"]
 
+[vars]
+ALLOW_UNSIGNED_GHL_WEBHOOKS = "false"
+
 [[queues.producers]]
 binding = "MESSAGE_QUEUE"
 queue = "agentflow-ghl-webhooks"

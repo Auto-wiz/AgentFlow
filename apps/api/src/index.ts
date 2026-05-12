@@ -28,6 +28,7 @@ import { cors } from "hono/cors";
 type Env = {
   DATABASE_URL: string;
   GHL_WEBHOOK_SECRET?: string;
+  ALLOW_UNSIGNED_GHL_WEBHOOKS?: string;
   GHL_API_TOKEN?: string;
   GHL_API_BASE_URL?: string;
   GHL_CLIENT_ID?: string;
@@ -122,6 +123,7 @@ app.get("/oauth/gohighlevel/callback", async (c) => {
   const storedState = getCookie(c.req.raw.headers, "ghl_oauth_state");
 
   if (error) {
+    clearCookie(c, "ghl_oauth_state");
     return redirectToFrontend(c, `/settings/integrations?ghl=error&reason=${encodeURIComponent(error)}`);
   }
 
@@ -129,8 +131,9 @@ app.get("/oauth/gohighlevel/callback", async (c) => {
     return c.json({ error: "Missing OAuth code" }, 400);
   }
 
-  if (state && storedState && state !== storedState) {
-    return c.json({ error: "Invalid OAuth state" }, 400);
+  if (!state || !storedState || state !== storedState) {
+    clearCookie(c, "ghl_oauth_state");
+    return redirectToFrontend(c, "/settings/integrations?ghl=error&reason=invalid_state");
   }
 
   const missing = ["GHL_CLIENT_ID", "GHL_CLIENT_SECRET", "GHL_OAUTH_REDIRECT_URI"].filter(
@@ -180,10 +183,19 @@ app.get("/oauth/gohighlevel/callback", async (c) => {
       }
     });
 
+  clearCookie(c, "ghl_oauth_state");
   return redirectToFrontend(c, "/settings/integrations?ghl=connected");
 });
 
 app.post("/webhooks/gohighlevel", async (c) => {
+  const allowUnsignedWebhooks = parseBooleanEnv(c.env.ALLOW_UNSIGNED_GHL_WEBHOOKS);
+  if (!c.env.GHL_WEBHOOK_SECRET && !allowUnsignedWebhooks) {
+    return c.json(
+      { accepted: false, error: "GHL_WEBHOOK_SECRET is not configured" },
+      500
+    );
+  }
+
   const rawBody = await c.req.text();
   const verified = await verifyWebhookSignature(
     rawBody,
@@ -192,7 +204,7 @@ app.post("/webhooks/gohighlevel", async (c) => {
   );
 
   if (!verified) {
-    return c.json({ accepted: true, verified: false, ignored: true }, 202);
+    return c.json({ accepted: false, verified: false, ignored: true }, 401);
   }
 
   let payload: unknown;
@@ -207,8 +219,8 @@ app.post("/webhooks/gohighlevel", async (c) => {
     return c.json({ accepted: true, ignored: true, reason: "unsupported_event" }, 202);
   }
 
+  const db = createDb(c.env.DATABASE_URL);
   try {
-    const db = createDb(c.env.DATABASE_URL);
     const inserted = await db
       .insert(webhookEvents)
       .values({
@@ -222,14 +234,58 @@ app.post("/webhooks/gohighlevel", async (c) => {
       .returning({ id: webhookEvents.id });
 
     if (inserted.length === 0) {
+      const [existing] = await db
+        .select({ status: webhookEvents.status })
+        .from(webhookEvents)
+        .where(eq(webhookEvents.idempotencyKey, normalized.idempotencyKey))
+        .limit(1);
+
+      if (existing && existing.status !== "processed") {
+        try {
+          await c.env.MESSAGE_QUEUE.send(normalized);
+          await db
+            .update(webhookEvents)
+            .set({
+              status: "queued",
+              error: null,
+              processedAt: null
+            })
+            .where(eq(webhookEvents.idempotencyKey, normalized.idempotencyKey));
+          return c.json({ accepted: true, duplicate: true, requeued: true }, 202);
+        } catch (error) {
+          await db
+            .update(webhookEvents)
+            .set({
+              status: "failed",
+              error: serializeError(error),
+              processedAt: new Date()
+            })
+            .where(eq(webhookEvents.idempotencyKey, normalized.idempotencyKey));
+          return c.json({ accepted: false, duplicate: true, queued: false }, 500);
+        }
+      }
+
       return c.json({ accepted: true, duplicate: true }, 200);
     }
 
-    await c.env.MESSAGE_QUEUE.send(normalized);
+    try {
+      await c.env.MESSAGE_QUEUE.send(normalized);
+    } catch (error) {
+      await db
+        .update(webhookEvents)
+        .set({
+          status: "failed",
+          error: serializeError(error),
+          processedAt: new Date()
+        })
+        .where(eq(webhookEvents.idempotencyKey, normalized.idempotencyKey));
+      return c.json({ accepted: false, queued: false }, 500);
+    }
+
     return c.json({ accepted: true, queued: true }, 202);
   } catch (error) {
     console.error("Failed to persist GoHighLevel webhook", error);
-    return c.json({ accepted: true, queued: false }, 202);
+    return c.json({ accepted: false, queued: false }, 500);
   }
 });
 
@@ -456,6 +512,10 @@ function setCookie(
     "Set-Cookie",
     `${cookie.name}=${cookie.value}; Max-Age=${cookie.maxAge}; Path=/; HttpOnly; Secure; SameSite=Lax`
   );
+}
+
+function clearCookie(c: Context<HonoBindings>, name: string) {
+  c.header("Set-Cookie", `${name}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax`);
 }
 
 function getCookie(headers: Headers, name: string): string | null {
@@ -1206,6 +1266,17 @@ async function verifyWebhookSignature(
 
   const expected = await hmacSha256(rawBody, secret);
   return signaturesMatch(provided, expected);
+}
+
+function parseBooleanEnv(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+function serializeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function hmacSha256(body: string, secret: string): Promise<Uint8Array> {
