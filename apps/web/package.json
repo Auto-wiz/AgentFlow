@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "next dev",
     "check": "tsc --noEmit",
-    "build": "next build"
+    "build": "next build",
+    "pages:build": "next-on-pages"
   },
   "dependencies": {
     "@agentflow/shared": "0.1.0",

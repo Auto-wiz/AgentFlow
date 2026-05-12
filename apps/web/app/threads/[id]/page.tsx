@@ -6,6 +6,8 @@ import { useEffect, useState } from "react";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
+export const runtime = "edge";
+
 export default function ThreadMessagesPage({ params }: { params: { id: string } }) {
   const [data, setData] = useState<ThreadMessagesResponse | null>(null);
   const [loading, setLoading] = useState(true);

@@ -38,3 +38,9 @@ wrangler secret put GHL_API_TOKEN
 npm run check
 npm run build
 ```
+
+For the Cloudflare Pages artifact, run:
+
+```sh
+npm run pages:build -w @agentflow/web
+```
