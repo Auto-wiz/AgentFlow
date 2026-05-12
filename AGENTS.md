@@ -16,9 +16,20 @@ AgentFlow is an npm workspaces monorepo (4 workspaces: `apps/api`, `apps/web`, `
 - `npm run check` — TypeScript type-check all workspaces
 - `npm run build` — build all workspaces (dry-run deploy for API, `next build` for web)
 
+### Database migrations
+
+`npm run db:migrate -w @agentflow/db` (drizzle-kit migrate) fails locally because the `@neondatabase/serverless` HTTP driver lacks WebSocket support required by drizzle-kit's migration runner. Apply migrations directly with `psql`:
+
+```sh
+for f in packages/db/migrations/*.sql; do psql "$DATABASE_URL" -f "$f"; done
+```
+
+The migrations are idempotent-safe with `CREATE ... IF NOT EXISTS` / `CREATE TABLE` (will error on re-run if tables already exist — safe to ignore or run only new files).
+
 ### Key gotchas
 
 - The API Worker uses `.dev.vars` (not `.env`) for local secrets — Wrangler reads this file automatically. Do not commit real secrets.
 - Without a real Neon Postgres `DATABASE_URL`, endpoints that hit the database (`/threads`, `/threads/:id/messages`, webhook persistence) will return 500. The `/health`, `/webhooks/gohighlevel` (GET), and `/oauth/gohighlevel/start` endpoints work without a database.
 - There are no automated test suites in this repo yet. Validation is via `npm run check` (type-check) and `npm run build`.
 - `GHL_WEBHOOK_SECRET` can be left empty for local dev — all webhooks will be accepted without signature verification.
+- To test the webhook pipeline end-to-end, POST JSON to `http://localhost:8787/webhooks/gohighlevel`. The queue consumer runs in the same Wrangler process and processes messages automatically.
