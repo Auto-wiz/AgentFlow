@@ -199,6 +199,44 @@ export const ghlOAuthInstallations = pgTable(
   })
 );
 
+export const appointments = pgTable(
+  "appointments",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => locations.id, { onDelete: "cascade" }),
+    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    ghlAppointmentId: text("ghl_appointment_id").notNull(),
+    calendarId: text("calendar_id"),
+    groupId: text("group_id"),
+    title: text("title"),
+    address: text("address"),
+    status: text("status"),
+    assignedUserId: text("assigned_user_id"),
+    users: jsonb("users").notNull().default(sql`'[]'::jsonb`),
+    notes: text("notes"),
+    source: text("source"),
+    startTime: timestamp("start_time", { withTimezone: true }),
+    endTime: timestamp("end_time", { withTimezone: true }),
+    dateAdded: timestamp("date_added", { withTimezone: true }),
+    dateUpdated: timestamp("date_updated", { withTimezone: true }),
+    raw: jsonb("raw").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    appointmentPerLocationUnique: uniqueIndex(
+      "appointments_location_id_ghl_appointment_id_unique"
+    ).on(table.locationId, table.ghlAppointmentId),
+    locationIdx: index("appointments_location_id_idx").on(table.locationId),
+    contactIdx: index("appointments_contact_id_idx").on(table.contactId),
+    startTimeIdx: index("appointments_start_time_idx").on(table.startTime)
+  })
+);
+
 export const agenciesRelations = relations(agencies, ({ many }) => ({
   locations: many(locations)
 }));
@@ -210,7 +248,8 @@ export const locationsRelations = relations(locations, ({ one, many }) => ({
   }),
   contacts: many(contacts),
   threads: many(threads),
-  messages: many(messages)
+  messages: many(messages),
+  appointments: many(appointments)
 }));
 
 export const contactsRelations = relations(contacts, ({ one, many }) => ({
@@ -219,7 +258,8 @@ export const contactsRelations = relations(contacts, ({ one, many }) => ({
     references: [locations.id]
   }),
   threads: many(threads),
-  messages: many(messages)
+  messages: many(messages),
+  appointments: many(appointments)
 }));
 
 export const threadsRelations = relations(threads, ({ one, many }) => ({
@@ -245,6 +285,17 @@ export const messagesRelations = relations(messages, ({ one }) => ({
   }),
   contact: one(contacts, {
     fields: [messages.contactId],
+    references: [contacts.id]
+  })
+}));
+
+export const appointmentsRelations = relations(appointments, ({ one }) => ({
+  location: one(locations, {
+    fields: [appointments.locationId],
+    references: [locations.id]
+  }),
+  contact: one(contacts, {
+    fields: [appointments.contactId],
     references: [contacts.id]
   })
 }));

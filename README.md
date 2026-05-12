@@ -50,6 +50,23 @@ GoHighLevel OAuth redirect URL:
 https://api.agentflow.autowiz.net/oauth/gohighlevel/callback
 ```
 
+GoHighLevel default webhook URL:
+
+```txt
+https://api.agentflow.autowiz.net/webhooks/gohighlevel
+```
+
+Enable these webhook events:
+
+```txt
+INSTALL
+InboundMessage
+OutboundMessage
+AppointmentCreate
+AppointmentUpdate
+AppointmentDelete
+```
+
 Install flow entrypoint:
 
 ```txt

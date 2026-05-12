@@ -1,6 +1,7 @@
 import {
   createDb,
   agencies,
+  appointments,
   contacts,
   ghlOAuthInstallations,
   locations,
@@ -8,7 +9,15 @@ import {
   threads,
   webhookEvents
 } from "@agentflow/db";
-import type { ContactOnDemandDetails, MessageChannel, MessageDirection, NormalizedGhlWebhookEvent } from "@agentflow/shared";
+import type {
+  ContactOnDemandDetails,
+  MessageChannel,
+  MessageDirection,
+  NormalizedGhlAppointmentWebhookEvent,
+  NormalizedGhlInstallWebhookEvent,
+  NormalizedGhlMessageWebhookEvent,
+  NormalizedGhlWebhookEvent
+} from "@agentflow/shared";
 import { and, desc, eq, or } from "drizzle-orm";
 import type { Context } from "hono";
 import { Hono } from "hono";
@@ -58,6 +67,23 @@ app.use(
 );
 
 app.get("/health", (c) => c.json({ ok: true }));
+
+app.get("/webhooks/gohighlevel", (c) =>
+  c.json({
+    provider: "gohighlevel",
+    defaultWebhookUrl: `${new URL(c.req.url).origin}/webhooks/gohighlevel`,
+    method: "POST",
+    events: [
+      "INSTALL",
+      "InboundMessage",
+      "OutboundMessage",
+      "AppointmentCreate",
+      "AppointmentUpdate",
+      "AppointmentDelete"
+    ],
+    callsExcluded: true
+  })
+);
 
 app.get("/oauth/gohighlevel/start", (c) => {
   if (!c.env.GHL_INSTALL_URL) {
@@ -439,6 +465,20 @@ function getCookie(headers: Headers, name: string): string | null {
 }
 
 async function processWebhookEvent(env: Env, event: NormalizedGhlWebhookEvent) {
+  if (event.kind === "message") {
+    await processMessageWebhookEvent(env, event);
+    return;
+  }
+
+  if (event.kind === "appointment") {
+    await processAppointmentWebhookEvent(env, event);
+    return;
+  }
+
+  await processInstallWebhookEvent(env, event);
+}
+
+async function processMessageWebhookEvent(env: Env, event: NormalizedGhlMessageWebhookEvent) {
   const db = createDb(env.DATABASE_URL);
   const now = new Date();
   const sentAt = new Date(event.message.sentAt);
@@ -568,6 +608,165 @@ async function processWebhookEvent(env: Env, event: NormalizedGhlWebhookEvent) {
     .where(eq(webhookEvents.idempotencyKey, event.idempotencyKey));
 }
 
+async function processAppointmentWebhookEvent(
+  env: Env,
+  event: NormalizedGhlAppointmentWebhookEvent
+) {
+  const db = createDb(env.DATABASE_URL);
+  const now = new Date();
+
+  const [agency] = await db
+    .insert(agencies)
+    .values({
+      ghlAgencyId: event.agency.ghlAgencyId,
+      name: event.agency.name ?? null,
+      updatedAt: now
+    })
+    .onConflictDoUpdate({
+      target: agencies.ghlAgencyId,
+      set: {
+        name: event.agency.name ?? null,
+        updatedAt: now
+      }
+    })
+    .returning({ id: agencies.id });
+
+  if (!agency) {
+    throw new Error("Failed to upsert agency");
+  }
+
+  const [location] = await db
+    .insert(locations)
+    .values({
+      agencyId: agency.id,
+      ghlLocationId: event.location.ghlLocationId,
+      name: event.location.name ?? null,
+      updatedAt: now
+    })
+    .onConflictDoUpdate({
+      target: locations.ghlLocationId,
+      set: {
+        agencyId: agency.id,
+        name: event.location.name ?? null,
+        updatedAt: now
+      }
+    })
+    .returning({ id: locations.id });
+
+  if (!location) {
+    throw new Error("Failed to upsert location");
+  }
+
+  let contactId: string | null = null;
+  if (event.contact.ghlContactId) {
+    const [contact] = await db
+      .insert(contacts)
+      .values({
+        locationId: location.id,
+        ghlContactId: event.contact.ghlContactId,
+        updatedAt: now
+      })
+      .onConflictDoUpdate({
+        target: [contacts.locationId, contacts.ghlContactId],
+        set: { updatedAt: now }
+      })
+      .returning({ id: contacts.id });
+    contactId = contact?.id ?? null;
+  }
+
+  await db
+    .insert(appointments)
+    .values({
+      locationId: location.id,
+      contactId,
+      ghlAppointmentId: event.appointment.ghlAppointmentId,
+      calendarId: event.appointment.calendarId,
+      groupId: event.appointment.groupId,
+      title: event.appointment.title,
+      address: event.appointment.address,
+      status: event.appointment.status,
+      assignedUserId: event.appointment.assignedUserId,
+      users: event.appointment.users,
+      notes: event.appointment.notes,
+      source: event.appointment.source,
+      startTime: parseNullableDate(event.appointment.startTime),
+      endTime: parseNullableDate(event.appointment.endTime),
+      dateAdded: parseNullableDate(event.appointment.dateAdded),
+      dateUpdated: parseNullableDate(event.appointment.dateUpdated),
+      raw: event.raw,
+      updatedAt: now
+    })
+    .onConflictDoUpdate({
+      target: [appointments.locationId, appointments.ghlAppointmentId],
+      set: {
+        contactId,
+        calendarId: event.appointment.calendarId,
+        groupId: event.appointment.groupId,
+        title: event.appointment.title,
+        address: event.appointment.address,
+        status: event.appointment.status,
+        assignedUserId: event.appointment.assignedUserId,
+        users: event.appointment.users,
+        notes: event.appointment.notes,
+        source: event.appointment.source,
+        startTime: parseNullableDate(event.appointment.startTime),
+        endTime: parseNullableDate(event.appointment.endTime),
+        dateAdded: parseNullableDate(event.appointment.dateAdded),
+        dateUpdated: parseNullableDate(event.appointment.dateUpdated),
+        raw: event.raw,
+        updatedAt: now
+      }
+    });
+
+  await db
+    .update(webhookEvents)
+    .set({ status: "processed", processedAt: now, error: null })
+    .where(eq(webhookEvents.idempotencyKey, event.idempotencyKey));
+}
+
+async function processInstallWebhookEvent(env: Env, event: NormalizedGhlInstallWebhookEvent) {
+  const db = createDb(env.DATABASE_URL);
+  const now = new Date();
+
+  const [agency] = await db
+    .insert(agencies)
+    .values({
+      ghlAgencyId: event.agency.ghlAgencyId,
+      name: event.agency.name ?? null,
+      updatedAt: now
+    })
+    .onConflictDoUpdate({
+      target: agencies.ghlAgencyId,
+      set: {
+        name: event.agency.name ?? null,
+        updatedAt: now
+      }
+    })
+    .returning({ id: agencies.id });
+
+  if (agency && event.location.ghlLocationId) {
+    await db
+      .insert(locations)
+      .values({
+        agencyId: agency.id,
+        ghlLocationId: event.location.ghlLocationId,
+        updatedAt: now
+      })
+      .onConflictDoUpdate({
+        target: locations.ghlLocationId,
+        set: {
+          agencyId: agency.id,
+          updatedAt: now
+        }
+      });
+  }
+
+  await db
+    .update(webhookEvents)
+    .set({ status: "processed", processedAt: now, error: null })
+    .where(eq(webhookEvents.idempotencyKey, event.idempotencyKey));
+}
+
 async function fetchContactDetailsOnDemand(
   env: Env,
   ghlContactId: string
@@ -608,7 +807,6 @@ async function normalizeGhlWebhook(
   rawBody: string
 ): Promise<NormalizedGhlWebhookEvent | null> {
   const root = asRecord(payload);
-  const message = asRecord(root.message ?? root.messageData ?? root);
   const eventType = stringValue(root.type ?? root.event ?? root.eventType ?? "message.received");
   const eventLower = eventType.toLowerCase();
 
@@ -616,6 +814,24 @@ async function normalizeGhlWebhook(
     return null;
   }
 
+  if (eventLower === "install") {
+    return normalizeInstallWebhook(root, headers, rawBody, eventType);
+  }
+
+  if (eventLower.includes("appointment")) {
+    return normalizeAppointmentWebhook(root, headers, rawBody, eventType);
+  }
+
+  return normalizeMessageWebhook(root, headers, rawBody, eventType);
+}
+
+async function normalizeMessageWebhook(
+  root: Record<string, any>,
+  headers: Headers,
+  rawBody: string,
+  eventType: string
+): Promise<NormalizedGhlMessageWebhookEvent | null> {
+  const message = asRecord(root.message ?? root.messageData ?? root);
   const channel = normalizeChannel(
     root.channel ?? root.messageType ?? message.channel ?? message.type ?? eventType
   );
@@ -636,16 +852,13 @@ async function normalizeGhlWebhook(
   }
 
   const ghlMessageId = explicitMessageId || (await sha256Hex(rawBody));
-  const idempotencyHeader =
-    headers.get("x-ghl-idempotency-key") ??
-    headers.get("x-gohighlevel-webhook-id") ??
-    headers.get("x-webhook-id") ??
-    headers.get("x-event-id");
+  const idempotencyHeader = getWebhookIdempotencyHeader(headers);
   const idempotencyKey =
     idempotencyHeader ??
     `${ghlLocationId}:${ghlContactId}:${ghlMessageId}:${channel}:${direction}`;
 
   return {
+    kind: "message",
     idempotencyKey,
     eventType,
     location: {
@@ -673,7 +886,104 @@ async function normalizeGhlWebhook(
       to: stringOrNull(root.to ?? message.to),
       sentAt: normalizeDate(root.dateAdded ?? root.createdAt ?? message.dateAdded ?? message.createdAt)
     },
-    raw: payload
+    raw: root
+  };
+}
+
+async function normalizeAppointmentWebhook(
+  root: Record<string, any>,
+  headers: Headers,
+  rawBody: string,
+  eventType: string
+): Promise<NormalizedGhlAppointmentWebhookEvent | null> {
+  const appointment = asRecord(root.appointment ?? root);
+  const ghlLocationId = stringValue(root.locationId ?? appointment.locationId);
+  const ghlAppointmentId = stringValue(appointment.id ?? appointment.appointmentId);
+
+  if (!ghlLocationId || !ghlAppointmentId) {
+    return null;
+  }
+
+  const idempotencyHeader = getWebhookIdempotencyHeader(headers);
+  const webhookId = stringOrNull(root.webhookId);
+  const idempotencyKey =
+    idempotencyHeader ??
+    webhookId ??
+    `${eventType}:${ghlLocationId}:${ghlAppointmentId}:${stringValue(appointment.dateUpdated ?? appointment.dateAdded)}`;
+
+  return {
+    kind: "appointment",
+    idempotencyKey,
+    eventType,
+    location: {
+      ghlLocationId,
+      name: stringOrNull(root.location?.name ?? root.locationName)
+    },
+    agency: {
+      ghlAgencyId: stringValue(root.companyId ?? root.agencyId ?? root.agency?.id) || "default",
+      name: stringOrNull(root.companyName ?? root.agency?.name)
+    },
+    contact: {
+      ghlContactId: stringOrNull(appointment.contactId ?? root.contactId)
+    },
+    appointment: {
+      ghlAppointmentId,
+      calendarId: stringOrNull(appointment.calendarId),
+      groupId: stringOrNull(appointment.groupId),
+      title: stringOrNull(appointment.title),
+      address: stringOrNull(appointment.address),
+      status: stringOrNull(appointment.appointmentStatus ?? appointment.status),
+      assignedUserId: stringOrNull(appointment.assignedUserId),
+      users: toStringArray(appointment.users),
+      notes: stringOrNull(appointment.notes),
+      source: stringOrNull(appointment.source),
+      startTime: stringOrNull(appointment.startTime),
+      endTime: stringOrNull(appointment.endTime),
+      dateAdded: stringOrNull(appointment.dateAdded),
+      dateUpdated: stringOrNull(appointment.dateUpdated)
+    },
+    raw: root
+  };
+}
+
+async function normalizeInstallWebhook(
+  root: Record<string, any>,
+  headers: Headers,
+  rawBody: string,
+  eventType: string
+): Promise<NormalizedGhlInstallWebhookEvent | null> {
+  const ghlAgencyId = stringValue(root.companyId ?? root.agencyId);
+
+  if (!ghlAgencyId) {
+    return null;
+  }
+
+  const webhookId = stringOrNull(root.webhookId);
+  const idempotencyHeader = getWebhookIdempotencyHeader(headers);
+  const idempotencyKey =
+    idempotencyHeader ??
+    webhookId ??
+    `${eventType}:${ghlAgencyId}:${stringValue(root.locationId)}:${stringValue(root.timestamp) || (await sha256Hex(rawBody))}`;
+
+  return {
+    kind: "install",
+    idempotencyKey,
+    eventType,
+    appId: stringOrNull(root.appId),
+    versionId: stringOrNull(root.versionId),
+    installType: stringOrNull(root.installType),
+    location: {
+      ghlLocationId: stringOrNull(root.locationId)
+    },
+    agency: {
+      ghlAgencyId,
+      name: stringOrNull(root.companyName)
+    },
+    userId: stringOrNull(root.userId),
+    isWhitelabelCompany:
+      typeof root.isWhitelabelCompany === "boolean" ? root.isWhitelabelCompany : null,
+    timestamp: stringOrNull(root.timestamp),
+    raw: root
   };
 }
 
@@ -781,6 +1091,24 @@ function normalizeDate(value: unknown): string {
     return new Date().toISOString();
   }
   return date.toISOString();
+}
+
+function parseNullableDate(value: string | null): Date | null {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getWebhookIdempotencyHeader(headers: Headers): string | null {
+  return (
+    headers.get("x-ghl-idempotency-key") ??
+    headers.get("x-gohighlevel-webhook-id") ??
+    headers.get("x-webhook-id") ??
+    headers.get("x-event-id")
+  );
 }
 
 function formatContactName(

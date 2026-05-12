@@ -4,9 +4,14 @@ export const SUPPORTED_MESSAGE_DIRECTIONS = ["inbound", "outbound"] as const;
 export type MessageChannel = (typeof SUPPORTED_MESSAGE_CHANNELS)[number];
 export type MessageDirection = (typeof SUPPORTED_MESSAGE_DIRECTIONS)[number];
 
-export type NormalizedGhlWebhookEvent = {
+export type NormalizedGhlBaseWebhookEvent = {
   idempotencyKey: string;
   eventType: string;
+  raw: unknown;
+};
+
+export type NormalizedGhlMessageWebhookEvent = NormalizedGhlBaseWebhookEvent & {
+  kind: "message";
   location: {
     ghlLocationId: string;
     name?: string | null;
@@ -32,8 +37,60 @@ export type NormalizedGhlWebhookEvent = {
     to?: string | null;
     sentAt: string;
   };
-  raw: unknown;
 };
+
+export type NormalizedGhlAppointmentWebhookEvent = NormalizedGhlBaseWebhookEvent & {
+  kind: "appointment";
+  location: {
+    ghlLocationId: string;
+    name?: string | null;
+  };
+  agency: {
+    ghlAgencyId: string;
+    name?: string | null;
+  };
+  contact: {
+    ghlContactId: string | null;
+  };
+  appointment: {
+    ghlAppointmentId: string;
+    calendarId: string | null;
+    groupId: string | null;
+    title: string | null;
+    address: string | null;
+    status: string | null;
+    assignedUserId: string | null;
+    users: string[];
+    notes: string | null;
+    source: string | null;
+    startTime: string | null;
+    endTime: string | null;
+    dateAdded: string | null;
+    dateUpdated: string | null;
+  };
+};
+
+export type NormalizedGhlInstallWebhookEvent = NormalizedGhlBaseWebhookEvent & {
+  kind: "install";
+  appId: string | null;
+  versionId: string | null;
+  installType: string | null;
+  location: {
+    ghlLocationId: string | null;
+  };
+  agency: {
+    ghlAgencyId: string;
+    name?: string | null;
+  };
+  userId: string | null;
+  isWhitelabelCompany: boolean | null;
+  timestamp: string | null;
+};
+
+export type NormalizedGhlWebhookEvent =
+  | NormalizedGhlMessageWebhookEvent
+  | NormalizedGhlAppointmentWebhookEvent
+  | NormalizedGhlInstallWebhookEvent;
 
 export type ContactOnDemandDetails = {
   tags: string[];
