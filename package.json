@@ -9,7 +9,11 @@
   ],
   "scripts": {
     "check": "npm run check --workspaces --if-present",
-    "build": "npm run build --workspaces --if-present"
+    "build": "npm run build --workspaces --if-present",
+    "db:generate": "npm run db:generate -w @agentflow/db",
+    "db:migrate": "npm run db:migrate -w @agentflow/db",
+    "db:push": "npm run db:push -w @agentflow/db",
+    "db:push:force": "npm run db:push:force -w @agentflow/db"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

@@ -42,7 +42,12 @@ GHL_INSTALL_URL
 GHL_OAUTH_REDIRECT_URI
 GHL_OAUTH_USER_TYPE
 FRONTEND_BASE_URL
+ALLOW_UNSIGNED_GHL_WEBHOOKS
 ```
+
+`ALLOW_UNSIGNED_GHL_WEBHOOKS` defaults to `false` and should stay disabled in
+production. Set it to `true` only for temporary local testing without webhook
+signatures.
 
 GoHighLevel OAuth redirect URL:
 
@@ -80,11 +85,29 @@ Install flow entrypoint:
 https://api.agentflow.autowiz.net/oauth/gohighlevel/start
 ```
 
+## Database workflow (Neon + Drizzle)
+
+Use these root scripts:
+
+```sh
+npm run db:generate
+npm run db:migrate
+npm run db:push
+```
+
+- `db:generate`: creates SQL migration files from schema changes.
+- `db:migrate`: applies SQL migration files from `packages/db/migrations`.
+- `db:push`: compares schema and pushes changes directly to Neon.
+
+If Drizzle detects potentially unsafe changes, it will ask for confirmation and
+requires an interactive terminal (TTY).
+
 ## Validation
 
 ```sh
 npm run check
 npm run build
+npm run db:push
 ```
 
 For the Cloudflare Pages artifact, run:
