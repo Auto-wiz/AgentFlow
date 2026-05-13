@@ -471,7 +471,12 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
     result.responseRawBody ??
     JSON.stringify({ error: "location_lookup_failed", message: String(result.response ?? "unknown_error") });
 
-  return c.body(body, status, { "Content-Type": contentType });
+  return new Response(body, {
+    status,
+    headers: {
+      "Content-Type": contentType
+    }
+  });
 });
 
 app.get("/threads/:id/messages", async (c) => {
