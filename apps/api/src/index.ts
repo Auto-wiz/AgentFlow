@@ -174,35 +174,19 @@ app.get("/oauth/gohighlevel/callback", async (c) => {
     return c.json({ error: "Missing OAuth configuration", missing }, 500);
   }
 
-  const tokenResponse = await exchangeGhlOAuthCode(c.env, code);
-  const db = createDb(c.env.DATABASE_URL);
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + tokenResponse.expiresIn * 1000);
+  try {
+    const tokenResponse = await exchangeGhlOAuthCode(c.env, code);
+    const db = createDb(c.env.DATABASE_URL);
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + tokenResponse.expiresIn * 1000);
 
-  await db
-    .insert(ghlOAuthInstallations)
-    .values({
-      companyId: tokenResponse.companyId,
-      locationId: tokenResponse.locationId ?? "",
-      userId: tokenResponse.userId ?? null,
-      userType: tokenResponse.userType,
-      accessToken: tokenResponse.accessToken,
-      refreshToken: tokenResponse.refreshToken,
-      tokenType: tokenResponse.tokenType,
-      scope: tokenResponse.scope ?? null,
-      refreshTokenId: tokenResponse.refreshTokenId ?? null,
-      expiresAt,
-      raw: tokenResponse.raw,
-      updatedAt: now
-    })
-    .onConflictDoUpdate({
-      target: [
-        ghlOAuthInstallations.companyId,
-        ghlOAuthInstallations.locationId,
-        ghlOAuthInstallations.userType
-      ],
-      set: {
+    await db
+      .insert(ghlOAuthInstallations)
+      .values({
+        companyId: tokenResponse.companyId,
+        locationId: tokenResponse.locationId ?? "",
         userId: tokenResponse.userId ?? null,
+        userType: tokenResponse.userType,
         accessToken: tokenResponse.accessToken,
         refreshToken: tokenResponse.refreshToken,
         tokenType: tokenResponse.tokenType,
@@ -211,10 +195,32 @@ app.get("/oauth/gohighlevel/callback", async (c) => {
         expiresAt,
         raw: tokenResponse.raw,
         updatedAt: now
-      }
-    });
+      })
+      .onConflictDoUpdate({
+        target: [
+          ghlOAuthInstallations.companyId,
+          ghlOAuthInstallations.locationId,
+          ghlOAuthInstallations.userType
+        ],
+        set: {
+          userId: tokenResponse.userId ?? null,
+          accessToken: tokenResponse.accessToken,
+          refreshToken: tokenResponse.refreshToken,
+          tokenType: tokenResponse.tokenType,
+          scope: tokenResponse.scope ?? null,
+          refreshTokenId: tokenResponse.refreshTokenId ?? null,
+          expiresAt,
+          raw: tokenResponse.raw,
+          updatedAt: now
+        }
+      });
 
-  return redirectToFrontend(c, "/settings/integrations?ghl=connected");
+    return redirectToFrontend(c, "/settings/integrations?ghl=connected");
+  } catch (error) {
+    console.error("Failed to complete GoHighLevel OAuth callback", error);
+    const reason = error instanceof Error ? error.message : "oauth_callback_failed";
+    return redirectToFrontend(c, `/settings/integrations?ghl=error&reason=${encodeURIComponent(reason)}`);
+  }
 });
 
 app.post("/webhooks/gohighlevel", async (c) => {
@@ -444,18 +450,22 @@ async function exchangeGhlOAuthCode(
   const raw = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = asRecord(raw);
-    throw new Error(
-      `GoHighLevel token exchange failed: ${stringValue(error.message ?? response.status)}`
-    );
+    const message =
+      stringValue(error.message) ||
+      stringValue(error.error_description) ||
+      stringValue(error.error) ||
+      response.statusText ||
+      String(response.status);
+    throw new Error(`GoHighLevel token exchange failed: ${message}`);
   }
 
   const token = asRecord(raw);
-  const userType = stringValue(token.userType);
-  const companyId = stringValue(token.companyId);
+  const userType = stringValue(token.userType ?? token.user_type);
+  const companyId = stringValue(token.companyId ?? token.company_id);
 
   if (
-    !stringValue(token.access_token) ||
-    !stringValue(token.refresh_token) ||
+    !stringValue(token.access_token ?? token.accessToken) ||
+    !stringValue(token.refresh_token ?? token.refreshToken) ||
     !companyId ||
     (userType !== "Company" && userType !== "Location")
   ) {
@@ -463,16 +473,16 @@ async function exchangeGhlOAuthCode(
   }
 
   return {
-    accessToken: stringValue(token.access_token),
-    refreshToken: stringValue(token.refresh_token),
-    tokenType: stringValue(token.token_type) || "Bearer",
-    expiresIn: Number(token.expires_in ?? 86400),
+    accessToken: stringValue(token.access_token ?? token.accessToken),
+    refreshToken: stringValue(token.refresh_token ?? token.refreshToken),
+    tokenType: stringValue(token.token_type ?? token.tokenType) || "Bearer",
+    expiresIn: Number(token.expires_in ?? token.expiresIn ?? 86400),
     scope: stringOrNull(token.scope),
-    refreshTokenId: stringOrNull(token.refreshTokenId),
+    refreshTokenId: stringOrNull(token.refreshTokenId ?? token.refresh_token_id),
     userType,
     companyId,
-    locationId: stringOrNull(token.locationId),
-    userId: stringOrNull(token.userId),
+    locationId: stringOrNull(token.locationId ?? token.location_id),
+    userId: stringOrNull(token.userId ?? token.user_id),
     raw
   };
 }

@@ -1,0 +1,8 @@
+name = "agenflow-back"
+main = "src/index.ts"
+compatibility_date = "2026-05-12"
+compatibility_flags = ["nodejs_compat"]
+
+[[queues.producers]]
+binding = "MESSAGE_QUEUE"
+queue = "agentflow-ghl-webhooks"
