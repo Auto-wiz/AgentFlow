@@ -6,6 +6,10 @@ import { useEffect, useState } from "react";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
+function formatLocationName(locationName: string | null, ghlLocationId: string) {
+  return locationName ? `${locationName} (${ghlLocationId})` : ghlLocationId;
+}
+
 export default function ThreadsPage() {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [locationId, setLocationId] = useState("");
@@ -80,7 +84,7 @@ export default function ThreadsPage() {
             >
               <strong>{thread.contactName}</strong>
               <span className="muted">
-                {thread.locationName ?? thread.ghlLocationId} -{" "}
+                {formatLocationName(thread.locationName, thread.ghlLocationId)} -{" "}
                 {thread.lastMessageAt
                   ? new Date(thread.lastMessageAt).toLocaleString()
                   : "No messages yet"}

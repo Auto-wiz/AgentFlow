@@ -18,9 +18,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <div className="eyebrow">AgentFlow</div>
               <h1>Unified agency inbox</h1>
             </Link>
-            <Link className="button secondary" href="/threads">
-              Pending replies
-            </Link>
+            <div className="badge-row">
+              <Link className="button secondary" href="/threads">
+                Pending replies
+              </Link>
+              <Link className="button secondary" href="/appointments">
+                Appointments
+              </Link>
+            </div>
           </header>
           {children}
         </main>

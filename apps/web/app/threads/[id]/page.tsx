@@ -6,6 +6,10 @@ import { useEffect, useState } from "react";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
+function formatLocationName(locationName: string | null, ghlLocationId: string) {
+  return locationName ? `${locationName} (${ghlLocationId})` : ghlLocationId;
+}
+
 export const runtime = "edge";
 
 export default function ThreadMessagesPage({ params }: { params: { id: string } }) {
@@ -74,7 +78,9 @@ export default function ThreadMessagesPage({ params }: { params: { id: string } 
       </div>
 
       <div className="panel" style={{ padding: 22, marginBottom: 18 }}>
-        <p className="eyebrow">{data.thread.locationName ?? data.thread.ghlLocationId}</p>
+        <p className="eyebrow">
+          {formatLocationName(data.thread.locationName, data.thread.ghlLocationId)}
+        </p>
         <h2>{data.thread.contactName}</h2>
         <div className="badge-row">
           {data.thread.pendingReply ? <span className="badge">Pending reply</span> : null}

@@ -329,6 +329,58 @@ app.get("/threads", async (c) => {
   });
 });
 
+app.get("/appointments", async (c) => {
+  const db = createDb(c.env.DATABASE_URL);
+  const locationId = c.req.query("locationId");
+
+  let query = db
+    .select({
+      appointmentId: appointments.id,
+      ghlAppointmentId: appointments.ghlAppointmentId,
+      locationId: appointments.locationId,
+      ghlLocationId: locations.ghlLocationId,
+      locationName: locations.name,
+      contactId: contacts.id,
+      firstName: contacts.firstName,
+      lastName: contacts.lastName,
+      email: contacts.email,
+      phone: contacts.phone,
+      title: appointments.title,
+      status: appointments.status,
+      startTime: appointments.startTime,
+      endTime: appointments.endTime,
+      updatedAt: appointments.updatedAt
+    })
+    .from(appointments)
+    .innerJoin(locations, eq(appointments.locationId, locations.id))
+    .leftJoin(contacts, eq(appointments.contactId, contacts.id))
+    .$dynamic();
+
+  if (locationId) {
+    query = query.where(or(eq(appointments.locationId, locationId), eq(locations.ghlLocationId, locationId)));
+  }
+
+  const rows = await query.orderBy(desc(appointments.startTime), desc(appointments.updatedAt)).limit(200);
+  return c.json({
+    appointments: rows.map((row) => ({
+      id: row.appointmentId,
+      ghlAppointmentId: row.ghlAppointmentId,
+      locationId: row.locationId,
+      ghlLocationId: row.ghlLocationId,
+      locationName: row.locationName,
+      contactId: row.contactId ?? null,
+      contactName: formatContactName(row.firstName, row.lastName, row.email, row.phone),
+      contactEmail: row.email,
+      contactPhone: row.phone,
+      title: row.title,
+      status: row.status,
+      startTime: row.startTime?.toISOString() ?? null,
+      endTime: row.endTime?.toISOString() ?? null,
+      updatedAt: row.updatedAt.toISOString()
+    }))
+  });
+});
+
 app.get("/threads/:id/messages", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   const threadId = c.req.param("id");

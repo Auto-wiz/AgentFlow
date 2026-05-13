@@ -167,3 +167,24 @@ export type ThreadMessagesResponse = {
   }>;
   contactDetails: ContactOnDemandDetails | null;
 };
+
+export type AppointmentSummary = {
+  id: string;
+  ghlAppointmentId: string;
+  locationId: string;
+  ghlLocationId: string;
+  locationName: string | null;
+  contactId: string | null;
+  contactName: string;
+  contactEmail: string | null;
+  contactPhone: string | null;
+  title: string | null;
+  status: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  updatedAt: string;
+};
+
+export type AppointmentsResponse = {
+  appointments: AppointmentSummary[];
+};
