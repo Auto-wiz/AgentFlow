@@ -467,6 +467,7 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
     .where(eq(ghlOAuthInstallations.locationId, ghlLocationId))
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
     .limit(1);
+  const companyInstallation = await getCompanyOAuthInstallationForLocation(db, ghlLocationId);
 
   const attempts: Array<Record<string, unknown>> = [];
   if (c.env.GHL_API_TOKEN) {
@@ -511,6 +512,27 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
     });
   }
 
+  if (companyInstallation?.accessToken) {
+    const result = await fetchLocationDetailsWithToken(c.env, ghlLocationId, companyInstallation.accessToken);
+    attempts.push({
+      tokenSource: "OAuth company token",
+      ok: result.ok,
+      status: result.status,
+      name: result.name,
+      response: result.response,
+      request: result.request
+    });
+  } else {
+    attempts.push({
+      tokenSource: "OAuth company token",
+      ok: false,
+      status: 0,
+      name: null,
+      response: "missing",
+      request: buildGhlLocationLookupRequest(c.env, ghlLocationId)
+    });
+  }
+
   return c.json({
     requestedGhlLocationId: ghlLocationId,
     dbLocations: locationRows.map((row) => ({
@@ -527,6 +549,15 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
           userType: installation.userType,
           expiresAt: installation.expiresAt.toISOString(),
           updatedAt: installation.updatedAt.toISOString()
+        }
+      : null,
+    latestCompanyOAuthInstallation: companyInstallation
+      ? {
+          companyId: companyInstallation.companyId,
+          locationId: companyInstallation.locationId,
+          userType: companyInstallation.userType,
+          expiresAt: companyInstallation.expiresAt.toISOString(),
+          updatedAt: companyInstallation.updatedAt.toISOString()
         }
       : null,
     ghlFetchAttempts: attempts
@@ -1272,10 +1303,57 @@ async function fetchLocationNameOnDemand(
     .limit(1);
 
   if (installation?.accessToken) {
-    return fetchLocationNameWithToken(env, ghlLocationId, installation.accessToken);
+    const withLocationToken = await fetchLocationNameWithToken(env, ghlLocationId, installation.accessToken);
+    if (withLocationToken) {
+      return withLocationToken;
+    }
+  }
+
+  const companyInstallation = await getCompanyOAuthInstallationForLocation(db, ghlLocationId);
+  if (companyInstallation?.accessToken) {
+    return fetchLocationNameWithToken(env, ghlLocationId, companyInstallation.accessToken);
   }
 
   return null;
+}
+
+async function getCompanyOAuthInstallationForLocation(
+  db: ReturnType<typeof createDb>,
+  ghlLocationId: string
+) {
+  const [locationWithAgency] = await db
+    .select({
+      ghlAgencyId: agencies.ghlAgencyId
+    })
+    .from(locations)
+    .innerJoin(agencies, eq(locations.agencyId, agencies.id))
+    .where(eq(locations.ghlLocationId, ghlLocationId))
+    .limit(1);
+
+  if (!locationWithAgency?.ghlAgencyId) {
+    return null;
+  }
+
+  const [companyInstallation] = await db
+    .select({
+      companyId: ghlOAuthInstallations.companyId,
+      locationId: ghlOAuthInstallations.locationId,
+      userType: ghlOAuthInstallations.userType,
+      accessToken: ghlOAuthInstallations.accessToken,
+      expiresAt: ghlOAuthInstallations.expiresAt,
+      updatedAt: ghlOAuthInstallations.updatedAt
+    })
+    .from(ghlOAuthInstallations)
+    .where(
+      and(
+        eq(ghlOAuthInstallations.companyId, locationWithAgency.ghlAgencyId),
+        eq(ghlOAuthInstallations.userType, "Company")
+      )
+    )
+    .orderBy(desc(ghlOAuthInstallations.updatedAt))
+    .limit(1);
+
+  return companyInstallation ?? null;
 }
 
 async function fetchLocationNameWithToken(
