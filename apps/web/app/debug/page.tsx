@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "https://api.agentflow.autowiz.net";
 
 export default function DebugPage() {
   const [locationId, setLocationId] = useState("");
