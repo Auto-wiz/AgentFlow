@@ -1337,9 +1337,13 @@ async function fetchLocationDetailsWithToken(
 function buildGhlLocationLookupRequest(env: Env, ghlLocationId: string) {
   const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
   const requestUrl = new URL(`/locations/${encodeURIComponent(ghlLocationId)}`, baseUrl);
+  const query: Record<string, string> = {};
+  requestUrl.searchParams.forEach((value, key) => {
+    query[key] = value;
+  });
   return {
     endpoint: requestUrl.toString(),
-    query: Object.fromEntries(requestUrl.searchParams.entries()),
+    query,
     body: null as null
   };
 }
