@@ -20,7 +20,7 @@ import type {
   NormalizedGhlMessageWebhookEvent,
   NormalizedGhlWebhookEvent
 } from "@agentflow/shared";
-import { and, desc, eq, or } from "drizzle-orm";
+import { and, desc, eq, or, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -284,7 +284,11 @@ app.get("/threads", async (c) => {
   }
 
   if (locationId) {
-    filters.push(or(eq(threads.locationId, locationId), eq(locations.ghlLocationId, locationId)));
+    const locationFilters = [eq(locations.ghlLocationId, locationId)];
+    if (isUuid(locationId)) {
+      locationFilters.push(eq(threads.locationId, locationId));
+    }
+    filters.push(or(...locationFilters));
   }
 
   let query = db
@@ -312,12 +316,21 @@ app.get("/threads", async (c) => {
   }
 
   const rows = await query.orderBy(desc(threads.lastMessageAt)).limit(100);
+  const locationNameMap = await hydrateMissingLocationNames(
+    c.env,
+    db,
+    rows.map((row) => ({
+      locationId: row.locationId,
+      ghlLocationId: row.ghlLocationId,
+      locationName: row.locationName
+    }))
+  );
   return c.json({
     threads: rows.map((row) => ({
       id: row.threadId,
       locationId: row.locationId,
       ghlLocationId: row.ghlLocationId,
-      locationName: row.locationName,
+      locationName: locationNameMap.get(row.locationId) ?? row.locationName,
       contactId: row.contactId,
       contactName: formatContactName(row.firstName, row.lastName, row.email, row.phone),
       contactEmail: row.email,
@@ -357,17 +370,30 @@ app.get("/appointments", async (c) => {
     .$dynamic();
 
   if (locationId) {
-    query = query.where(or(eq(appointments.locationId, locationId), eq(locations.ghlLocationId, locationId)));
+    const locationFilters = [eq(locations.ghlLocationId, locationId)];
+    if (isUuid(locationId)) {
+      locationFilters.push(eq(appointments.locationId, locationId));
+    }
+    query = query.where(or(...locationFilters));
   }
 
   const rows = await query.orderBy(desc(appointments.startTime), desc(appointments.updatedAt)).limit(200);
+  const locationNameMap = await hydrateMissingLocationNames(
+    c.env,
+    db,
+    rows.map((row) => ({
+      locationId: row.locationId,
+      ghlLocationId: row.ghlLocationId,
+      locationName: row.locationName
+    }))
+  );
   return c.json({
     appointments: rows.map((row) => ({
       id: row.appointmentId,
       ghlAppointmentId: row.ghlAppointmentId,
       locationId: row.locationId,
       ghlLocationId: row.ghlLocationId,
-      locationName: row.locationName,
+      locationName: locationNameMap.get(row.locationId) ?? row.locationName,
       contactId: row.contactId ?? null,
       contactName: formatContactName(row.firstName, row.lastName, row.email, row.phone),
       contactEmail: row.email,
@@ -410,6 +436,15 @@ app.get("/threads/:id/messages", async (c) => {
     return c.json({ error: "Thread not found" }, 404);
   }
 
+  const locationNameMap = await hydrateMissingLocationNames(c.env, db, [
+    {
+      locationId: threadRow.locationId,
+      ghlLocationId: threadRow.ghlLocationId,
+      locationName: threadRow.locationName
+    }
+  ]);
+  const resolvedLocationName = locationNameMap.get(threadRow.locationId) ?? threadRow.locationName;
+
   const messageRows = await db
     .select({
       id: messages.id,
@@ -433,7 +468,7 @@ app.get("/threads/:id/messages", async (c) => {
       id: threadRow.threadId,
       locationId: threadRow.locationId,
       ghlLocationId: threadRow.ghlLocationId,
-      locationName: threadRow.locationName,
+      locationName: resolvedLocationName,
       contactId: threadRow.contactId,
       contactName: formatContactName(
         threadRow.firstName,
@@ -636,7 +671,7 @@ async function processMessageWebhookEvent(env: Env, event: NormalizedGhlMessageW
       target: locations.ghlLocationId,
       set: {
         agencyId: agency.id,
-        name: event.location.name ?? null,
+        name: sql`COALESCE(EXCLUDED.name, ${locations.name})`,
         updatedAt: now
       }
     })
@@ -768,7 +803,7 @@ async function processAppointmentWebhookEvent(
       target: locations.ghlLocationId,
       set: {
         agencyId: agency.id,
-        name: event.location.name ?? null,
+        name: sql`COALESCE(EXCLUDED.name, ${locations.name})`,
         updatedAt: now
       }
     })
@@ -1044,6 +1079,75 @@ async function fetchContactDetailsOnDemand(
     };
   } catch (error) {
     console.warn("Failed to fetch GoHighLevel contact details", error);
+    return null;
+  }
+}
+
+async function hydrateMissingLocationNames(
+  env: Env,
+  db: ReturnType<typeof createDb>,
+  entries: Array<{
+    locationId: string;
+    ghlLocationId: string;
+    locationName: string | null;
+  }>
+) {
+  const locationNameMap = new Map(entries.map((entry) => [entry.locationId, entry.locationName]));
+  if (!env.GHL_API_TOKEN) {
+    return locationNameMap;
+  }
+
+  const missingByGhlId = new Map<string, string[]>();
+  for (const entry of entries) {
+    if (entry.locationName) {
+      continue;
+    }
+    const ids = missingByGhlId.get(entry.ghlLocationId) ?? [];
+    ids.push(entry.locationId);
+    missingByGhlId.set(entry.ghlLocationId, ids);
+  }
+
+  for (const [ghlLocationId, locationIds] of missingByGhlId.entries()) {
+    const fetchedName = await fetchLocationNameOnDemand(env, ghlLocationId);
+    if (!fetchedName) {
+      continue;
+    }
+
+    for (const locationId of locationIds) {
+      locationNameMap.set(locationId, fetchedName);
+      await db
+        .update(locations)
+        .set({ name: fetchedName, updatedAt: new Date() })
+        .where(eq(locations.id, locationId));
+    }
+  }
+
+  return locationNameMap;
+}
+
+async function fetchLocationNameOnDemand(env: Env, ghlLocationId: string): Promise<string | null> {
+  if (!env.GHL_API_TOKEN) {
+    return null;
+  }
+
+  try {
+    const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
+    const response = await fetch(`${baseUrl}/locations/${encodeURIComponent(ghlLocationId)}`, {
+      headers: {
+        Authorization: `Bearer ${env.GHL_API_TOKEN}`,
+        Accept: "application/json",
+        Version: "2021-07-28"
+      }
+    });
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = asRecord(await response.json());
+    const location = asRecord(data.location ?? data.data ?? data);
+    return stringOrNull(location.name ?? location.locationName ?? location.businessName);
+  } catch (error) {
+    console.warn("Failed to fetch GoHighLevel location details", error);
     return null;
   }
 }
@@ -1494,6 +1598,12 @@ function stringValue(value: unknown): string {
 function stringOrNull(value: unknown): string | null {
   const result = stringValue(value).trim();
   return result ? result : null;
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value
+  );
 }
 
 function toStringArray(value: unknown): string[] {

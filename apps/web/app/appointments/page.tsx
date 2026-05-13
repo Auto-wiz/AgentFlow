@@ -28,6 +28,7 @@ export default function AppointmentsPage() {
     async function loadAppointments() {
       setLoading(true);
       setError(null);
+      setAppointments([]);
       const params = new URLSearchParams();
       if (locationId.trim()) {
         params.set("locationId", locationId.trim());
