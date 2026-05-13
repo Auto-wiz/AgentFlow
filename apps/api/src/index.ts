@@ -440,6 +440,7 @@ app.get("/locations", async (c) => {
 app.get("/debug/location/:ghlLocationId", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   const ghlLocationId = c.req.param("ghlLocationId");
+  const manualAccessToken = c.req.header("x-ghl-access-token") ?? c.req.query("accessToken");
 
   const locationRows = await db
     .select({
@@ -470,6 +471,20 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
   const companyInstallation = await getCompanyOAuthInstallationForLocation(db, ghlLocationId);
 
   const attempts: Array<Record<string, unknown>> = [];
+  if (manualAccessToken) {
+    const result = await fetchLocationDetailsWithToken(c.env, ghlLocationId, manualAccessToken);
+    attempts.push({
+      tokenSource: "manual access token",
+      ok: result.ok,
+      status: result.status,
+      name: result.name,
+      response: result.response,
+      responseRawBody: result.responseRawBody,
+      responseHeaders: result.responseHeaders,
+      request: result.request
+    });
+  }
+
   if (c.env.GHL_API_TOKEN) {
     const result = await fetchLocationDetailsWithToken(c.env, ghlLocationId, c.env.GHL_API_TOKEN);
     attempts.push({
@@ -478,6 +493,8 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
       status: result.status,
       name: result.name,
       response: result.response,
+      responseRawBody: result.responseRawBody,
+      responseHeaders: result.responseHeaders,
       request: result.request
     });
   } else {
@@ -487,6 +504,8 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
       status: 0,
       name: null,
       response: "missing",
+      responseRawBody: null,
+      responseHeaders: {},
       request: buildGhlLocationLookupRequest(c.env, ghlLocationId)
     });
   }
@@ -499,6 +518,8 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
       status: result.status,
       name: result.name,
       response: result.response,
+      responseRawBody: result.responseRawBody,
+      responseHeaders: result.responseHeaders,
       request: result.request
     });
   } else {
@@ -508,6 +529,8 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
       status: 0,
       name: null,
       response: "missing",
+      responseRawBody: null,
+      responseHeaders: {},
       request: buildGhlLocationLookupRequest(c.env, ghlLocationId)
     });
   }
@@ -520,6 +543,8 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
       status: result.status,
       name: result.name,
       response: result.response,
+      responseRawBody: result.responseRawBody,
+      responseHeaders: result.responseHeaders,
       request: result.request
     });
   } else {
@@ -529,6 +554,8 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
       status: 0,
       name: null,
       response: "missing",
+      responseRawBody: null,
+      responseHeaders: {},
       request: buildGhlLocationLookupRequest(c.env, ghlLocationId)
     });
   }
@@ -560,6 +587,7 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
           updatedAt: companyInstallation.updatedAt.toISOString()
         }
       : null,
+    manualTokenProvided: Boolean(manualAccessToken),
     ghlFetchAttempts: attempts
   });
 });
@@ -1374,6 +1402,8 @@ async function fetchLocationDetailsWithToken(
   status: number;
   name: string | null;
   response: unknown;
+  responseRawBody: string | null;
+  responseHeaders: Record<string, string>;
   request: {
     endpoint: string;
     query: Record<string, string>;
@@ -1391,14 +1421,18 @@ async function fetchLocationDetailsWithToken(
       }
     });
 
-    const raw = await response.json().catch(() => ({}));
-    const data = asRecord(raw);
+    const responseRawBody = await response.text();
+    const parsed = responseRawBody ? safeJsonParse(responseRawBody) : null;
+    const data = asRecord(parsed ?? {});
     const location = asRecord(data.location ?? data.data ?? data);
+    const responseHeaders = headersToRecord(response.headers);
     return {
       ok: response.ok,
       status: response.status,
       name: stringOrNull(location.name ?? location.locationName ?? location.businessName),
       response: data,
+      responseRawBody,
+      responseHeaders,
       request
     };
   } catch (error) {
@@ -1407,9 +1441,27 @@ async function fetchLocationDetailsWithToken(
       status: 0,
       name: null,
       response: error instanceof Error ? error.message : "unknown_error",
+      responseRawBody: null,
+      responseHeaders: {},
       request
     };
   }
+}
+
+function safeJsonParse(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function headersToRecord(headers: Headers): Record<string, string> {
+  const output: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    output[key] = value;
+  });
+  return output;
 }
 
 function buildGhlLocationLookupRequest(env: Env, ghlLocationId: string) {
