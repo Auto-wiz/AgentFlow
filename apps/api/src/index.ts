@@ -476,7 +476,8 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
       ok: result.ok,
       status: result.status,
       name: result.name,
-      response: result.response
+      response: result.response,
+      request: result.request
     });
   } else {
     attempts.push({
@@ -484,7 +485,12 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
       ok: false,
       status: 0,
       name: null,
-      response: "missing"
+      response: "missing",
+      request: {
+        endpoint: null,
+        query: null,
+        body: null
+      }
     });
   }
 
@@ -495,7 +501,8 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
       ok: result.ok,
       status: result.status,
       name: result.name,
-      response: result.response
+      response: result.response,
+      request: result.request
     });
   } else {
     attempts.push({
@@ -503,7 +510,12 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
       ok: false,
       status: 0,
       name: null,
-      response: "missing"
+      response: "missing",
+      request: {
+        endpoint: null,
+        query: null,
+        body: null
+      }
     });
   }
 
@@ -1287,10 +1299,27 @@ async function fetchLocationDetailsWithToken(
   env: Env,
   ghlLocationId: string,
   accessToken: string
-): Promise<{ ok: boolean; status: number; name: string | null; response: unknown }> {
+): Promise<{
+  ok: boolean;
+  status: number;
+  name: string | null;
+  response: unknown;
+  request: {
+    endpoint: string;
+    query: Record<string, string>;
+    body: null;
+  };
+}> {
+  const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
+  const requestUrl = `${baseUrl}/locations/${encodeURIComponent(ghlLocationId)}`;
+  const request = {
+    endpoint: requestUrl,
+    query: {} as Record<string, string>,
+    body: null as null
+  };
+
   try {
-    const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
-    const response = await fetch(`${baseUrl}/locations/${encodeURIComponent(ghlLocationId)}`, {
+    const response = await fetch(requestUrl, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: "application/json",
@@ -1305,14 +1334,16 @@ async function fetchLocationDetailsWithToken(
       ok: response.ok,
       status: response.status,
       name: stringOrNull(location.name ?? location.locationName ?? location.businessName),
-      response: data
+      response: data,
+      request
     };
   } catch (error) {
     return {
       ok: false,
       status: 0,
       name: null,
-      response: error instanceof Error ? error.message : "unknown_error"
+      response: error instanceof Error ? error.message : "unknown_error",
+      request
     };
   }
 }
