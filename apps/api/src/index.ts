@@ -65,7 +65,7 @@ app.use(
   cors({
     origin: "*",
     allowMethods: ["GET", "POST", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"]
+    allowHeaders: ["Content-Type", "Authorization", "x-ghl-access-token"]
   })
 );
 
