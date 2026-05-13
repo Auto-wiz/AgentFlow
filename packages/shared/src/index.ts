@@ -77,6 +77,7 @@ export type NormalizedGhlInstallWebhookEvent = NormalizedGhlBaseWebhookEvent & {
   installType: string | null;
   location: {
     ghlLocationId: string | null;
+    name?: string | null;
   };
   agency: {
     ghlAgencyId: string;

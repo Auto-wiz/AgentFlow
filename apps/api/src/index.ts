@@ -906,12 +906,14 @@ async function processInstallWebhookEvent(env: Env, event: NormalizedGhlInstallW
       .values({
         agencyId: agency.id,
         ghlLocationId: event.location.ghlLocationId,
+        name: event.location.name ?? null,
         updatedAt: now
       })
       .onConflictDoUpdate({
         target: locations.ghlLocationId,
         set: {
           agencyId: agency.id,
+          name: sql`COALESCE(EXCLUDED.name, ${locations.name})`,
           updatedAt: now
         }
       });
@@ -1093,9 +1095,6 @@ async function hydrateMissingLocationNames(
   }>
 ) {
   const locationNameMap = new Map(entries.map((entry) => [entry.locationId, entry.locationName]));
-  if (!env.GHL_API_TOKEN) {
-    return locationNameMap;
-  }
 
   const missingByGhlId = new Map<string, string[]>();
   for (const entry of entries) {
@@ -1108,7 +1107,7 @@ async function hydrateMissingLocationNames(
   }
 
   for (const [ghlLocationId, locationIds] of missingByGhlId.entries()) {
-    const fetchedName = await fetchLocationNameOnDemand(env, ghlLocationId);
+    const fetchedName = await fetchLocationNameOnDemand(env, db, ghlLocationId);
     if (!fetchedName) {
       continue;
     }
@@ -1125,16 +1124,44 @@ async function hydrateMissingLocationNames(
   return locationNameMap;
 }
 
-async function fetchLocationNameOnDemand(env: Env, ghlLocationId: string): Promise<string | null> {
-  if (!env.GHL_API_TOKEN) {
-    return null;
+async function fetchLocationNameOnDemand(
+  env: Env,
+  db: ReturnType<typeof createDb>,
+  ghlLocationId: string
+): Promise<string | null> {
+  if (env.GHL_API_TOKEN) {
+    const withApiToken = await fetchLocationNameWithToken(env, ghlLocationId, env.GHL_API_TOKEN);
+    if (withApiToken) {
+      return withApiToken;
+    }
   }
 
+  const [installation] = await db
+    .select({
+      accessToken: ghlOAuthInstallations.accessToken
+    })
+    .from(ghlOAuthInstallations)
+    .where(eq(ghlOAuthInstallations.locationId, ghlLocationId))
+    .orderBy(desc(ghlOAuthInstallations.updatedAt))
+    .limit(1);
+
+  if (installation?.accessToken) {
+    return fetchLocationNameWithToken(env, ghlLocationId, installation.accessToken);
+  }
+
+  return null;
+}
+
+async function fetchLocationNameWithToken(
+  env: Env,
+  ghlLocationId: string,
+  accessToken: string
+): Promise<string | null> {
   try {
     const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
     const response = await fetch(`${baseUrl}/locations/${encodeURIComponent(ghlLocationId)}`, {
       headers: {
-        Authorization: `Bearer ${env.GHL_API_TOKEN}`,
+        Authorization: `Bearer ${accessToken}`,
         Accept: "application/json",
         Version: "2021-07-28"
       }
@@ -1328,7 +1355,8 @@ async function normalizeInstallWebhook(
     versionId: stringOrNull(root.versionId),
     installType: stringOrNull(root.installType),
     location: {
-      ghlLocationId: stringOrNull(root.locationId)
+      ghlLocationId: stringOrNull(root.locationId),
+      name: stringOrNull(root.locationName ?? root.location?.name)
     },
     agency: {
       ghlAgencyId,
