@@ -442,154 +442,36 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
   const ghlLocationId = c.req.param("ghlLocationId");
   const manualAccessToken = c.req.header("x-ghl-access-token") ?? c.req.query("accessToken");
 
-  const locationRows = await db
-    .select({
-      id: locations.id,
-      ghlLocationId: locations.ghlLocationId,
-      name: locations.name,
-      agencyId: locations.agencyId,
-      updatedAt: locations.updatedAt
-    })
-    .from(locations)
-    .where(eq(locations.ghlLocationId, ghlLocationId))
-    .orderBy(desc(locations.updatedAt))
-    .limit(20);
-
-  const [installation] = await db
-    .select({
-      companyId: ghlOAuthInstallations.companyId,
-      locationId: ghlOAuthInstallations.locationId,
-      userType: ghlOAuthInstallations.userType,
-      expiresAt: ghlOAuthInstallations.expiresAt,
-      updatedAt: ghlOAuthInstallations.updatedAt,
-      accessToken: ghlOAuthInstallations.accessToken
-    })
-    .from(ghlOAuthInstallations)
-    .where(eq(ghlOAuthInstallations.locationId, ghlLocationId))
-    .orderBy(desc(ghlOAuthInstallations.updatedAt))
-    .limit(1);
-  const companyInstallation = await getCompanyOAuthInstallationForLocation(db, ghlLocationId);
-
-  const attempts: Array<Record<string, unknown>> = [];
-  if (manualAccessToken) {
-    const result = await fetchLocationDetailsWithToken(c.env, ghlLocationId, manualAccessToken);
-    attempts.push({
-      tokenSource: "manual access token",
-      ok: result.ok,
-      status: result.status,
-      name: result.name,
-      response: result.response,
-      responseRawBody: result.responseRawBody,
-      responseHeaders: result.responseHeaders,
-      request: result.request
-    });
+  let accessToken = manualAccessToken?.trim() || null;
+  if (!accessToken) {
+    accessToken = c.env.GHL_API_TOKEN?.trim() || null;
   }
 
-  if (c.env.GHL_API_TOKEN) {
-    const result = await fetchLocationDetailsWithToken(c.env, ghlLocationId, c.env.GHL_API_TOKEN);
-    attempts.push({
-      tokenSource: "GHL_API_TOKEN",
-      ok: result.ok,
-      status: result.status,
-      name: result.name,
-      response: result.response,
-      responseRawBody: result.responseRawBody,
-      responseHeaders: result.responseHeaders,
-      request: result.request
-    });
-  } else {
-    attempts.push({
-      tokenSource: "GHL_API_TOKEN",
-      ok: false,
-      status: 0,
-      name: null,
-      response: "missing",
-      responseRawBody: null,
-      responseHeaders: {},
-      request: buildGhlLocationLookupRequest(c.env, ghlLocationId)
-    });
+  if (!accessToken) {
+    const [installation] = await db
+      .select({
+        accessToken: ghlOAuthInstallations.accessToken
+      })
+      .from(ghlOAuthInstallations)
+      .where(eq(ghlOAuthInstallations.locationId, ghlLocationId))
+      .orderBy(desc(ghlOAuthInstallations.updatedAt))
+      .limit(1);
+    accessToken = installation?.accessToken ?? null;
   }
 
-  if (installation?.accessToken) {
-    const result = await fetchLocationDetailsWithToken(c.env, ghlLocationId, installation.accessToken);
-    attempts.push({
-      tokenSource: "OAuth installation token",
-      ok: result.ok,
-      status: result.status,
-      name: result.name,
-      response: result.response,
-      responseRawBody: result.responseRawBody,
-      responseHeaders: result.responseHeaders,
-      request: result.request
-    });
-  } else {
-    attempts.push({
-      tokenSource: "OAuth installation token",
-      ok: false,
-      status: 0,
-      name: null,
-      response: "missing",
-      responseRawBody: null,
-      responseHeaders: {},
-      request: buildGhlLocationLookupRequest(c.env, ghlLocationId)
-    });
+  if (!accessToken) {
+    const companyInstallation = await getCompanyOAuthInstallationForLocation(db, ghlLocationId);
+    accessToken = companyInstallation?.accessToken ?? null;
   }
 
-  if (companyInstallation?.accessToken) {
-    const result = await fetchLocationDetailsWithToken(c.env, ghlLocationId, companyInstallation.accessToken);
-    attempts.push({
-      tokenSource: "OAuth company token",
-      ok: result.ok,
-      status: result.status,
-      name: result.name,
-      response: result.response,
-      responseRawBody: result.responseRawBody,
-      responseHeaders: result.responseHeaders,
-      request: result.request
-    });
-  } else {
-    attempts.push({
-      tokenSource: "OAuth company token",
-      ok: false,
-      status: 0,
-      name: null,
-      response: "missing",
-      responseRawBody: null,
-      responseHeaders: {},
-      request: buildGhlLocationLookupRequest(c.env, ghlLocationId)
-    });
-  }
+  const result = await fetchRawLocationResponse(c.env, ghlLocationId, accessToken);
+  const status = result.status > 0 ? result.status : 502;
+  const contentType = result.responseHeaders["content-type"] ?? "application/json; charset=utf-8";
+  const body =
+    result.responseRawBody ??
+    JSON.stringify({ error: "location_lookup_failed", message: String(result.response ?? "unknown_error") });
 
-  return c.json({
-    requestedGhlLocationId: ghlLocationId,
-    dbLocations: locationRows.map((row) => ({
-      id: row.id,
-      ghlLocationId: row.ghlLocationId,
-      name: row.name,
-      agencyId: row.agencyId,
-      updatedAt: row.updatedAt.toISOString()
-    })),
-    latestOAuthInstallation: installation
-      ? {
-          companyId: installation.companyId,
-          locationId: installation.locationId,
-          userType: installation.userType,
-          expiresAt: installation.expiresAt.toISOString(),
-          updatedAt: installation.updatedAt.toISOString()
-        }
-      : null,
-    latestCompanyOAuthInstallation: companyInstallation
-      ? {
-          companyId: companyInstallation.companyId,
-          locationId: companyInstallation.locationId,
-          userType: companyInstallation.userType,
-          expiresAt: companyInstallation.expiresAt.toISOString(),
-          updatedAt: companyInstallation.updatedAt.toISOString()
-        }
-      : null,
-    manualTokenProvided: Boolean(manualAccessToken),
-    ghlFetchAttempts: attempts
-  });
+  return c.body(body, status, { "Content-Type": contentType });
 });
 
 app.get("/threads/:id/messages", async (c) => {
@@ -1410,42 +1292,18 @@ async function fetchLocationDetailsWithToken(
     body: null;
   };
 }> {
-  const request = buildGhlLocationLookupRequest(env, ghlLocationId);
-
-  try {
-    const response = await fetch(request.endpoint, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/json",
-        Version: "2021-07-28"
-      }
-    });
-
-    const responseRawBody = await response.text();
-    const parsed = responseRawBody ? safeJsonParse(responseRawBody) : null;
-    const data = asRecord(parsed ?? {});
-    const location = asRecord(data.location ?? data.data ?? data);
-    const responseHeaders = headersToRecord(response.headers);
-    return {
-      ok: response.ok,
-      status: response.status,
-      name: stringOrNull(location.name ?? location.locationName ?? location.businessName),
-      response: data,
-      responseRawBody,
-      responseHeaders,
-      request
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      status: 0,
-      name: null,
-      response: error instanceof Error ? error.message : "unknown_error",
-      responseRawBody: null,
-      responseHeaders: {},
-      request
-    };
-  }
+  const result = await fetchRawLocationResponse(env, ghlLocationId, accessToken);
+  const data = asRecord(safeJsonParse(result.responseRawBody ?? "") ?? {});
+  const location = asRecord(data.location ?? data.data ?? data);
+  return {
+    ok: result.ok,
+    status: result.status,
+    name: stringOrNull(location.name ?? location.locationName ?? location.businessName),
+    response: data,
+    responseRawBody: result.responseRawBody,
+    responseHeaders: result.responseHeaders,
+    request: result.request
+  };
 }
 
 function safeJsonParse(value: string): unknown {
@@ -1462,6 +1320,53 @@ function headersToRecord(headers: Headers): Record<string, string> {
     output[key] = value;
   });
   return output;
+}
+
+async function fetchRawLocationResponse(
+  env: Env,
+  ghlLocationId: string,
+  accessToken: string | null
+): Promise<{
+  ok: boolean;
+  status: number;
+  response: unknown;
+  responseRawBody: string | null;
+  responseHeaders: Record<string, string>;
+  request: {
+    endpoint: string;
+    query: Record<string, string>;
+    body: null;
+  };
+}> {
+  const request = buildGhlLocationLookupRequest(env, ghlLocationId);
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    Version: "2021-07-28"
+  };
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+
+  try {
+    const response = await fetch(request.endpoint, { headers });
+    return {
+      ok: response.ok,
+      status: response.status,
+      response: null,
+      responseRawBody: await response.text(),
+      responseHeaders: headersToRecord(response.headers),
+      request
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      response: error instanceof Error ? error.message : "unknown_error",
+      responseRawBody: null,
+      responseHeaders: {},
+      request
+    };
+  }
 }
 
 function buildGhlLocationLookupRequest(env: Env, ghlLocationId: string) {
