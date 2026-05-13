@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "https://api.agentflow.autowiz.net";
+const ghlApiBaseUrl = process.env.NEXT_PUBLIC_GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
 
 export default function DebugPage() {
   const [locationId, setLocationId] = useState("");
@@ -23,13 +23,15 @@ export default function DebugPage() {
       return;
     }
 
-    const url = `${apiBaseUrl}/debug/location/${encodeURIComponent(normalized)}`;
+    const url = `${ghlApiBaseUrl}/locations/${encodeURIComponent(normalized)}`;
     setLoading(true);
     setError(null);
     try {
       const response = await fetch(url, {
         headers: {
-          "x-ghl-access-token": normalizedToken
+          Authorization: `Bearer ${normalizedToken}`,
+          Accept: "application/json",
+          Version: "2021-07-28"
         }
       });
       const responseText = await response.text();
@@ -45,7 +47,7 @@ export default function DebugPage() {
     <section>
       <div className="panel" style={{ padding: 20, marginBottom: 16 }}>
         <p className="eyebrow">Debug tools</p>
-        <h2 style={{ marginTop: 8 }}>GET /debug/location/:id</h2>
+        <h2 style={{ marginTop: 8 }}>GET /locations/:id (direct from frontend)</h2>
         <div className="toolbar">
           <input
             aria-label="GoHighLevel location ID"
@@ -61,14 +63,14 @@ export default function DebugPage() {
             onChange={(event) => setAccessToken(event.target.value)}
           />
           <button className="button secondary" disabled={loading} onClick={debugLocation}>
-            GET /debug/location/:id
+            GET /locations/:id
           </button>
         </div>
         {error ? <p className="muted">{error}</p> : null}
       </div>
 
       <div className="panel" style={{ padding: 20 }}>
-        <h3>Response: /debug/location/:id</h3>
+        <h3>Response body</h3>
         <pre className="debug-json">{locationDebugResponse}</pre>
       </div>
     </section>
