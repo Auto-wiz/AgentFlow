@@ -431,20 +431,21 @@ async function exchangeGhlOAuthCode(
   code: string
 ): Promise<GhlOAuthTokenResponse> {
   const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
+  const requestBody = new URLSearchParams({
+    client_id: env.GHL_CLIENT_ID ?? "",
+    client_secret: env.GHL_CLIENT_SECRET ?? "",
+    grant_type: "authorization_code",
+    code,
+    user_type: env.GHL_OAUTH_USER_TYPE ?? "Company",
+    redirect_uri: env.GHL_OAUTH_REDIRECT_URI ?? ""
+  });
   const response = await fetch(`${baseUrl}/oauth/token`, {
     method: "POST",
     headers: {
       Accept: "application/json",
-      "Content-Type": "application/json"
+      "Content-Type": "application/x-www-form-urlencoded"
     },
-    body: JSON.stringify({
-      client_id: env.GHL_CLIENT_ID,
-      client_secret: env.GHL_CLIENT_SECRET,
-      grant_type: "authorization_code",
-      code,
-      user_type: env.GHL_OAUTH_USER_TYPE ?? "Company",
-      redirect_uri: env.GHL_OAUTH_REDIRECT_URI
-    })
+    body: requestBody.toString()
   });
 
   const raw = await response.json().catch(() => ({}));
