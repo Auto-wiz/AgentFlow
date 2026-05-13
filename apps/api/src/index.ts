@@ -32,6 +32,7 @@ type Env = {
   GHL_API_BASE_URL?: string;
   GHL_CLIENT_ID?: string;
   GHL_CLIENT_SECRET?: string;
+  GHL_APP_ID?: string;
   GHL_INSTALL_URL?: string;
   GHL_OAUTH_REDIRECT_URI?: string;
   GHL_OAUTH_USER_TYPE?: string;
@@ -101,6 +102,36 @@ app.get("/oauth/gohighlevel/start", (c) => {
 
   const state = crypto.randomUUID();
   const installUrl = new URL(c.env.GHL_INSTALL_URL);
+
+  const clientId =
+    getNonEmptyQueryParam(installUrl, "client_id") ??
+    getNonEmptyQueryParam(installUrl, "appId") ??
+    c.env.GHL_CLIENT_ID?.trim() ??
+    null;
+
+  if (!clientId) {
+    return c.json({ error: "GHL_CLIENT_ID is not configured" }, 500);
+  }
+
+  // Keep install URLs valid even if dashboard vars omit one of these keys.
+  installUrl.searchParams.set("client_id", clientId);
+  installUrl.searchParams.set(
+    "appId",
+    getNonEmptyQueryParam(installUrl, "appId") ?? c.env.GHL_APP_ID?.trim() ?? clientId
+  );
+  installUrl.searchParams.set("response_type", "code");
+
+  const versionId =
+    getNonEmptyQueryParam(installUrl, "versionId") ?? getNonEmptyQueryParam(installUrl, "version_id");
+  if (versionId) {
+    installUrl.searchParams.set("versionId", versionId);
+    installUrl.searchParams.set("version_id", versionId);
+  }
+
+  if (!getNonEmptyQueryParam(installUrl, "user_type") && c.env.GHL_OAUTH_USER_TYPE?.trim()) {
+    installUrl.searchParams.set("user_type", c.env.GHL_OAUTH_USER_TYPE.trim());
+  }
+
   installUrl.searchParams.set("state", state);
 
   if (c.env.GHL_OAUTH_REDIRECT_URI) {
@@ -471,6 +502,16 @@ function getCookie(headers: Headers, name: string): string | null {
     }
   }
   return null;
+}
+
+function getNonEmptyQueryParam(url: URL, name: string): string | null {
+  const value = url.searchParams.get(name);
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 async function processWebhookEvent(env: Env, event: NormalizedGhlWebhookEvent) {

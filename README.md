@@ -39,6 +39,7 @@ Set these Worker variables in the Cloudflare dashboard or as `[vars]` in
 
 ```txt
 GHL_INSTALL_URL
+GHL_APP_ID (optional, recommended for Marketplace v2 URLs)
 GHL_OAUTH_REDIRECT_URI
 GHL_OAUTH_USER_TYPE
 FRONTEND_BASE_URL
