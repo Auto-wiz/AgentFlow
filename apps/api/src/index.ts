@@ -486,11 +486,7 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
       status: 0,
       name: null,
       response: "missing",
-      request: {
-        endpoint: null,
-        query: null,
-        body: null
-      }
+      request: buildGhlLocationLookupRequest(c.env, ghlLocationId)
     });
   }
 
@@ -511,11 +507,7 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
       status: 0,
       name: null,
       response: "missing",
-      request: {
-        endpoint: null,
-        query: null,
-        body: null
-      }
+      request: buildGhlLocationLookupRequest(c.env, ghlLocationId)
     });
   }
 
@@ -1310,16 +1302,10 @@ async function fetchLocationDetailsWithToken(
     body: null;
   };
 }> {
-  const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
-  const requestUrl = `${baseUrl}/locations/${encodeURIComponent(ghlLocationId)}`;
-  const request = {
-    endpoint: requestUrl,
-    query: {} as Record<string, string>,
-    body: null as null
-  };
+  const request = buildGhlLocationLookupRequest(env, ghlLocationId);
 
   try {
-    const response = await fetch(requestUrl, {
+    const response = await fetch(request.endpoint, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: "application/json",
@@ -1346,6 +1332,16 @@ async function fetchLocationDetailsWithToken(
       request
     };
   }
+}
+
+function buildGhlLocationLookupRequest(env: Env, ghlLocationId: string) {
+  const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
+  const requestUrl = new URL(`/locations/${encodeURIComponent(ghlLocationId)}`, baseUrl);
+  return {
+    endpoint: requestUrl.toString(),
+    query: Object.fromEntries(requestUrl.searchParams.entries()),
+    body: null as null
+  };
 }
 
 async function normalizeGhlWebhook(
