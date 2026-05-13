@@ -163,3 +163,17 @@ input {
   padding: 32px;
   text-align: center;
 }
+
+.debug-json {
+  background: #0f172a;
+  border-radius: 12px;
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 12px;
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+}

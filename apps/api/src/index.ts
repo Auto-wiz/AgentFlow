@@ -407,6 +407,128 @@ app.get("/appointments", async (c) => {
   });
 });
 
+app.get("/locations", async (c) => {
+  const db = createDb(c.env.DATABASE_URL);
+  const limit = Math.min(Number(c.req.query("limit") ?? 200) || 200, 500);
+
+  const rows = await db
+    .select({
+      id: locations.id,
+      ghlLocationId: locations.ghlLocationId,
+      name: locations.name,
+      agencyId: locations.agencyId,
+      agencyName: agencies.name,
+      updatedAt: locations.updatedAt
+    })
+    .from(locations)
+    .leftJoin(agencies, eq(locations.agencyId, agencies.id))
+    .orderBy(desc(locations.updatedAt))
+    .limit(limit);
+
+  return c.json({
+    locations: rows.map((row) => ({
+      id: row.id,
+      ghlLocationId: row.ghlLocationId,
+      name: row.name,
+      agencyId: row.agencyId,
+      agencyName: row.agencyName,
+      updatedAt: row.updatedAt.toISOString()
+    }))
+  });
+});
+
+app.get("/debug/location/:ghlLocationId", async (c) => {
+  const db = createDb(c.env.DATABASE_URL);
+  const ghlLocationId = c.req.param("ghlLocationId");
+
+  const locationRows = await db
+    .select({
+      id: locations.id,
+      ghlLocationId: locations.ghlLocationId,
+      name: locations.name,
+      agencyId: locations.agencyId,
+      updatedAt: locations.updatedAt
+    })
+    .from(locations)
+    .where(eq(locations.ghlLocationId, ghlLocationId))
+    .orderBy(desc(locations.updatedAt))
+    .limit(20);
+
+  const [installation] = await db
+    .select({
+      companyId: ghlOAuthInstallations.companyId,
+      locationId: ghlOAuthInstallations.locationId,
+      userType: ghlOAuthInstallations.userType,
+      expiresAt: ghlOAuthInstallations.expiresAt,
+      updatedAt: ghlOAuthInstallations.updatedAt,
+      accessToken: ghlOAuthInstallations.accessToken
+    })
+    .from(ghlOAuthInstallations)
+    .where(eq(ghlOAuthInstallations.locationId, ghlLocationId))
+    .orderBy(desc(ghlOAuthInstallations.updatedAt))
+    .limit(1);
+
+  const attempts: Array<Record<string, unknown>> = [];
+  if (c.env.GHL_API_TOKEN) {
+    const result = await fetchLocationDetailsWithToken(c.env, ghlLocationId, c.env.GHL_API_TOKEN);
+    attempts.push({
+      tokenSource: "GHL_API_TOKEN",
+      ok: result.ok,
+      status: result.status,
+      name: result.name,
+      response: result.response
+    });
+  } else {
+    attempts.push({
+      tokenSource: "GHL_API_TOKEN",
+      ok: false,
+      status: 0,
+      name: null,
+      response: "missing"
+    });
+  }
+
+  if (installation?.accessToken) {
+    const result = await fetchLocationDetailsWithToken(c.env, ghlLocationId, installation.accessToken);
+    attempts.push({
+      tokenSource: "OAuth installation token",
+      ok: result.ok,
+      status: result.status,
+      name: result.name,
+      response: result.response
+    });
+  } else {
+    attempts.push({
+      tokenSource: "OAuth installation token",
+      ok: false,
+      status: 0,
+      name: null,
+      response: "missing"
+    });
+  }
+
+  return c.json({
+    requestedGhlLocationId: ghlLocationId,
+    dbLocations: locationRows.map((row) => ({
+      id: row.id,
+      ghlLocationId: row.ghlLocationId,
+      name: row.name,
+      agencyId: row.agencyId,
+      updatedAt: row.updatedAt.toISOString()
+    })),
+    latestOAuthInstallation: installation
+      ? {
+          companyId: installation.companyId,
+          locationId: installation.locationId,
+          userType: installation.userType,
+          expiresAt: installation.expiresAt.toISOString(),
+          updatedAt: installation.updatedAt.toISOString()
+        }
+      : null,
+    ghlFetchAttempts: attempts
+  });
+});
+
 app.get("/threads/:id/messages", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   const threadId = c.req.param("id");
@@ -1157,6 +1279,15 @@ async function fetchLocationNameWithToken(
   ghlLocationId: string,
   accessToken: string
 ): Promise<string | null> {
+  const result = await fetchLocationDetailsWithToken(env, ghlLocationId, accessToken);
+  return result.ok ? result.name : null;
+}
+
+async function fetchLocationDetailsWithToken(
+  env: Env,
+  ghlLocationId: string,
+  accessToken: string
+): Promise<{ ok: boolean; status: number; name: string | null; response: unknown }> {
   try {
     const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
     const response = await fetch(`${baseUrl}/locations/${encodeURIComponent(ghlLocationId)}`, {
@@ -1166,16 +1297,23 @@ async function fetchLocationNameWithToken(
         Version: "2021-07-28"
       }
     });
-    if (!response.ok) {
-      return null;
-    }
 
-    const data = asRecord(await response.json());
+    const raw = await response.json().catch(() => ({}));
+    const data = asRecord(raw);
     const location = asRecord(data.location ?? data.data ?? data);
-    return stringOrNull(location.name ?? location.locationName ?? location.businessName);
+    return {
+      ok: response.ok,
+      status: response.status,
+      name: stringOrNull(location.name ?? location.locationName ?? location.businessName),
+      response: data
+    };
   } catch (error) {
-    console.warn("Failed to fetch GoHighLevel location details", error);
-    return null;
+    return {
+      ok: false,
+      status: 0,
+      name: null,
+      response: error instanceof Error ? error.message : "unknown_error"
+    };
   }
 }
 
