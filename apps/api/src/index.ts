@@ -102,27 +102,30 @@ app.get("/oauth/gohighlevel/start", (c) => {
 
   const state = crypto.randomUUID();
   const installUrl = new URL(c.env.GHL_INSTALL_URL);
+  const versionId =
+    getNonEmptyQueryParam(installUrl, "versionId") ?? getNonEmptyQueryParam(installUrl, "version_id");
 
   const clientId =
     getNonEmptyQueryParam(installUrl, "client_id") ??
     getNonEmptyQueryParam(installUrl, "appId") ??
     c.env.GHL_CLIENT_ID?.trim() ??
     null;
-
-  if (!clientId) {
-    return c.json({ error: "GHL_CLIENT_ID is not configured" }, 500);
+  const appId =
+    getNonEmptyQueryParam(installUrl, "appId") ?? c.env.GHL_APP_ID?.trim() ?? versionId ?? clientId;
+  if (!appId) {
+    return c.json(
+      { error: "Missing GoHighLevel app identifier", hint: "Set appId/version_id in GHL_INSTALL_URL" },
+      500
+    );
   }
 
   // Keep install URLs valid even if dashboard vars omit one of these keys.
-  installUrl.searchParams.set("client_id", clientId);
-  installUrl.searchParams.set(
-    "appId",
-    getNonEmptyQueryParam(installUrl, "appId") ?? c.env.GHL_APP_ID?.trim() ?? clientId
-  );
+  if (clientId) {
+    installUrl.searchParams.set("client_id", clientId);
+  }
+  installUrl.searchParams.set("appId", appId);
   installUrl.searchParams.set("response_type", "code");
 
-  const versionId =
-    getNonEmptyQueryParam(installUrl, "versionId") ?? getNonEmptyQueryParam(installUrl, "version_id");
   if (versionId) {
     installUrl.searchParams.set("versionId", versionId);
     installUrl.searchParams.set("version_id", versionId);
