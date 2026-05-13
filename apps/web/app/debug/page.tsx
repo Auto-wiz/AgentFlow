@@ -6,6 +6,7 @@ const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
 export default function DebugPage() {
   const [locationId, setLocationId] = useState("");
+  const [accessToken, setAccessToken] = useState("");
   const [loading, setLoading] = useState(false);
   const [locationDebugResponse, setLocationDebugResponse] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -16,12 +17,21 @@ export default function DebugPage() {
       setError("Please enter a location ID first.");
       return;
     }
+    const normalizedToken = accessToken.trim();
+    if (!normalizedToken) {
+      setError("Please enter an access token first.");
+      return;
+    }
 
     const url = `${apiBaseUrl}/debug/location/${encodeURIComponent(normalized)}`;
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        headers: {
+          "x-ghl-access-token": normalizedToken
+        }
+      });
       const responseText = await response.text();
       setLocationDebugResponse(responseText);
     } catch (caught) {
@@ -42,6 +52,13 @@ export default function DebugPage() {
             placeholder="GHL locationId or UUID"
             value={locationId}
             onChange={(event) => setLocationId(event.target.value)}
+          />
+          <input
+            aria-label="GoHighLevel access token"
+            placeholder="GHL access token"
+            type="password"
+            value={accessToken}
+            onChange={(event) => setAccessToken(event.target.value)}
           />
           <button className="button secondary" disabled={loading} onClick={debugLocation}>
             GET /debug/location/:id
