@@ -2358,40 +2358,60 @@ async function fetchThreadOpportunitiesForContact(
   stageOptions: OpportunityStageOption[];
   error: string | null;
 }> {
-  const accessTokens = await getAccessTokensForLocation(env, db, ghlLocationId);
-  if (accessTokens.length === 0) {
-    return {
-      ok: false,
-      opportunities: [],
-      stageOptions: [],
-      error: "No GoHighLevel token available for this location"
-    };
-  }
-
-  let lastError: string | null = null;
-  for (const accessToken of accessTokens) {
-    const result = await fetchThreadOpportunitiesWithToken(env, {
-      accessToken,
-      ghlLocationId,
-      ghlContactId
-    });
-    if (result.ok) {
+  const tryWithCurrentTokens = async () => {
+    const accessTokens = await getAccessTokensForLocation(env, db, ghlLocationId);
+    if (accessTokens.length === 0) {
       return {
-        ok: true,
-        opportunities: result.opportunities,
-        stageOptions: result.stageOptions,
-        error: null
+        ok: false as const,
+        opportunities: [] as ThreadOpportunity[],
+        stageOptions: [] as OpportunityStageOption[],
+        error: "No GoHighLevel token available for this location"
       };
     }
-    lastError = result.error;
+
+    let lastError: string | null = null;
+    for (const accessToken of accessTokens) {
+      const result = await fetchThreadOpportunitiesWithToken(env, {
+        accessToken,
+        ghlLocationId,
+        ghlContactId
+      });
+      if (result.ok) {
+        return result;
+      }
+      lastError = result.error;
+    }
+
+    return {
+      ok: false as const,
+      opportunities: [] as ThreadOpportunity[],
+      stageOptions: [] as OpportunityStageOption[],
+      error: lastError
+    };
+  };
+
+  const initialAttempt = await tryWithCurrentTokens();
+  if (initialAttempt.ok) {
+    return initialAttempt;
   }
 
-  return {
-    ok: false,
-    opportunities: [],
-    stageOptions: [],
-    error: lastError
-  };
+  const normalizedError = initialAttempt.error?.toLowerCase() ?? "";
+  const shouldRefresh = normalizedError.includes("jwt") || normalizedError.includes("token");
+  if (!shouldRefresh) {
+    return initialAttempt;
+  }
+
+  const refreshedCount = await refreshOAuthAccessTokensForLocation(env, db, ghlLocationId);
+  if (refreshedCount <= 0) {
+    return initialAttempt;
+  }
+
+  const retriedAttempt = await tryWithCurrentTokens();
+  if (retriedAttempt.ok) {
+    return retriedAttempt;
+  }
+
+  return retriedAttempt;
 }
 
 async function fetchThreadOpportunitiesWithToken(
@@ -2729,6 +2749,119 @@ async function updateOpportunityWithToken(
     status: 0,
     error: lastError
   };
+}
+
+async function refreshOAuthAccessTokensForLocation(
+  env: Env,
+  db: ReturnType<typeof createDb>,
+  ghlLocationId: string
+) {
+  const clientId = env.GHL_CLIENT_ID?.trim();
+  const clientSecret = env.GHL_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret) {
+    return 0;
+  }
+
+  const [locationWithAgency] = await db
+    .select({
+      ghlAgencyId: agencies.ghlAgencyId
+    })
+    .from(locations)
+    .innerJoin(agencies, eq(locations.agencyId, agencies.id))
+    .where(eq(locations.ghlLocationId, ghlLocationId))
+    .limit(1);
+
+  const filters = [eq(ghlOAuthInstallations.locationId, ghlLocationId)];
+  if (locationWithAgency?.ghlAgencyId) {
+    const companyFilter = and(
+      eq(ghlOAuthInstallations.companyId, locationWithAgency.ghlAgencyId),
+      eq(ghlOAuthInstallations.userType, "Company")
+    );
+    if (companyFilter) {
+      filters.push(companyFilter);
+    }
+  }
+
+  const installations = await db
+    .select({
+      id: ghlOAuthInstallations.id,
+      refreshToken: ghlOAuthInstallations.refreshToken
+    })
+    .from(ghlOAuthInstallations)
+    .where(or(...filters))
+    .orderBy(desc(ghlOAuthInstallations.updatedAt))
+    .limit(8);
+
+  let refreshedCount = 0;
+  for (const installation of installations) {
+    const refreshToken = installation.refreshToken?.trim();
+    if (!refreshToken) {
+      continue;
+    }
+    const refreshed = await refreshGhlAccessTokenWithRefreshToken(env, refreshToken);
+    if (!refreshed) {
+      continue;
+    }
+    await db
+      .update(ghlOAuthInstallations)
+      .set({
+        accessToken: refreshed.accessToken,
+        refreshToken: refreshed.refreshToken,
+        expiresAt: addSecondsToNow(refreshed.expiresIn),
+        updatedAt: new Date()
+      })
+      .where(eq(ghlOAuthInstallations.id, installation.id));
+    refreshedCount += 1;
+  }
+
+  return refreshedCount;
+}
+
+async function refreshGhlAccessTokenWithRefreshToken(env: Env, refreshToken: string) {
+  const clientId = env.GHL_CLIENT_ID?.trim();
+  const clientSecret = env.GHL_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret) {
+    return null;
+  }
+
+  const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
+  const requestBody = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    user_type: env.GHL_OAUTH_USER_TYPE ?? "Company"
+  });
+  try {
+    const response = await fetch(`${baseUrl}/oauth/token`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: requestBody.toString()
+    });
+    const raw = asRecord(await response.json().catch(() => ({})));
+    if (!response.ok) {
+      return null;
+    }
+    const nextAccessToken = stringOrNull(raw.access_token ?? raw.accessToken);
+    if (!nextAccessToken) {
+      return null;
+    }
+    return {
+      accessToken: nextAccessToken,
+      refreshToken: stringOrNull(raw.refresh_token ?? raw.refreshToken) ?? refreshToken,
+      expiresIn: Number(raw.expires_in ?? raw.expiresIn ?? 86400)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function addSecondsToNow(seconds: number) {
+  const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  return new Date(Date.now() + safeSeconds * 1000);
 }
 
 function buildGhlLocationLookupRequest(env: Env, ghlLocationId: string) {
