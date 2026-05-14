@@ -4,7 +4,7 @@ import type { ThreadSummary } from "@agentflow/shared";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "https://api.agentflow.autowiz.net";
 
 function formatLocationName(locationName: string | null, ghlLocationId: string) {
   return locationName ? `${locationName} (${ghlLocationId})` : ghlLocationId;
