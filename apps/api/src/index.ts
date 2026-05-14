@@ -818,9 +818,37 @@ app.post("/threads/:id/reply", async (c) => {
     return c.json({ error: "Thread not found" }, 404);
   }
 
+  // #region agent log
+  writeDebugLog({
+    hypothesisId: "A",
+    location: "index.ts:/threads/:id/reply",
+    message: "reply_request_context",
+    data: {
+      threadId: threadRow.threadId,
+      ghlLocationId: threadRow.ghlLocationId,
+      ghlContactId: threadRow.ghlContactId,
+      channel,
+      hasSubject: Boolean(subject),
+      messageLength: messageBody.length
+    }
+  });
+  // #endregion
+
   let lastError: string | null = null;
   const trySendWithCurrentTokens = async () => {
     const accessTokens = await getAccessTokensForLocation(c.env, db, threadRow.ghlLocationId);
+    // #region agent log
+    writeDebugLog({
+      hypothesisId: "E",
+      location: "index.ts:/threads/:id/reply",
+      message: "reply_access_tokens_loaded",
+      data: {
+        threadId: threadRow.threadId,
+        ghlLocationId: threadRow.ghlLocationId,
+        tokenCount: accessTokens.length
+      }
+    });
+    // #endregion
     if (accessTokens.length === 0) {
       return {
         ok: false as const,
@@ -830,7 +858,7 @@ app.post("/threads/:id/reply", async (c) => {
     }
 
     let shouldRefreshToken = false;
-    for (const accessToken of accessTokens) {
+    for (const [tokenIndex, accessToken] of accessTokens.entries()) {
       const sent = await sendConversationMessageWithToken(c.env, {
         accessToken,
         channel,
@@ -839,6 +867,22 @@ app.post("/threads/:id/reply", async (c) => {
         message: messageBody,
         subject
       });
+      // #region agent log
+      writeDebugLog({
+        hypothesisId: "A",
+        location: "index.ts:/threads/:id/reply",
+        message: "reply_send_attempt_result",
+        data: {
+          threadId: threadRow.threadId,
+          tokenIndex,
+          tokenCount: accessTokens.length,
+          status: sent.status,
+          ok: sent.ok,
+          error: sent.error,
+          shouldRefreshToken: sent.shouldRefreshToken
+        }
+      });
+      // #endregion
       if (!sent.ok) {
         lastError = sent.error ?? `status_${sent.status}`;
         shouldRefreshToken = shouldRefreshToken || sent.shouldRefreshToken;
@@ -867,6 +911,18 @@ app.post("/threads/:id/reply", async (c) => {
     ? initialAttempt.sent
     : initialAttempt.shouldRefreshToken
       ? await (async () => {
+          // #region agent log
+          writeDebugLog({
+            hypothesisId: "A",
+            location: "index.ts:/threads/:id/reply",
+            message: "reply_refresh_attempting",
+            data: {
+              threadId: threadRow.threadId,
+              ghlLocationId: threadRow.ghlLocationId,
+              lastError
+            }
+          });
+          // #endregion
           const refreshedCount = await refreshOAuthAccessTokensForLocation(c.env, db, threadRow.ghlLocationId);
           if (refreshedCount <= 0) {
             return null;
@@ -2465,6 +2521,21 @@ async function sendConversationMessageWithToken(
       const parsedError =
         stringOrNull(parsed.message ?? parsed.error ?? parsed.error_description) ?? response.statusText;
       if (!response.ok) {
+        // #region agent log
+        writeDebugLog({
+          hypothesisId: "C",
+          location: "index.ts:sendConversationMessageWithToken",
+          message: "reply_send_http_failure",
+          data: {
+            ghlLocationId: params.ghlLocationId,
+            ghlContactId: params.ghlContactId,
+            channel: params.channel,
+            version: requestVersion,
+            status: response.status,
+            error: parsedError
+          }
+        });
+        // #endregion
         lastError = parsedError;
         lastStatus = response.status;
         shouldRefreshToken =
@@ -2958,12 +3029,26 @@ async function refreshOAuthAccessTokensForLocation(
   const installations = await db
     .select({
       id: ghlOAuthInstallations.id,
-      refreshToken: ghlOAuthInstallations.refreshToken
+      refreshToken: ghlOAuthInstallations.refreshToken,
+      userType: ghlOAuthInstallations.userType
     })
     .from(ghlOAuthInstallations)
     .where(or(...filters))
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
     .limit(8);
+
+  // #region agent log
+  writeDebugLog({
+    hypothesisId: "B",
+    location: "index.ts:refreshOAuthAccessTokensForLocation",
+    message: "refresh_installations_loaded",
+    data: {
+      ghlLocationId,
+      installationCount: installations.length,
+      userTypes: installations.map((installation) => installation.userType)
+    }
+  });
+  // #endregion
 
   let refreshedCount = 0;
   for (const installation of installations) {
@@ -2971,7 +3056,20 @@ async function refreshOAuthAccessTokensForLocation(
     if (!refreshToken) {
       continue;
     }
-    const refreshed = await refreshGhlAccessTokenWithRefreshToken(env, refreshToken);
+    const refreshed = await refreshGhlAccessTokenWithRefreshToken(env, refreshToken, installation.userType);
+    // #region agent log
+    writeDebugLog({
+      hypothesisId: "B",
+      location: "index.ts:refreshOAuthAccessTokensForLocation",
+      message: "refresh_installation_attempt_result",
+      data: {
+        ghlLocationId,
+        userType: installation.userType,
+        hasRefreshToken: Boolean(refreshToken),
+        refreshed: Boolean(refreshed)
+      }
+    });
+    // #endregion
     if (!refreshed) {
       continue;
     }
@@ -2990,7 +3088,11 @@ async function refreshOAuthAccessTokensForLocation(
   return refreshedCount;
 }
 
-async function refreshGhlAccessTokenWithRefreshToken(env: Env, refreshToken: string) {
+async function refreshGhlAccessTokenWithRefreshToken(
+  env: Env,
+  refreshToken: string,
+  installationUserType: string | null
+) {
   const clientId = env.GHL_CLIENT_ID?.trim();
   const clientSecret = env.GHL_CLIENT_SECRET?.trim();
   if (!clientId || !clientSecret) {
@@ -2998,43 +3100,76 @@ async function refreshGhlAccessTokenWithRefreshToken(env: Env, refreshToken: str
   }
 
   const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
-  const requestBody = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    grant_type: "refresh_token",
-    refresh_token: refreshToken,
-    user_type: env.GHL_OAUTH_USER_TYPE ?? "Company"
-  });
-  try {
-    const response = await fetch(`${baseUrl}/oauth/token`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/x-www-form-urlencoded"
-      },
-      body: requestBody.toString()
+  const configuredUserType = normalizeOAuthUserType(
+    stringOrNull(installationUserType) ?? env.GHL_OAUTH_USER_TYPE ?? "Company"
+  );
+  const fallbackUserType = configuredUserType === "Company" ? "Location" : "Company";
+  const userTypeAttempts = [configuredUserType, fallbackUserType];
+
+  for (const userType of userTypeAttempts) {
+    const requestBody = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      user_type: userType
     });
-    const raw = asRecord(await response.json().catch(() => ({})));
-    if (!response.ok) {
-      return null;
+    try {
+      const response = await fetch(`${baseUrl}/oauth/token`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: requestBody.toString()
+      });
+      const raw = asRecord(await response.json().catch(() => ({})));
+      // #region agent log
+      writeDebugLog({
+        hypothesisId: "D",
+        location: "index.ts:refreshGhlAccessTokenWithRefreshToken",
+        message: "refresh_token_http_result",
+        data: {
+          userType,
+          status: response.status,
+          ok: response.ok,
+          error:
+            stringOrNull(raw.message ?? raw.error ?? raw.error_description) ??
+            (response.ok ? null : response.statusText)
+        }
+      });
+      // #endregion
+      if (!response.ok) {
+        continue;
+      }
+      const nextAccessToken = stringOrNull(raw.access_token ?? raw.accessToken);
+      if (!nextAccessToken) {
+        continue;
+      }
+      return {
+        accessToken: nextAccessToken,
+        refreshToken: stringOrNull(raw.refresh_token ?? raw.refreshToken) ?? refreshToken,
+        expiresIn: Number(raw.expires_in ?? raw.expiresIn ?? 86400)
+      };
+    } catch {
+      continue;
     }
-    const nextAccessToken = stringOrNull(raw.access_token ?? raw.accessToken);
-    if (!nextAccessToken) {
-      return null;
-    }
-    return {
-      accessToken: nextAccessToken,
-      refreshToken: stringOrNull(raw.refresh_token ?? raw.refreshToken) ?? refreshToken,
-      expiresIn: Number(raw.expires_in ?? raw.expiresIn ?? 86400)
-    };
-  } catch {
-    return null;
   }
+
+  return null;
 }
 
 function addSecondsToNow(seconds: number) {
   const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
   return new Date(Date.now() + safeSeconds * 1000);
+}
+
+function normalizeOAuthUserType(value: string | null) {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (normalized === "location") {
+    return "Location";
+  }
+  return "Company";
 }
 
 function buildGhlLocationLookupRequest(env: Env, ghlLocationId: string) {
@@ -3618,6 +3753,26 @@ function isUuid(value: string) {
 
 function toStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(stringValue).filter(Boolean) : [];
+}
+
+function writeDebugLog(payload: {
+  hypothesisId: string;
+  location: string;
+  message: string;
+  data: Record<string, unknown>;
+}) {
+  const entry = { ...payload, timestamp: Date.now() };
+  try {
+    // @ts-ignore debug-mode local file logging
+    require("fs").appendFileSync("/opt/cursor/logs/debug.log", `${JSON.stringify(entry)}\n`);
+  } catch {
+    // no-op when filesystem is unavailable
+  }
+  try {
+    console.log("[agent-debug]", JSON.stringify(entry));
+  } catch {
+    // no-op in restricted runtimes
+  }
 }
 
 function toCustomFields(value: unknown): ContactOnDemandDetails["customFields"] {
