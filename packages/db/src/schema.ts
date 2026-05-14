@@ -171,6 +171,137 @@ export const webhookEvents = pgTable(
   })
 );
 
+function createGhlWebhookMirrorTable(tableName: string, indexPrefix: string) {
+  return pgTable(
+    tableName,
+    {
+      id: uuid("id")
+        .primaryKey()
+        .default(sql`gen_random_uuid()`),
+      idempotencyKey: text("idempotency_key").notNull(),
+      webhookType: text("webhook_type").notNull(),
+      companyId: text("company_id"),
+      locationId: text("location_id"),
+      contactId: text("contact_id"),
+      entityId: text("entity_id"),
+      eventTimestamp: timestamp("event_timestamp", { withTimezone: true }),
+      payload: jsonb("payload").notNull(),
+      headers: jsonb("headers")
+        .$type<Record<string, string>>()
+        .notNull()
+        .default(sql`'{}'::jsonb`),
+      rawBody: text("raw_body").notNull(),
+      createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+      updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+    },
+    (table) => ({
+      idempotencyKeyUnique: uniqueIndex(`${indexPrefix}_idempotency_key_unique`).on(
+        table.idempotencyKey
+      ),
+      webhookTypeIdx: index(`${indexPrefix}_webhook_type_idx`).on(table.webhookType),
+      locationIdx: index(`${indexPrefix}_location_id_idx`).on(table.locationId),
+      createdAtIdx: index(`${indexPrefix}_created_at_idx`).on(table.createdAt)
+    })
+  );
+}
+
+export const ghlWebhookMirrorEvents = createGhlWebhookMirrorTable(
+  "ghl_webhook_mirror_events",
+  "ghl_wh_mirror_events"
+);
+export const ghlWebhookAppMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_app_mirror",
+  "ghl_wh_app"
+);
+export const ghlWebhookAppointmentMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_appointment_mirror",
+  "ghl_wh_appt"
+);
+export const ghlWebhookAssociationMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_association_mirror",
+  "ghl_wh_assoc"
+);
+export const ghlWebhookCampaignMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_campaign_mirror",
+  "ghl_wh_campaign"
+);
+export const ghlWebhookContactMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_contact_mirror",
+  "ghl_wh_contact"
+);
+export const ghlWebhookConversationMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_conversation_mirror",
+  "ghl_wh_conversation"
+);
+export const ghlWebhookExternalAuthMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_external_auth_mirror",
+  "ghl_wh_external_auth"
+);
+export const ghlWebhookInvoiceMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_invoice_mirror",
+  "ghl_wh_invoice"
+);
+export const ghlWebhookEmailStatsMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_email_stats_mirror",
+  "ghl_wh_email_stats"
+);
+export const ghlWebhookLocationMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_location_mirror",
+  "ghl_wh_location"
+);
+export const ghlWebhookNoteMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_note_mirror",
+  "ghl_wh_note"
+);
+export const ghlWebhookObjectSchemaMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_object_schema_mirror",
+  "ghl_wh_object_schema"
+);
+export const ghlWebhookOpportunityMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_opportunity_mirror",
+  "ghl_wh_opportunity"
+);
+export const ghlWebhookOrderMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_order_mirror",
+  "ghl_wh_order"
+);
+export const ghlWebhookPriceMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_price_mirror",
+  "ghl_wh_price"
+);
+export const ghlWebhookProductMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_product_mirror",
+  "ghl_wh_product"
+);
+export const ghlWebhookRecordMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_record_mirror",
+  "ghl_wh_record"
+);
+export const ghlWebhookRelationMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_relation_mirror",
+  "ghl_wh_relation"
+);
+export const ghlWebhookSaasPlanMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_saas_plan_mirror",
+  "ghl_wh_saas_plan"
+);
+export const ghlWebhookTaskMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_task_mirror",
+  "ghl_wh_task"
+);
+export const ghlWebhookUserMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_user_mirror",
+  "ghl_wh_user"
+);
+export const ghlWebhookVoiceAiMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_voice_ai_mirror",
+  "ghl_wh_voice_ai"
+);
+export const ghlWebhookMiscMirror = createGhlWebhookMirrorTable(
+  "ghl_webhook_misc_mirror",
+  "ghl_wh_misc"
+);
+
 export const ghlOAuthInstallations = pgTable(
   "ghl_oauth_installations",
   {
