@@ -298,6 +298,7 @@ app.get("/threads", async (c) => {
       ghlLocationId: locations.ghlLocationId,
       locationName: locations.name,
       contactId: contacts.id,
+      ghlContactId: contacts.ghlContactId,
       firstName: contacts.firstName,
       lastName: contacts.lastName,
       email: contacts.email,
@@ -325,6 +326,19 @@ app.get("/threads", async (c) => {
       locationName: row.locationName
     }))
   );
+  const contactFieldMap = await hydrateMissingContactFields(
+    c.env,
+    db,
+    rows.map((row) => ({
+      contactId: row.contactId,
+      ghlContactId: row.ghlContactId,
+      ghlLocationId: row.ghlLocationId,
+      firstName: row.firstName,
+      lastName: row.lastName,
+      email: row.email,
+      phone: row.phone
+    }))
+  );
   return c.json({
     threads: rows.map((row) => ({
       id: row.threadId,
@@ -332,9 +346,14 @@ app.get("/threads", async (c) => {
       ghlLocationId: row.ghlLocationId,
       locationName: locationNameMap.get(row.locationId) ?? row.locationName,
       contactId: row.contactId,
-      contactName: formatContactName(row.firstName, row.lastName, row.email, row.phone),
-      contactEmail: row.email,
-      contactPhone: row.phone,
+      contactName: formatContactName(
+        contactFieldMap.get(row.contactId)?.firstName ?? row.firstName,
+        contactFieldMap.get(row.contactId)?.lastName ?? row.lastName,
+        contactFieldMap.get(row.contactId)?.email ?? row.email,
+        contactFieldMap.get(row.contactId)?.phone ?? row.phone
+      ),
+      contactEmail: contactFieldMap.get(row.contactId)?.email ?? row.email,
+      contactPhone: contactFieldMap.get(row.contactId)?.phone ?? row.phone,
       pendingReply: row.pendingReply,
       unreadCount: row.unreadCount,
       lastMessageAt: row.lastMessageAt?.toISOString() ?? null
@@ -354,6 +373,7 @@ app.get("/appointments", async (c) => {
       ghlLocationId: locations.ghlLocationId,
       locationName: locations.name,
       contactId: contacts.id,
+      ghlContactId: contacts.ghlContactId,
       firstName: contacts.firstName,
       lastName: contacts.lastName,
       email: contacts.email,
@@ -387,6 +407,21 @@ app.get("/appointments", async (c) => {
       locationName: row.locationName
     }))
   );
+  const contactFieldMap = await hydrateMissingContactFields(
+    c.env,
+    db,
+    rows
+      .filter((row) => row.contactId && row.ghlContactId)
+      .map((row) => ({
+        contactId: row.contactId as string,
+        ghlContactId: row.ghlContactId as string,
+        ghlLocationId: row.ghlLocationId,
+        firstName: row.firstName,
+        lastName: row.lastName,
+        email: row.email,
+        phone: row.phone
+      }))
+  );
   return c.json({
     appointments: rows.map((row) => ({
       id: row.appointmentId,
@@ -395,9 +430,14 @@ app.get("/appointments", async (c) => {
       ghlLocationId: row.ghlLocationId,
       locationName: locationNameMap.get(row.locationId) ?? row.locationName,
       contactId: row.contactId ?? null,
-      contactName: formatContactName(row.firstName, row.lastName, row.email, row.phone),
-      contactEmail: row.email,
-      contactPhone: row.phone,
+      contactName: formatContactName(
+        row.contactId ? contactFieldMap.get(row.contactId)?.firstName ?? row.firstName : row.firstName,
+        row.contactId ? contactFieldMap.get(row.contactId)?.lastName ?? row.lastName : row.lastName,
+        row.contactId ? contactFieldMap.get(row.contactId)?.email ?? row.email : row.email,
+        row.contactId ? contactFieldMap.get(row.contactId)?.phone ?? row.phone : row.phone
+      ),
+      contactEmail: row.contactId ? contactFieldMap.get(row.contactId)?.email ?? row.email : row.email,
+      contactPhone: row.contactId ? contactFieldMap.get(row.contactId)?.phone ?? row.phone : row.phone,
       title: row.title,
       status: row.status,
       startTime: row.startTime?.toISOString() ?? null,
@@ -516,6 +556,18 @@ app.get("/threads/:id/messages", async (c) => {
     }
   ]);
   const resolvedLocationName = locationNameMap.get(threadRow.locationId) ?? threadRow.locationName;
+  const contactFieldMap = await hydrateMissingContactFields(c.env, db, [
+    {
+      contactId: threadRow.contactId,
+      ghlContactId: threadRow.ghlContactId,
+      ghlLocationId: threadRow.ghlLocationId,
+      firstName: threadRow.firstName,
+      lastName: threadRow.lastName,
+      email: threadRow.email,
+      phone: threadRow.phone
+    }
+  ]);
+  const resolvedContact = contactFieldMap.get(threadRow.contactId);
 
   const messageRows = await db
     .select({
@@ -533,7 +585,12 @@ app.get("/threads/:id/messages", async (c) => {
     .where(eq(messages.threadId, threadId))
     .orderBy(messages.sentAt);
 
-  const contactDetails = await fetchContactDetailsOnDemand(c.env, threadRow.ghlContactId);
+  const contactDetails = await fetchContactDetailsOnDemand(
+    c.env,
+    db,
+    threadRow.ghlLocationId,
+    threadRow.ghlContactId
+  );
 
   return c.json({
     thread: {
@@ -543,13 +600,13 @@ app.get("/threads/:id/messages", async (c) => {
       locationName: resolvedLocationName,
       contactId: threadRow.contactId,
       contactName: formatContactName(
-        threadRow.firstName,
-        threadRow.lastName,
-        threadRow.email,
-        threadRow.phone
+        resolvedContact?.firstName ?? threadRow.firstName,
+        resolvedContact?.lastName ?? threadRow.lastName,
+        resolvedContact?.email ?? threadRow.email,
+        resolvedContact?.phone ?? threadRow.phone
       ),
-      contactEmail: threadRow.email,
-      contactPhone: threadRow.phone,
+      contactEmail: resolvedContact?.email ?? threadRow.email,
+      contactPhone: resolvedContact?.phone ?? threadRow.phone,
       pendingReply: threadRow.pendingReply,
       unreadCount: threadRow.unreadCount,
       lastMessageAt: threadRow.lastMessageAt?.toISOString() ?? null
@@ -1125,17 +1182,55 @@ async function processInvoiceWebhookEvent(env: Env, event: NormalizedGhlInvoiceW
 
 async function fetchContactDetailsOnDemand(
   env: Env,
+  db: ReturnType<typeof createDb>,
+  ghlLocationId: string,
   ghlContactId: string
 ): Promise<ContactOnDemandDetails | null> {
-  if (!env.GHL_API_TOKEN) {
+  const profile = await fetchContactProfileOnDemand(env, db, ghlLocationId, ghlContactId);
+  if (!profile) {
     return null;
   }
 
+  return {
+    tags: profile.tags,
+    customFields: profile.customFields
+  };
+}
+
+type ContactProfileOnDemand = ContactOnDemandDetails & {
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+  phone: string | null;
+};
+
+async function fetchContactProfileOnDemand(
+  env: Env,
+  db: ReturnType<typeof createDb>,
+  ghlLocationId: string,
+  ghlContactId: string
+): Promise<ContactProfileOnDemand | null> {
+  const accessTokens = await getAccessTokensForLocation(env, db, ghlLocationId);
+  for (const accessToken of accessTokens) {
+    const profile = await fetchContactProfileWithToken(env, ghlContactId, accessToken);
+    if (profile) {
+      return profile;
+    }
+  }
+
+  return null;
+}
+
+async function fetchContactProfileWithToken(
+  env: Env,
+  ghlContactId: string,
+  accessToken: string
+): Promise<ContactProfileOnDemand | null> {
   try {
     const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
     const response = await fetch(`${baseUrl}/contacts/${encodeURIComponent(ghlContactId)}`, {
       headers: {
-        Authorization: `Bearer ${env.GHL_API_TOKEN}`,
+        Authorization: `Bearer ${accessToken}`,
         Accept: "application/json",
         Version: "2021-07-28"
       }
@@ -1148,6 +1243,10 @@ async function fetchContactDetailsOnDemand(
     const data = asRecord(await response.json());
     const contact = asRecord(data.contact ?? data);
     return {
+      firstName: stringOrNull(contact.firstName),
+      lastName: stringOrNull(contact.lastName),
+      email: stringOrNull(contact.email),
+      phone: stringOrNull(contact.phone),
       tags: toStringArray(contact.tags),
       customFields: toCustomFields(contact.customFields ?? contact.customField)
     };
@@ -1196,19 +1295,105 @@ async function hydrateMissingLocationNames(
   return locationNameMap;
 }
 
-async function fetchLocationNameOnDemand(
+async function hydrateMissingContactFields(
   env: Env,
   db: ReturnType<typeof createDb>,
-  ghlLocationId: string
-): Promise<string | null> {
-  if (env.GHL_API_TOKEN) {
-    const withApiToken = await fetchLocationNameWithToken(env, ghlLocationId, env.GHL_API_TOKEN);
-    if (withApiToken) {
-      return withApiToken;
+  entries: Array<{
+    contactId: string;
+    ghlContactId: string;
+    ghlLocationId: string;
+    firstName: string | null;
+    lastName: string | null;
+    email: string | null;
+    phone: string | null;
+  }>
+) {
+  const contactFieldMap = new Map(
+    entries.map((entry) => [
+      entry.contactId,
+      {
+        firstName: entry.firstName,
+        lastName: entry.lastName,
+        email: entry.email,
+        phone: entry.phone
+      }
+    ])
+  );
+
+  const missingByLookupKey = new Map<
+    string,
+    {
+      ghlContactId: string;
+      ghlLocationId: string;
+      contactIds: string[];
+    }
+  >();
+
+  for (const entry of entries) {
+    const hasAnyIdentityField = Boolean(entry.firstName || entry.lastName || entry.email || entry.phone);
+    if (hasAnyIdentityField) {
+      continue;
+    }
+
+    const key = `${entry.ghlLocationId}:${entry.ghlContactId}`;
+    const existing = missingByLookupKey.get(key);
+    if (existing) {
+      existing.contactIds.push(entry.contactId);
+      continue;
+    }
+    missingByLookupKey.set(key, {
+      ghlContactId: entry.ghlContactId,
+      ghlLocationId: entry.ghlLocationId,
+      contactIds: [entry.contactId]
+    });
+  }
+
+  for (const { ghlContactId, ghlLocationId, contactIds } of missingByLookupKey.values()) {
+    const profile = await fetchContactProfileOnDemand(env, db, ghlLocationId, ghlContactId);
+    if (!profile) {
+      continue;
+    }
+
+    for (const contactId of contactIds) {
+      const resolved = {
+        firstName: profile.firstName,
+        lastName: profile.lastName,
+        email: profile.email,
+        phone: profile.phone
+      };
+      contactFieldMap.set(contactId, resolved);
+
+      const update: Record<string, string | Date> = { updatedAt: new Date() };
+      if (profile.firstName) {
+        update.firstName = profile.firstName;
+      }
+      if (profile.lastName) {
+        update.lastName = profile.lastName;
+      }
+      if (profile.email) {
+        update.email = profile.email;
+      }
+      if (profile.phone) {
+        update.phone = profile.phone;
+      }
+
+      if (Object.keys(update).length > 1) {
+        await db.update(contacts).set(update).where(eq(contacts.id, contactId));
+      }
     }
   }
 
-  const [installation] = await db
+  return contactFieldMap;
+}
+
+async function getAccessTokensForLocation(
+  env: Env,
+  db: ReturnType<typeof createDb>,
+  ghlLocationId: string
+) {
+  const candidates: Array<string | null | undefined> = [env.GHL_API_TOKEN?.trim()];
+
+  const [locationInstallation] = await db
     .select({
       accessToken: ghlOAuthInstallations.accessToken
     })
@@ -1216,17 +1401,32 @@ async function fetchLocationNameOnDemand(
     .where(eq(ghlOAuthInstallations.locationId, ghlLocationId))
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
     .limit(1);
-
-  if (installation?.accessToken) {
-    const withLocationToken = await fetchLocationNameWithToken(env, ghlLocationId, installation.accessToken);
-    if (withLocationToken) {
-      return withLocationToken;
-    }
-  }
+  candidates.push(locationInstallation?.accessToken);
 
   const companyInstallation = await getCompanyOAuthInstallationForLocation(db, ghlLocationId);
-  if (companyInstallation?.accessToken) {
-    return fetchLocationNameWithToken(env, ghlLocationId, companyInstallation.accessToken);
+  candidates.push(companyInstallation?.accessToken);
+
+  const deduped = new Set<string>();
+  for (const token of candidates) {
+    const normalized = token?.trim();
+    if (normalized) {
+      deduped.add(normalized);
+    }
+  }
+  return Array.from(deduped);
+}
+
+async function fetchLocationNameOnDemand(
+  env: Env,
+  db: ReturnType<typeof createDb>,
+  ghlLocationId: string
+): Promise<string | null> {
+  const accessTokens = await getAccessTokensForLocation(env, db, ghlLocationId);
+  for (const accessToken of accessTokens) {
+    const fetchedName = await fetchLocationNameWithToken(env, ghlLocationId, accessToken);
+    if (fetchedName) {
+      return fetchedName;
+    }
   }
 
   return null;
