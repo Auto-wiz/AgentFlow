@@ -1,6 +1,13 @@
 "use client";
 
-import type { SubaccountOverview, ThreadMessagesResponse, ThreadSummary } from "@agentflow/shared";
+import type {
+  OpportunityStageOption,
+  SubaccountOverview,
+  ThreadMessagesResponse,
+  ThreadOpportunitiesResponse,
+  ThreadOpportunity,
+  ThreadSummary
+} from "@agentflow/shared";
 import { getApiBaseUrl } from "../../lib/api-base-url";
 import { useEffect, useState } from "react";
 
@@ -23,6 +30,14 @@ export default function ThreadsPage() {
   const [replyDraft, setReplyDraft] = useState("");
   const [replySending, setReplySending] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
+  const [opportunities, setOpportunities] = useState<ThreadOpportunity[]>([]);
+  const [stageOptions, setStageOptions] = useState<OpportunityStageOption[]>([]);
+  const [opportunityDrafts, setOpportunityDrafts] = useState<Record<string, { stageId: string; status: string }>>(
+    {}
+  );
+  const [opportunitiesLoading, setOpportunitiesLoading] = useState(false);
+  const [opportunitiesError, setOpportunitiesError] = useState<string | null>(null);
+  const [savingOpportunityId, setSavingOpportunityId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -141,6 +156,50 @@ export default function ThreadsPage() {
     return () => controller.abort();
   }, [apiBaseUrl, selectedThreadId, reloadKey]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!selectedThreadId) {
+      setOpportunities([]);
+      setStageOptions([]);
+      setOpportunityDrafts({});
+      setOpportunitiesError(null);
+      setOpportunitiesLoading(false);
+      return () => controller.abort();
+    }
+
+    async function loadOpportunities() {
+      setOpportunitiesLoading(true);
+      setOpportunitiesError(null);
+      try {
+        const response = await fetch(`${apiBaseUrl}/threads/${selectedThreadId}/opportunities`, {
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => ({}))) as { error?: string };
+          throw new Error(payload.error ?? "Failed to load opportunities");
+        }
+        const data = (await response.json()) as ThreadOpportunitiesResponse;
+        if (controller.signal.aborted) {
+          return;
+        }
+        setOpportunities(data.opportunities);
+        setStageOptions(data.stageOptions);
+        setOpportunityDrafts(buildOpportunityDraftMap(data.opportunities));
+      } catch (caught) {
+        if (!controller.signal.aborted) {
+          setOpportunitiesError(caught instanceof Error ? caught.message : "Failed to load opportunities");
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setOpportunitiesLoading(false);
+        }
+      }
+    }
+
+    loadOpportunities();
+    return () => controller.abort();
+  }, [apiBaseUrl, selectedThreadId, reloadKey]);
+
   const totalPending = subaccounts.reduce((sum, subaccount) => sum + subaccount.pendingCount, 0);
   const totalConversations = subaccounts.reduce(
     (sum, subaccount) => sum + subaccount.conversationCount,
@@ -248,6 +307,43 @@ export default function ThreadsPage() {
       return <span className="muted">{fallback}</span>;
     }
     return value;
+  }
+
+  async function saveOpportunity(opportunityId: string) {
+    if (!selectedThreadId || savingOpportunityId) {
+      return;
+    }
+    const draft = opportunityDrafts[opportunityId];
+    if (!draft) {
+      return;
+    }
+
+    setSavingOpportunityId(opportunityId);
+    setOpportunitiesError(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/threads/${selectedThreadId}/opportunities/${opportunityId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          stageId: draft.stageId || null,
+          status: draft.status || null
+        })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? "Failed to update opportunity");
+      }
+      const data = (await response.json()) as ThreadOpportunitiesResponse;
+      setOpportunities(data.opportunities);
+      setStageOptions(data.stageOptions);
+      setOpportunityDrafts(buildOpportunityDraftMap(data.opportunities));
+    } catch (caught) {
+      setOpportunitiesError(caught instanceof Error ? caught.message : "Failed to update opportunity");
+    } finally {
+      setSavingOpportunityId(null);
+    }
   }
 
   return (
@@ -446,6 +542,93 @@ export default function ThreadsPage() {
           <span className="muted">Unread messages</span>
           <strong>{threadData?.thread.unreadCount ?? selectedThreadSummary?.unreadCount ?? 0}</strong>
         </div>
+        <section className="inbox-opportunity-card panel">
+          <div className="inbox-opportunity-header">
+            <strong>Opportunity pipeline</strong>
+            <span className="muted">{opportunities.length} records</span>
+          </div>
+          {opportunitiesLoading ? <p className="muted">Loading opportunities...</p> : null}
+          {opportunitiesError ? <p className="inbox-reply-error">{opportunitiesError}</p> : null}
+          {!opportunitiesLoading && !opportunitiesError && opportunities.length === 0 ? (
+            <p className="muted">No opportunities linked to this contact yet.</p>
+          ) : null}
+          <div className="inbox-opportunity-list">
+            {opportunities.map((opportunity) => {
+              const draft = opportunityDrafts[opportunity.id] ?? {
+                stageId: opportunity.stageId ?? "",
+                status: opportunity.status ?? "open"
+              };
+              const stagesForOpportunity =
+                opportunity.pipelineId != null
+                  ? stageOptions.filter((stage) => stage.pipelineId === opportunity.pipelineId)
+                  : stageOptions;
+              return (
+                <article className="inbox-opportunity-item" key={opportunity.id}>
+                  <div className="inbox-opportunity-row">
+                    <strong>{opportunity.name ?? `Opportunity ${opportunity.id.slice(0, 8)}`}</strong>
+                    <span className="muted">
+                      {formatOpportunityValue(opportunity.monetaryValue, opportunity.currency)}
+                    </span>
+                  </div>
+                  <div className="inbox-opportunity-row">
+                    <span className="muted">Stage: {opportunity.stageName ?? "Not set"}</span>
+                    <span className="muted">Status: {opportunity.status ?? "open"}</span>
+                  </div>
+                  <div className="inbox-opportunity-controls">
+                    <select
+                      aria-label={`Stage for ${opportunity.name ?? opportunity.id}`}
+                      value={draft.stageId}
+                      onChange={(event) =>
+                        setOpportunityDrafts((current) => ({
+                          ...current,
+                          [opportunity.id]: {
+                            ...draft,
+                            stageId: event.target.value
+                          }
+                        }))
+                      }
+                    >
+                      <option value="">Keep stage</option>
+                      {stagesForOpportunity.map((stage) => (
+                        <option key={stage.id} value={stage.id}>
+                          {stage.pipelineName ? `${stage.pipelineName} · ` : ""}
+                          {stage.name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      aria-label={`Status for ${opportunity.name ?? opportunity.id}`}
+                      value={draft.status}
+                      onChange={(event) =>
+                        setOpportunityDrafts((current) => ({
+                          ...current,
+                          [opportunity.id]: {
+                            ...draft,
+                            status: event.target.value
+                          }
+                        }))
+                      }
+                    >
+                      {["open", "won", "lost", "abandoned"].map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="button secondary"
+                      disabled={savingOpportunityId === opportunity.id}
+                      onClick={() => saveOpportunity(opportunity.id)}
+                      type="button"
+                    >
+                      {savingOpportunityId === opportunity.id ? "Updating..." : "Update"}
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
         <div className="inbox-contact-section">
           <strong>Email</strong>
           <p>
@@ -546,4 +729,29 @@ function resolveContactDisplayName(params: {
     return normalizedFallback;
   }
   return params.email ?? params.phone ?? "Unknown contact";
+}
+
+function buildOpportunityDraftMap(opportunities: ThreadOpportunity[]) {
+  return opportunities.reduce<Record<string, { stageId: string; status: string }>>((acc, opportunity) => {
+    acc[opportunity.id] = {
+      stageId: opportunity.stageId ?? "",
+      status: opportunity.status ?? "open"
+    };
+    return acc;
+  }, {});
+}
+
+function formatOpportunityValue(value: number | null, currency: string | null) {
+  if (value == null) {
+    return "No value";
+  }
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: (currency ?? "USD").toUpperCase(),
+      maximumFractionDigits: 0
+    }).format(value);
+  } catch {
+    return `${currency ?? "$"} ${value}`;
+  }
 }

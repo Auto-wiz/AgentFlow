@@ -15,11 +15,13 @@ import type {
   ContactOnDemandDetails,
   MessageChannel,
   MessageDirection,
+  OpportunityStageOption,
   NormalizedGhlAppointmentWebhookEvent,
   NormalizedGhlInstallWebhookEvent,
   NormalizedGhlInvoiceWebhookEvent,
   NormalizedGhlMessageWebhookEvent,
-  NormalizedGhlWebhookEvent
+  NormalizedGhlWebhookEvent,
+  ThreadOpportunity
 } from "@agentflow/shared";
 import { and, desc, eq, inArray, notInArray, or, sql } from "drizzle-orm";
 import type { Context } from "hono";
@@ -65,7 +67,7 @@ app.use(
   "*",
   cors({
     origin: "*",
-    allowMethods: ["GET", "POST", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PATCH", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization", "x-ghl-access-token", "x-viewer-key"]
   })
 );
@@ -882,6 +884,104 @@ app.post("/threads/:id/reply", async (c) => {
   return c.json(
     {
       error: "Unable to send message with available GoHighLevel token",
+      details: lastError
+    },
+    502
+  );
+});
+
+app.get("/threads/:id/opportunities", async (c) => {
+  const db = createDb(c.env.DATABASE_URL);
+  const threadId = c.req.param("id");
+  const threadContext = await getThreadContextById(db, threadId);
+  if (!threadContext) {
+    return c.json({ error: "Thread not found" }, 404);
+  }
+
+  const result = await fetchThreadOpportunitiesForContact(
+    c.env,
+    db,
+    threadContext.ghlLocationId,
+    threadContext.ghlContactId
+  );
+
+  if (!result.ok) {
+    return c.json(
+      {
+        error: "Unable to load opportunities for this contact",
+        details: result.error
+      },
+      502
+    );
+  }
+
+  return c.json({
+    opportunities: result.opportunities,
+    stageOptions: result.stageOptions
+  });
+});
+
+app.patch("/threads/:id/opportunities/:opportunityId", async (c) => {
+  const db = createDb(c.env.DATABASE_URL);
+  const threadId = c.req.param("id");
+  const opportunityId = c.req.param("opportunityId");
+  const body = asRecord(await c.req.json().catch(() => ({})));
+  const stageId = stringOrNull(body.stageId ?? body.pipelineStageId);
+  const status = normalizeOpportunityStatus(body.status ?? body.opportunityStatus);
+
+  if (!stageId && !status) {
+    return c.json({ error: "stageId or status is required" }, 400);
+  }
+
+  const threadContext = await getThreadContextById(db, threadId);
+  if (!threadContext) {
+    return c.json({ error: "Thread not found" }, 404);
+  }
+
+  const accessTokens = await getAccessTokensForLocation(c.env, db, threadContext.ghlLocationId);
+  if (accessTokens.length === 0) {
+    return c.json({ error: "No GoHighLevel token available for this location" }, 400);
+  }
+
+  let lastError: string | null = null;
+  for (const accessToken of accessTokens) {
+    const updated = await updateOpportunityWithToken(c.env, {
+      accessToken,
+      ghlLocationId: threadContext.ghlLocationId,
+      opportunityId,
+      stageId,
+      status
+    });
+    if (!updated.ok) {
+      lastError = updated.error ?? `status_${updated.status}`;
+      continue;
+    }
+
+    const refreshed = await fetchThreadOpportunitiesWithToken(c.env, {
+      accessToken,
+      ghlLocationId: threadContext.ghlLocationId,
+      ghlContactId: threadContext.ghlContactId
+    });
+    if (refreshed.ok) {
+      return c.json({
+        ok: true,
+        opportunities: refreshed.opportunities,
+        stageOptions: refreshed.stageOptions,
+        updatedOpportunityId: opportunityId
+      });
+    }
+
+    return c.json({
+      ok: true,
+      opportunities: [],
+      stageOptions: [],
+      updatedOpportunityId: opportunityId
+    });
+  }
+
+  return c.json(
+    {
+      error: "Unable to update opportunity with available GoHighLevel token",
       details: lastError
     },
     502
@@ -2227,6 +2327,408 @@ async function sendConversationMessageWithToken(
       error: error instanceof Error ? error.message : "request_failed"
     };
   }
+}
+
+async function getThreadContextById(db: ReturnType<typeof createDb>, threadId: string) {
+  const [threadRow] = await db
+    .select({
+      threadId: threads.id,
+      locationId: threads.locationId,
+      ghlLocationId: locations.ghlLocationId,
+      contactId: contacts.id,
+      ghlContactId: contacts.ghlContactId
+    })
+    .from(threads)
+    .innerJoin(locations, eq(threads.locationId, locations.id))
+    .innerJoin(contacts, eq(threads.contactId, contacts.id))
+    .where(eq(threads.id, threadId))
+    .limit(1);
+
+  return threadRow ?? null;
+}
+
+async function fetchThreadOpportunitiesForContact(
+  env: Env,
+  db: ReturnType<typeof createDb>,
+  ghlLocationId: string,
+  ghlContactId: string
+): Promise<{
+  ok: boolean;
+  opportunities: ThreadOpportunity[];
+  stageOptions: OpportunityStageOption[];
+  error: string | null;
+}> {
+  const accessTokens = await getAccessTokensForLocation(env, db, ghlLocationId);
+  if (accessTokens.length === 0) {
+    return {
+      ok: false,
+      opportunities: [],
+      stageOptions: [],
+      error: "No GoHighLevel token available for this location"
+    };
+  }
+
+  let lastError: string | null = null;
+  for (const accessToken of accessTokens) {
+    const result = await fetchThreadOpportunitiesWithToken(env, {
+      accessToken,
+      ghlLocationId,
+      ghlContactId
+    });
+    if (result.ok) {
+      return {
+        ok: true,
+        opportunities: result.opportunities,
+        stageOptions: result.stageOptions,
+        error: null
+      };
+    }
+    lastError = result.error;
+  }
+
+  return {
+    ok: false,
+    opportunities: [],
+    stageOptions: [],
+    error: lastError
+  };
+}
+
+async function fetchThreadOpportunitiesWithToken(
+  env: Env,
+  params: {
+    accessToken: string;
+    ghlLocationId: string;
+    ghlContactId: string;
+  }
+): Promise<{
+  ok: boolean;
+  opportunities: ThreadOpportunity[];
+  stageOptions: OpportunityStageOption[];
+  error: string | null;
+}> {
+  const opportunitiesResult = await fetchContactOpportunitiesWithToken(env, params);
+  if (!opportunitiesResult.ok) {
+    return {
+      ok: false,
+      opportunities: [],
+      stageOptions: [],
+      error: opportunitiesResult.error
+    };
+  }
+
+  const pipelinesResult = await fetchOpportunityPipelinesWithToken(env, params.accessToken, params.ghlLocationId);
+  const stageOptions = pipelinesResult.ok ? pipelinesResult.stageOptions : [];
+  return {
+    ok: true,
+    opportunities: normalizeThreadOpportunities(opportunitiesResult.opportunitiesRaw, stageOptions),
+    stageOptions,
+    error: null
+  };
+}
+
+async function fetchContactOpportunitiesWithToken(
+  env: Env,
+  params: {
+    accessToken: string;
+    ghlLocationId: string;
+    ghlContactId: string;
+  }
+): Promise<{ ok: boolean; opportunitiesRaw: unknown[]; error: string | null }> {
+  const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
+  const attempts: Array<{
+    method: "POST" | "GET";
+    endpoint: string;
+    body: Record<string, unknown> | null;
+    version: string;
+  }> = [
+    {
+      method: "POST",
+      endpoint: `${baseUrl}/opportunities/search`,
+      body: {
+        locationId: params.ghlLocationId,
+        contactId: params.ghlContactId
+      },
+      version: "2023-02-21"
+    },
+    {
+      method: "POST",
+      endpoint: `${baseUrl}/opportunities/search`,
+      body: {
+        location_id: params.ghlLocationId,
+        contact_id: params.ghlContactId
+      },
+      version: "2023-02-21"
+    },
+    {
+      method: "GET",
+      endpoint: `${baseUrl}/opportunities/search?locationId=${encodeURIComponent(params.ghlLocationId)}&contactId=${encodeURIComponent(params.ghlContactId)}`,
+      body: null,
+      version: "2023-02-21"
+    },
+    {
+      method: "GET",
+      endpoint: `${baseUrl}/opportunities/search?location_id=${encodeURIComponent(params.ghlLocationId)}&contact_id=${encodeURIComponent(params.ghlContactId)}`,
+      body: null,
+      version: "2023-02-21"
+    }
+  ];
+
+  let lastError: string | null = null;
+  for (const attempt of attempts) {
+    try {
+      const response = await fetch(attempt.endpoint, {
+        method: attempt.method,
+        headers: {
+          Authorization: `Bearer ${params.accessToken}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Version: attempt.version,
+          "Location-Id": params.ghlLocationId,
+          locationId: params.ghlLocationId
+        },
+        body: attempt.body ? JSON.stringify(attempt.body) : undefined
+      });
+      const rawBody = await response.text();
+      const parsed = safeJsonParse(rawBody);
+      if (!response.ok) {
+        const errorPayload = asRecord(parsed ?? {});
+        lastError =
+          stringOrNull(errorPayload.message ?? errorPayload.error ?? errorPayload.error_description) ??
+          response.statusText;
+        continue;
+      }
+      const opportunitiesRaw = extractOpportunitiesArray(parsed);
+      return {
+        ok: true,
+        opportunitiesRaw,
+        error: null
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "request_failed";
+    }
+  }
+
+  return {
+    ok: false,
+    opportunitiesRaw: [],
+    error: lastError
+  };
+}
+
+async function fetchOpportunityPipelinesWithToken(
+  env: Env,
+  accessToken: string,
+  ghlLocationId: string
+): Promise<{ ok: boolean; stageOptions: OpportunityStageOption[]; error: string | null }> {
+  const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
+  const endpoints = [
+    `${baseUrl}/opportunities/pipelines?locationId=${encodeURIComponent(ghlLocationId)}`,
+    `${baseUrl}/opportunities/pipelines?location_id=${encodeURIComponent(ghlLocationId)}`,
+    `${baseUrl}/opportunities/pipelines`
+  ];
+  let lastError: string | null = null;
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+          Version: "2023-02-21",
+          "Location-Id": ghlLocationId,
+          locationId: ghlLocationId
+        }
+      });
+      const rawBody = await response.text();
+      const parsed = safeJsonParse(rawBody);
+      if (!response.ok) {
+        const errorPayload = asRecord(parsed ?? {});
+        lastError =
+          stringOrNull(errorPayload.message ?? errorPayload.error ?? errorPayload.error_description) ??
+          response.statusText;
+        continue;
+      }
+      return {
+        ok: true,
+        stageOptions: normalizeOpportunityStageOptions(parsed),
+        error: null
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "request_failed";
+    }
+  }
+
+  return {
+    ok: false,
+    stageOptions: [],
+    error: lastError
+  };
+}
+
+function normalizeOpportunityStageOptions(payload: unknown): OpportunityStageOption[] {
+  const root = asRecord(payload);
+  const pipelineCandidates = [
+    root.pipelines,
+    root.data,
+    asRecord(root.data ?? {}).pipelines,
+    asRecord(root.data ?? {}).items
+  ];
+  const pipelines = pipelineCandidates.find(Array.isArray) as unknown[] | undefined;
+  if (!pipelines) {
+    return [];
+  }
+
+  const output = new Map<string, OpportunityStageOption>();
+  for (const pipelineEntry of pipelines) {
+    const pipeline = asRecord(pipelineEntry);
+    const pipelineId = stringOrNull(pipeline.id ?? pipeline.pipelineId);
+    const pipelineName = stringOrNull(pipeline.name ?? pipeline.pipelineName);
+    const stages = [pipeline.stages, pipeline.pipelineStages, asRecord(pipeline.data ?? {}).stages].find(
+      Array.isArray
+    ) as unknown[] | undefined;
+    if (!stages) {
+      continue;
+    }
+    for (const stageEntry of stages) {
+      const stage = asRecord(stageEntry);
+      const stageId = stringOrNull(stage.id ?? stage.stageId);
+      const stageName = stringOrNull(stage.name ?? stage.stageName);
+      if (!stageId || !stageName) {
+        continue;
+      }
+      output.set(stageId, {
+        id: stageId,
+        name: stageName,
+        pipelineId,
+        pipelineName
+      });
+    }
+  }
+
+  return Array.from(output.values());
+}
+
+function normalizeThreadOpportunities(
+  opportunitiesRaw: unknown[],
+  stageOptions: OpportunityStageOption[]
+): ThreadOpportunity[] {
+  const stageById = new Map(stageOptions.map((stage) => [stage.id, stage]));
+  return opportunitiesRaw
+    .map((entry) => {
+      const row = asRecord(entry);
+      const id = stringOrNull(row.id ?? row.opportunityId);
+      if (!id) {
+        return null;
+      }
+      const stageId = stringOrNull(row.pipelineStageId ?? row.stageId ?? row.pipeline_stage_id);
+      const stageOption = stageId ? stageById.get(stageId) : null;
+      const pipelineId =
+        stringOrNull(row.pipelineId ?? row.pipeline_id ?? row.pipeline?.id) ?? stageOption?.pipelineId ?? null;
+      return {
+        id,
+        name: stringOrNull(row.name ?? row.title ?? row.opportunityName),
+        status: stringOrNull(row.status ?? row.opportunityStatus),
+        pipelineId,
+        pipelineName:
+          stringOrNull(row.pipelineName ?? row.pipeline?.name) ?? stageOption?.pipelineName ?? null,
+        stageId,
+        stageName: stringOrNull(row.pipelineStageName ?? row.stageName) ?? stageOption?.name ?? null,
+        monetaryValue: numberOrNull(row.monetaryValue ?? row.value ?? row.amount ?? row.opportunityValue),
+        currency: stringOrNull(row.currency ?? row.currencyCode)
+      };
+    })
+    .filter((value): value is ThreadOpportunity => Boolean(value));
+}
+
+function extractOpportunitiesArray(payload: unknown): unknown[] {
+  const root = asRecord(payload);
+  const nestedData = asRecord(root.data ?? {});
+  const candidates = [root.opportunities, root.items, root.results, root.data, nestedData.opportunities, nestedData.items];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+  }
+  return [];
+}
+
+function normalizeOpportunityStatus(value: unknown) {
+  const normalized = stringOrNull(value)?.toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (["open", "won", "lost", "abandoned"].includes(normalized)) {
+    return normalized;
+  }
+  return null;
+}
+
+async function updateOpportunityWithToken(
+  env: Env,
+  params: {
+    accessToken: string;
+    ghlLocationId: string;
+    opportunityId: string;
+    stageId: string | null;
+    status: string | null;
+  }
+): Promise<{ ok: boolean; status: number; error: string | null }> {
+  const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
+  const payload: Record<string, unknown> = {
+    locationId: params.ghlLocationId
+  };
+  if (params.stageId) {
+    payload.stageId = params.stageId;
+    payload.pipelineStageId = params.stageId;
+  }
+  if (params.status) {
+    payload.status = params.status;
+    payload.opportunityStatus = params.status;
+  }
+
+  const attempts: Array<{ method: "PUT" | "PATCH"; endpoint: string }> = [
+    { method: "PUT", endpoint: `${baseUrl}/opportunities/${encodeURIComponent(params.opportunityId)}` },
+    { method: "PATCH", endpoint: `${baseUrl}/opportunities/${encodeURIComponent(params.opportunityId)}` }
+  ];
+  let lastError: string | null = null;
+
+  for (const attempt of attempts) {
+    try {
+      const response = await fetch(attempt.endpoint, {
+        method: attempt.method,
+        headers: {
+          Authorization: `Bearer ${params.accessToken}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Version: "2023-02-21",
+          "Location-Id": params.ghlLocationId,
+          locationId: params.ghlLocationId
+        },
+        body: JSON.stringify(payload)
+      });
+      const rawBody = await response.text();
+      const parsed = asRecord(safeJsonParse(rawBody) ?? {});
+      if (!response.ok) {
+        lastError =
+          stringOrNull(parsed.message ?? parsed.error ?? parsed.error_description) ?? response.statusText;
+        continue;
+      }
+      return {
+        ok: true,
+        status: response.status,
+        error: null
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "request_failed";
+    }
+  }
+
+  return {
+    ok: false,
+    status: 0,
+    error: lastError
+  };
 }
 
 function buildGhlLocationLookupRequest(env: Env, ghlLocationId: string) {

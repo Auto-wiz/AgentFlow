@@ -621,6 +621,57 @@ input {
   white-space: nowrap;
 }
 
+.inbox-opportunity-card {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  box-shadow: none;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.inbox-opportunity-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.inbox-opportunity-list {
+  display: grid;
+  gap: 10px;
+}
+
+.inbox-opportunity-item {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.inbox-opportunity-row {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.inbox-opportunity-controls {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 112px) auto;
+}
+
+.inbox-opportunity-controls select {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--foreground);
+  min-width: 0;
+  padding: 8px 10px;
+}
+
 .inbox-contact-metric {
   background: linear-gradient(135deg, var(--accent), #3e477f);
   border-radius: 12px;
@@ -752,5 +803,9 @@ input {
 
   .inbox-message-bubble {
     max-width: 100%;
+  }
+
+  .inbox-opportunity-controls {
+    grid-template-columns: 1fr;
   }
 }

@@ -188,6 +188,30 @@ export type ThreadMessagesResponse = {
   contactDetails: ContactOnDemandDetails | null;
 };
 
+export type ThreadOpportunity = {
+  id: string;
+  name: string | null;
+  status: string | null;
+  pipelineId: string | null;
+  pipelineName: string | null;
+  stageId: string | null;
+  stageName: string | null;
+  monetaryValue: number | null;
+  currency: string | null;
+};
+
+export type OpportunityStageOption = {
+  id: string;
+  name: string;
+  pipelineId: string | null;
+  pipelineName: string | null;
+};
+
+export type ThreadOpportunitiesResponse = {
+  opportunities: ThreadOpportunity[];
+  stageOptions: OpportunityStageOption[];
+};
+
 export type AppointmentSummary = {
   id: string;
   ghlAppointmentId: string;
