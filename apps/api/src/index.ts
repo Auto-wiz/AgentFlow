@@ -1463,6 +1463,12 @@ async function getAccessTokensForLocation(
 
   const companyInstallation = await getCompanyOAuthInstallationForLocation(db, ghlLocationId);
   candidates.push(companyInstallation?.accessToken);
+  if (!candidates.some((token) => token?.trim())) {
+    const fallbackCompanyInstallations = await getRecentCompanyOAuthInstallations(db);
+    for (const installation of fallbackCompanyInstallations) {
+      candidates.push(installation.accessToken);
+    }
+  }
 
   const deduped = new Set<string>();
   for (const token of candidates) {
@@ -1527,6 +1533,23 @@ async function getCompanyOAuthInstallationForLocation(
     .limit(1);
 
   return companyInstallation ?? null;
+}
+
+async function getRecentCompanyOAuthInstallations(db: ReturnType<typeof createDb>, limit = 5) {
+  const safeLimit = Math.max(1, Math.min(limit, 20));
+  return db
+    .select({
+      companyId: ghlOAuthInstallations.companyId,
+      locationId: ghlOAuthInstallations.locationId,
+      userType: ghlOAuthInstallations.userType,
+      accessToken: ghlOAuthInstallations.accessToken,
+      expiresAt: ghlOAuthInstallations.expiresAt,
+      updatedAt: ghlOAuthInstallations.updatedAt
+    })
+    .from(ghlOAuthInstallations)
+    .where(eq(ghlOAuthInstallations.userType, "Company"))
+    .orderBy(desc(ghlOAuthInstallations.updatedAt))
+    .limit(safeLimit);
 }
 
 async function fetchLocationNameWithToken(
