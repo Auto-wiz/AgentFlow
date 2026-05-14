@@ -6,11 +6,10 @@ import type { ReactNode } from "react";
 import { ThemeToggle } from "./theme-toggle";
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: "⌂" },
   { href: "/threads", label: "Inbox", icon: "✉" },
-  { href: "/appointments", label: "Appointments", icon: "◷" },
-  { href: "/subaccounts", label: "Subaccounts", icon: "◫" },
-  { href: "/debug", label: "Debug", icon: "⎇" }
+  { href: "/appointments", label: "Appointments", icon: "⌚" },
+  { href: "/opportunities", label: "Opportunities", icon: "◈" },
+  { href: "/settings", label: "Settings", icon: "⚙" }
 ];
 
 export function AppChrome({ children }: { children: ReactNode }) {
@@ -32,7 +31,10 @@ export function AppChrome({ children }: { children: ReactNode }) {
                 key={item.href}
                 title={item.label}
               >
-                {item.icon}
+                <span aria-hidden className="app-sidebar-icon">
+                  {item.icon}
+                </span>
+                <span className="app-sidebar-label">{item.label}</span>
               </Link>
             );
           })}
