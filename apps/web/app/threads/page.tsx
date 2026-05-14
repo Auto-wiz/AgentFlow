@@ -14,6 +14,7 @@ export default function ThreadsPage() {
   const apiBaseUrl = getApiBaseUrl();
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [subaccounts, setSubaccounts] = useState<SubaccountOverview[]>([]);
+  const [subaccountSearch, setSubaccountSearch] = useState("");
   const [selectedLocationId, setSelectedLocationId] = useState("");
   const [selectedThreadId, setSelectedThreadId] = useState("");
   const [threadData, setThreadData] = useState<ThreadMessagesResponse | null>(null);
@@ -136,6 +137,16 @@ export default function ThreadsPage() {
   }, [apiBaseUrl, selectedThreadId]);
 
   const totalPending = subaccounts.reduce((sum, subaccount) => sum + subaccount.pendingCount, 0);
+  const filteredSubaccounts = subaccounts.filter((subaccount) => {
+    const query = subaccountSearch.trim().toLowerCase();
+    if (!query) {
+      return true;
+    }
+    return (
+      subaccount.ghlLocationId.toLowerCase().includes(query) ||
+      (subaccount.locationName ?? "").toLowerCase().includes(query)
+    );
+  });
   const selectedThreadSummary = threads.find((thread) => thread.id === selectedThreadId) ?? null;
   const selectedLocationLabel = selectedThreadSummary
     ? formatLocationName(selectedThreadSummary.locationName, selectedThreadSummary.ghlLocationId)
@@ -175,18 +186,26 @@ export default function ThreadsPage() {
       <aside className="panel inbox-subaccounts">
         <p className="eyebrow">Advanced filters</p>
         <h3 style={{ marginTop: 8 }}>Subaccounts</h3>
+        <div className="toolbar inbox-subaccount-search">
+          <input
+            aria-label="Search subaccounts"
+            placeholder="Search subaccount"
+            value={subaccountSearch}
+            onChange={(event) => setSubaccountSearch(event.target.value)}
+          />
+        </div>
         <div className="subaccount-list">
           <button
-            className={`subaccount-item ${selectedLocationId ? "" : "active"}`}
+            className={`subaccount-item subaccount-item-compact ${selectedLocationId ? "" : "active"}`}
             onClick={() => setSelectedLocationId("")}
             type="button"
           >
             <strong>All tracked subaccounts</strong>
             <span className="muted">{totalPending} pending replies</span>
           </button>
-          {subaccounts.map((subaccount) => (
+          {filteredSubaccounts.map((subaccount) => (
             <button
-              className={`subaccount-item ${
+              className={`subaccount-item subaccount-item-compact ${
                 selectedLocationId === subaccount.locationId ? "active" : ""
               }`}
               key={subaccount.locationId}

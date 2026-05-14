@@ -60,7 +60,8 @@ input {
 .app-shell {
   display: grid;
   grid-template-columns: 74px minmax(0, 1fr);
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .app-sidebar {
@@ -69,7 +70,11 @@ input {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  height: 100vh;
+  overflow-y: auto;
   padding: 12px 10px;
+  position: sticky;
+  top: 0;
 }
 
 .app-brand {
@@ -115,6 +120,10 @@ input {
 }
 
 .app-main {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
   padding: 18px;
 }
 
@@ -139,14 +148,24 @@ input {
 }
 
 .app-page {
-  min-height: calc(100vh - 124px);
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 6px;
 }
 
 .theme-toggle-compact {
   border-radius: 12px;
-  font-size: 11px;
-  padding: 8px 10px;
+  min-width: 40px;
+  padding: 8px;
   width: 100%;
+}
+
+.theme-toggle-icon {
+  font-size: 18px;
+  line-height: 1;
+  min-width: 42px;
+  padding: 8px 12px;
 }
 
 .eyebrow {
@@ -294,6 +313,8 @@ input {
 .subaccount-list {
   display: grid;
   gap: 10px;
+  align-content: start;
+  grid-auto-rows: max-content;
 }
 
 .subaccount-item {
@@ -306,6 +327,11 @@ input {
   gap: 4px;
   padding: 12px;
   text-align: left;
+}
+
+.subaccount-item-compact {
+  gap: 2px;
+  padding: 9px 10px;
 }
 
 .subaccount-item.active {
@@ -354,6 +380,15 @@ input {
 .inbox-subaccounts .subaccount-list {
   flex: 1;
   overflow: auto;
+}
+
+.inbox-subaccount-search {
+  margin-bottom: 10px;
+}
+
+.inbox-subaccount-search input {
+  min-width: 0;
+  width: 100%;
 }
 
 .inbox-panel-header {
@@ -507,6 +542,9 @@ input {
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
   }
 
   .app-sidebar {
@@ -515,6 +553,7 @@ input {
     bottom: 0;
     flex-direction: row;
     left: 0;
+    overflow-y: visible;
     position: fixed;
     right: 0;
     z-index: 40;
@@ -540,6 +579,9 @@ input {
   }
 
   .app-main {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
     padding: 14px 14px 90px;
   }
 
@@ -547,6 +589,11 @@ input {
     align-items: flex-start;
     flex-direction: column;
     gap: 12px;
+  }
+
+  .app-page {
+    overflow: visible;
+    padding-bottom: 0;
   }
 
   .split-layout {
