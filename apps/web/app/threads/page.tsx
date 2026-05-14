@@ -227,6 +227,15 @@ export default function ThreadsPage() {
     phone: selectedContact?.phone ?? threadData?.thread.contactPhone ?? selectedThreadSummary?.contactPhone ?? null
   });
   const selectedContactInitial = selectedContactName.slice(0, 1).toUpperCase() || "?";
+  const selectedContactEmail =
+    selectedContact?.email ?? threadData?.thread.contactEmail ?? selectedThreadSummary?.contactEmail ?? null;
+  const selectedContactPhone =
+    selectedContact?.phone ?? threadData?.thread.contactPhone ?? selectedThreadSummary?.contactPhone ?? null;
+  const selectedContactWebsite = selectedContact?.website ?? null;
+  const selectedContactType = selectedContact?.type ?? null;
+  const selectedContactDnd = selectedContact?.dnd;
+  const selectedContactAdded = selectedContact?.dateAdded ?? null;
+  const selectedContactUpdated = selectedContact?.dateUpdated ?? null;
   const paymentsTotal = threadData?.paymentsSummary?.total ?? 0;
   const paymentsCurrency = threadData?.paymentsSummary?.currency ?? "USD";
   const shouldShowOpportunityCard = opportunities.length > 0;
@@ -473,10 +482,8 @@ export default function ThreadsPage() {
             <p className="eyebrow">{selectedLocationLabel}</p>
             <h3 style={{ marginTop: 8 }}>{selectedContactName || "Select a conversation"}</h3>
             <p className="muted">
-              {threadData?.thread.contactEmail ??
-                selectedThreadSummary?.contactEmail ??
-                threadData?.thread.contactPhone ??
-                selectedThreadSummary?.contactPhone ??
+              {selectedContactEmail ??
+                selectedContactPhone ??
                 "No contact details available yet"}
             </p>
           </div>
@@ -633,25 +640,27 @@ export default function ThreadsPage() {
         ) : null}
         <div className="inbox-contact-section">
           <strong>Email</strong>
-          <p>
-            {renderContactValue(
-              selectedContact?.email ?? threadData?.thread.contactEmail ?? selectedThreadSummary?.contactEmail,
-              "Email unavailable"
-            )}
-          </p>
+          <p>{renderContactValue(selectedContactEmail, "Email unavailable")}</p>
         </div>
         <div className="inbox-contact-section">
           <strong>Phone</strong>
-          <p>
-            {renderContactValue(
-              selectedContact?.phone ?? threadData?.thread.contactPhone ?? selectedThreadSummary?.contactPhone,
-              "Phone unavailable"
-            )}
-          </p>
+          <p>{renderContactValue(selectedContactPhone, "Phone unavailable")}</p>
         </div>
         <div className="inbox-contact-section">
           <strong>Company</strong>
           <p>{renderContactValue(selectedContact?.companyName, "Company unavailable")}</p>
+        </div>
+        <div className="inbox-contact-section">
+          <strong>Website</strong>
+          <p>{renderContactValue(selectedContactWebsite, "Website unavailable")}</p>
+        </div>
+        <div className="inbox-contact-section">
+          <strong>Type</strong>
+          <p>{renderContactValue(selectedContactType, "Type unavailable")}</p>
+        </div>
+        <div className="inbox-contact-section">
+          <strong>DND</strong>
+          <p>{selectedContactDnd == null ? <span className="muted">DND status unavailable</span> : selectedContactDnd ? "Enabled" : "Disabled"}</p>
         </div>
         <div className="inbox-contact-section">
           <strong>Address</strong>
@@ -700,6 +709,14 @@ export default function ThreadsPage() {
         <div className="inbox-contact-section">
           <strong>Activity</strong>
           <p>{renderContactValue(selectedContact?.lastActivityDate, "No activity date from GHL")}</p>
+        </div>
+        <div className="inbox-contact-section">
+          <strong>Date added</strong>
+          <p>{renderContactValue(selectedContactAdded, "Date added unavailable")}</p>
+        </div>
+        <div className="inbox-contact-section">
+          <strong>Date updated</strong>
+          <p>{renderContactValue(selectedContactUpdated, "Date updated unavailable")}</p>
         </div>
       </aside>
     </section>

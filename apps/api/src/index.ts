@@ -1714,6 +1714,11 @@ function toStoredContactDetails(value: {
 }
 
 type ContactProfileOnDemand = ContactOnDemandDetails;
+type ContactProfileFetchResult = {
+  profile: ContactProfileOnDemand | null;
+  error: string | null;
+  shouldRefreshToken: boolean;
+};
 
 async function fetchContactProfileOnDemand(
   env: Env,
@@ -1721,15 +1726,45 @@ async function fetchContactProfileOnDemand(
   ghlLocationId: string,
   ghlContactId: string
 ): Promise<ContactProfileOnDemand | null> {
-  const accessTokens = await getAccessTokensForLocation(env, db, ghlLocationId);
-  for (const accessToken of accessTokens) {
-    const profile = await fetchContactProfileWithToken(env, ghlLocationId, ghlContactId, accessToken);
-    if (profile) {
-      return profile;
+  const tryWithCurrentTokens = async (): Promise<ContactProfileFetchResult> => {
+    const accessTokens = await getAccessTokensForLocation(env, db, ghlLocationId);
+    let lastError: string | null = null;
+    let shouldRefreshToken = false;
+
+    for (const accessToken of accessTokens) {
+      const result = await fetchContactProfileWithToken(env, ghlLocationId, ghlContactId, accessToken);
+      if (result.profile) {
+        return result;
+      }
+      if (result.error) {
+        lastError = result.error;
+      }
+      shouldRefreshToken = shouldRefreshToken || result.shouldRefreshToken;
     }
+
+    return {
+      profile: null,
+      error: lastError,
+      shouldRefreshToken
+    };
+  };
+
+  const initialAttempt = await tryWithCurrentTokens();
+  if (initialAttempt.profile) {
+    return initialAttempt.profile;
   }
 
-  return null;
+  if (!initialAttempt.shouldRefreshToken) {
+    return null;
+  }
+
+  const refreshedCount = await refreshOAuthAccessTokensForLocation(env, db, ghlLocationId);
+  if (refreshedCount <= 0) {
+    return null;
+  }
+
+  const retriedAttempt = await tryWithCurrentTokens();
+  return retriedAttempt.profile;
 }
 
 async function fetchContactProfileWithToken(
@@ -1737,26 +1772,52 @@ async function fetchContactProfileWithToken(
   ghlLocationId: string,
   ghlContactId: string,
   accessToken: string
-): Promise<ContactProfileOnDemand | null> {
+): Promise<ContactProfileFetchResult> {
   try {
     const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
-    const requestUrls = [
-      `${baseUrl}/contacts/${encodeURIComponent(ghlContactId)}?locationId=${encodeURIComponent(ghlLocationId)}`,
-      `${baseUrl}/contacts/${encodeURIComponent(ghlContactId)}`
+    const requestAttempts = [
+      {
+        endpoint: `${baseUrl}/contacts/${encodeURIComponent(ghlContactId)}?locationId=${encodeURIComponent(ghlLocationId)}`,
+        version: "2021-07-28"
+      },
+      {
+        endpoint: `${baseUrl}/contacts/${encodeURIComponent(ghlContactId)}?location_id=${encodeURIComponent(ghlLocationId)}`,
+        version: "2021-07-28"
+      },
+      {
+        endpoint: `${baseUrl}/contacts/${encodeURIComponent(ghlContactId)}?locationId=${encodeURIComponent(ghlLocationId)}`,
+        version: "2021-04-15"
+      },
+      {
+        endpoint: `${baseUrl}/contacts/${encodeURIComponent(ghlContactId)}`,
+        version: "2021-07-28"
+      }
     ];
+    let lastError: string | null = null;
+    let shouldRefreshToken = false;
 
-    for (const requestUrl of requestUrls) {
-      const response = await fetch(requestUrl, {
+    for (const request of requestAttempts) {
+      const response = await fetch(request.endpoint, {
         headers: {
           Authorization: `Bearer ${accessToken}`,
           Accept: "application/json",
-          Version: "2021-07-28",
+          Version: request.version,
           "Location-Id": ghlLocationId,
           locationId: ghlLocationId
         }
       });
 
       if (!response.ok) {
+        const parsedError = asRecord(await response.json().catch(() => ({})));
+        const responseError =
+          stringOrNull(parsedError.message ?? parsedError.error ?? parsedError.error_description) ??
+          response.statusText;
+        lastError = responseError;
+        shouldRefreshToken =
+          shouldRefreshToken ||
+          isTokenError(responseError) ||
+          response.status === 401 ||
+          response.status === 403;
         continue;
       }
 
@@ -1767,38 +1828,61 @@ async function fetchContactProfileWithToken(
       const email = stringOrNull(contact.email);
       const phone = stringOrNull(contact.phone);
       return {
-        id: stringOrNull(contact.id ?? contact.contactId ?? ghlContactId),
-        firstName,
-        lastName,
-        fullName: firstNonEmptyString(
-          stringOrNull(contact.name),
-          stringOrNull(contact.contactName),
-          formatContactName(firstName, lastName, email, phone)
-        ),
-        email,
-        phone,
-        companyName: stringOrNull(contact.companyName ?? contact.company),
-        address1: stringOrNull(contact.address1 ?? contact.address),
-        city: stringOrNull(contact.city),
-        state: stringOrNull(contact.state),
-        country: stringOrNull(contact.country),
-        postalCode: stringOrNull(contact.postalCode ?? contact.zip),
-        website: stringOrNull(contact.website),
-        source: stringOrNull(contact.source),
-        type: stringOrNull(contact.type),
-        dnd: normalizeBoolean(contact.dnd),
-        dateAdded: stringOrNull(contact.dateAdded ?? contact.createdAt),
-        dateUpdated: stringOrNull(contact.dateUpdated ?? contact.updatedAt),
-        lastActivityDate: stringOrNull(contact.lastActivityDate ?? contact.lastActivityAt),
-        tags: toStringArray(contact.tags),
-        customFields: toCustomFields(contact.customFields ?? contact.customField)
+        profile: {
+          id: stringOrNull(contact.id ?? contact.contactId ?? ghlContactId),
+          firstName,
+          lastName,
+          fullName: firstNonEmptyString(
+            stringOrNull(contact.name),
+            stringOrNull(contact.contactName),
+            formatContactName(firstName, lastName, email, phone)
+          ),
+          email,
+          phone,
+          companyName: stringOrNull(contact.companyName ?? contact.company),
+          address1: stringOrNull(contact.address1 ?? contact.address),
+          city: stringOrNull(contact.city),
+          state: stringOrNull(contact.state),
+          country: stringOrNull(contact.country),
+          postalCode: stringOrNull(contact.postalCode ?? contact.zip),
+          website: stringOrNull(contact.website),
+          source: stringOrNull(contact.source),
+          type: stringOrNull(contact.type),
+          dnd: normalizeBoolean(contact.dnd),
+          dateAdded: stringOrNull(contact.dateAdded ?? contact.createdAt),
+          dateUpdated: stringOrNull(contact.dateUpdated ?? contact.updatedAt),
+          lastActivityDate: stringOrNull(contact.lastActivityDate ?? contact.lastActivityAt),
+          tags: toStringArray(contact.tags),
+          customFields: toCustomFields(contact.customFields ?? contact.customField)
+        },
+        error: null,
+        shouldRefreshToken: false
       };
     }
-    return null;
+    return {
+      profile: null,
+      error: lastError,
+      shouldRefreshToken
+    };
   } catch (error) {
     console.warn("Failed to fetch GoHighLevel contact details", error);
-    return null;
+    const message = error instanceof Error ? error.message : "request_failed";
+    return {
+      profile: null,
+      error: message,
+      shouldRefreshToken: isTokenError(message)
+    };
   }
+}
+
+function isTokenError(value: string | null | undefined) {
+  const normalized = value?.toLowerCase() ?? "";
+  return (
+    normalized.includes("invalid jwt") ||
+    normalized.includes("invalid token") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("token expired")
+  );
 }
 
 async function hydrateMissingLocationNames(
