@@ -1407,7 +1407,7 @@ async function getContactIdentityFromLatestMessage(
   const raw = asRecord(latestMessage.raw);
   const rawContact = asRecord(raw.contact ?? raw.message?.contact ?? raw.messageData?.contact);
   const rawName = stringOrNull(raw.contactName ?? rawContact.name ?? raw.name);
-  const splitRawName = splitName(rawName);
+  const splitRawName = splitContactName(rawName);
   const firstName = stringOrNull(rawContact.firstName ?? raw.firstName ?? splitRawName.firstName);
   const lastName = stringOrNull(rawContact.lastName ?? raw.lastName ?? splitRawName.lastName);
   const email = stringOrNull(rawContact.email ?? raw.email);
