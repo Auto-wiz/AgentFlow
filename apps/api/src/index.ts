@@ -1346,6 +1346,13 @@ async function hydrateMissingContactFields(
       continue;
     }
 
+    const rawIdentity = await getContactIdentityFromLatestMessage(db, entry.contactId);
+    if (rawIdentity && (rawIdentity.firstName || rawIdentity.lastName || rawIdentity.email || rawIdentity.phone)) {
+      contactFieldMap.set(entry.contactId, rawIdentity);
+      await updateContactIdentity(db, entry.contactId, rawIdentity);
+      continue;
+    }
+
     const key = `${entry.ghlLocationId}:${entry.ghlContactId}`;
     const existing = missingByLookupKey.get(key);
     if (existing) {
@@ -1373,28 +1380,68 @@ async function hydrateMissingContactFields(
         phone: profile.phone
       };
       contactFieldMap.set(contactId, resolved);
-
-      const update: Record<string, string | Date> = { updatedAt: new Date() };
-      if (profile.firstName) {
-        update.firstName = profile.firstName;
-      }
-      if (profile.lastName) {
-        update.lastName = profile.lastName;
-      }
-      if (profile.email) {
-        update.email = profile.email;
-      }
-      if (profile.phone) {
-        update.phone = profile.phone;
-      }
-
-      if (Object.keys(update).length > 1) {
-        await db.update(contacts).set(update).where(eq(contacts.id, contactId));
-      }
+      await updateContactIdentity(db, contactId, resolved);
     }
   }
 
   return contactFieldMap;
+}
+
+async function getContactIdentityFromLatestMessage(
+  db: ReturnType<typeof createDb>,
+  contactId: string
+): Promise<{ firstName: string | null; lastName: string | null; email: string | null; phone: string | null } | null> {
+  const [latestMessage] = await db
+    .select({
+      raw: messages.raw
+    })
+    .from(messages)
+    .where(eq(messages.contactId, contactId))
+    .orderBy(desc(messages.sentAt))
+    .limit(1);
+
+  if (!latestMessage?.raw) {
+    return null;
+  }
+
+  const raw = asRecord(latestMessage.raw);
+  const rawContact = asRecord(raw.contact ?? raw.message?.contact ?? raw.messageData?.contact);
+  const rawName = stringOrNull(raw.contactName ?? rawContact.name ?? raw.name);
+  const splitRawName = splitName(rawName);
+  const firstName = stringOrNull(rawContact.firstName ?? raw.firstName ?? splitRawName.firstName);
+  const lastName = stringOrNull(rawContact.lastName ?? raw.lastName ?? splitRawName.lastName);
+  const email = stringOrNull(rawContact.email ?? raw.email);
+  const phone = stringOrNull(rawContact.phone ?? raw.phone);
+
+  if (!firstName && !lastName && !email && !phone) {
+    return null;
+  }
+
+  return { firstName, lastName, email, phone };
+}
+
+async function updateContactIdentity(
+  db: ReturnType<typeof createDb>,
+  contactId: string,
+  identity: { firstName: string | null; lastName: string | null; email: string | null; phone: string | null }
+) {
+  const update: Record<string, string | Date> = { updatedAt: new Date() };
+  if (identity.firstName) {
+    update.firstName = identity.firstName;
+  }
+  if (identity.lastName) {
+    update.lastName = identity.lastName;
+  }
+  if (identity.email) {
+    update.email = identity.email;
+  }
+  if (identity.phone) {
+    update.phone = identity.phone;
+  }
+
+  if (Object.keys(update).length > 1) {
+    await db.update(contacts).set(update).where(eq(contacts.id, contactId));
+  }
 }
 
 async function getAccessTokensForLocation(
