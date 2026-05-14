@@ -277,7 +277,6 @@ app.get("/threads", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   const pendingReply = c.req.query("pendingReply");
   const locationId = c.req.query("locationId");
-  const requestAccessToken = c.req.header("x-ghl-access-token")?.trim() || null;
   const filters = [];
 
   if (pendingReply === "true") {
@@ -324,8 +323,7 @@ app.get("/threads", async (c) => {
       locationId: row.locationId,
       ghlLocationId: row.ghlLocationId,
       locationName: row.locationName
-    })),
-    requestAccessToken
+    }))
   );
   return c.json({
     threads: rows.map((row) => ({
@@ -347,7 +345,6 @@ app.get("/threads", async (c) => {
 app.get("/appointments", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   const locationId = c.req.query("locationId");
-  const requestAccessToken = c.req.header("x-ghl-access-token")?.trim() || null;
 
   let query = db
     .select({
@@ -388,8 +385,7 @@ app.get("/appointments", async (c) => {
       locationId: row.locationId,
       ghlLocationId: row.ghlLocationId,
       locationName: row.locationName
-    })),
-    requestAccessToken
+    }))
   );
   return c.json({
     appointments: rows.map((row) => ({
@@ -486,7 +482,6 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
 app.get("/threads/:id/messages", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   const threadId = c.req.param("id");
-  const requestAccessToken = c.req.header("x-ghl-access-token")?.trim() || null;
   const [threadRow] = await db
     .select({
       threadId: threads.id,
@@ -519,7 +514,7 @@ app.get("/threads/:id/messages", async (c) => {
       ghlLocationId: threadRow.ghlLocationId,
       locationName: threadRow.locationName
     }
-  ], requestAccessToken);
+  ]);
   const resolvedLocationName = locationNameMap.get(threadRow.locationId) ?? threadRow.locationName;
 
   const messageRows = await db
@@ -1169,8 +1164,7 @@ async function hydrateMissingLocationNames(
     locationId: string;
     ghlLocationId: string;
     locationName: string | null;
-  }>,
-  requestAccessToken: string | null = null
+  }>
 ) {
   const locationNameMap = new Map(entries.map((entry) => [entry.locationId, entry.locationName]));
 
@@ -1185,7 +1179,7 @@ async function hydrateMissingLocationNames(
   }
 
   for (const [ghlLocationId, locationIds] of missingByGhlId.entries()) {
-    const fetchedName = await fetchLocationNameOnDemand(env, db, ghlLocationId, requestAccessToken);
+    const fetchedName = await fetchLocationNameOnDemand(env, db, ghlLocationId);
     if (!fetchedName) {
       continue;
     }
@@ -1205,16 +1199,8 @@ async function hydrateMissingLocationNames(
 async function fetchLocationNameOnDemand(
   env: Env,
   db: ReturnType<typeof createDb>,
-  ghlLocationId: string,
-  requestAccessToken: string | null = null
+  ghlLocationId: string
 ): Promise<string | null> {
-  if (requestAccessToken) {
-    const withRequestToken = await fetchLocationNameWithToken(env, ghlLocationId, requestAccessToken);
-    if (withRequestToken) {
-      return withRequestToken;
-    }
-  }
-
   if (env.GHL_API_TOKEN) {
     const withApiToken = await fetchLocationNameWithToken(env, ghlLocationId, env.GHL_API_TOKEN);
     if (withApiToken) {
