@@ -161,11 +161,12 @@ export default function ThreadsPage() {
     ? formatLocationName(selectedThreadSummary.locationName, selectedThreadSummary.ghlLocationId)
     : "No conversation selected";
   const selectedContact = threadData?.contactDetails;
-  const selectedContactName =
-    selectedContact?.fullName ??
-    threadData?.thread.contactName ??
-    selectedThreadSummary?.contactName ??
-    "No contact selected";
+  const selectedContactName = resolveContactDisplayName({
+    preferredName: selectedContact?.fullName ?? null,
+    fallbackName: threadData?.thread.contactName ?? selectedThreadSummary?.contactName ?? null,
+    email: selectedContact?.email ?? threadData?.thread.contactEmail ?? selectedThreadSummary?.contactEmail ?? null,
+    phone: selectedContact?.phone ?? threadData?.thread.contactPhone ?? selectedThreadSummary?.contactPhone ?? null
+  });
   const selectedContactInitial = selectedContactName.slice(0, 1).toUpperCase() || "?";
 
   async function markSelectedRead() {
@@ -345,15 +346,22 @@ export default function ThreadsPage() {
               type="button"
             >
               <div className="inbox-conversation-row">
-                <strong>{thread.contactName}</strong>
+                <strong>
+                  {resolveContactDisplayName({
+                    preferredName: null,
+                    fallbackName: thread.contactName,
+                    email: thread.contactEmail,
+                    phone: thread.contactPhone
+                  })}
+                </strong>
                 <span className="muted">
                   {thread.lastMessageAt ? new Date(thread.lastMessageAt).toLocaleTimeString() : "--:--"}
                 </span>
               </div>
               <span className="muted">{formatLocationName(thread.locationName, thread.ghlLocationId)}</span>
-              <div className="badge-row">
-                {thread.pendingReply ? <span className="badge">Pending</span> : null}
-                <span className="badge">{thread.unreadCount} unread</span>
+              <div className="inbox-status-row">
+                {thread.pendingReply ? <span className="inbox-status-chip">Pending</span> : null}
+                <span className="inbox-status-chip">{thread.unreadCount} unread</span>
               </div>
             </button>
           ))}
@@ -364,9 +372,7 @@ export default function ThreadsPage() {
         <div className="inbox-thread-header">
           <div>
             <p className="eyebrow">{selectedLocationLabel}</p>
-            <h3 style={{ marginTop: 8 }}>
-              {threadData?.thread.contactName ?? selectedThreadSummary?.contactName ?? "Select a conversation"}
-            </h3>
+            <h3 style={{ marginTop: 8 }}>{selectedContactName || "Select a conversation"}</h3>
             <p className="muted">
               {threadData?.thread.contactEmail ??
                 selectedThreadSummary?.contactEmail ??
@@ -523,4 +529,21 @@ function stringifyFieldValue(value: unknown) {
     return String(value);
   }
   return JSON.stringify(value);
+}
+
+function resolveContactDisplayName(params: {
+  preferredName: string | null;
+  fallbackName: string | null;
+  email: string | null;
+  phone: string | null;
+}) {
+  const normalizedPreferred = params.preferredName?.trim() || null;
+  if (normalizedPreferred) {
+    return normalizedPreferred;
+  }
+  const normalizedFallback = params.fallbackName?.trim() || null;
+  if (normalizedFallback && normalizedFallback.toLowerCase() !== "unknown contact") {
+    return normalizedFallback;
+  }
+  return params.email ?? params.phone ?? "Unknown contact";
 }

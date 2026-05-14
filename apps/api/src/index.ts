@@ -21,7 +21,7 @@ import type {
   NormalizedGhlMessageWebhookEvent,
   NormalizedGhlWebhookEvent
 } from "@agentflow/shared";
-import { and, desc, eq, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray, or, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -333,25 +333,37 @@ app.get("/threads", async (c) => {
       locationName: row.locationName
     }))
   );
+  const latestMessageIdentityByContactId = await getLatestMessageIdentityByContactId(
+    db,
+    rows.map((row) => row.contactId)
+  );
+
   return c.json({
-    threads: rows.map((row) => ({
-      id: row.threadId,
-      locationId: row.locationId,
-      ghlLocationId: row.ghlLocationId,
-      locationName: locationNameMap.get(row.locationId) ?? row.locationName,
-      contactId: row.contactId,
-      contactName: formatContactName(
-        row.firstName,
-        row.lastName,
-        row.email,
-        row.phone
-      ),
-      contactEmail: row.email,
-      contactPhone: row.phone,
-      pendingReply: row.pendingReply,
-      unreadCount: row.unreadCount,
-      lastMessageAt: row.lastMessageAt?.toISOString() ?? null
-    }))
+    threads: rows.map((row) => {
+      const messageIdentity = latestMessageIdentityByContactId.get(row.contactId);
+      const resolvedFirstName = row.firstName ?? messageIdentity?.firstName ?? null;
+      const resolvedLastName = row.lastName ?? messageIdentity?.lastName ?? null;
+      const resolvedEmail = row.email ?? messageIdentity?.email ?? null;
+      const resolvedPhone = row.phone ?? messageIdentity?.phone ?? null;
+      return {
+        id: row.threadId,
+        locationId: row.locationId,
+        ghlLocationId: row.ghlLocationId,
+        locationName: locationNameMap.get(row.locationId) ?? row.locationName,
+        contactId: row.contactId,
+        contactName: formatContactName(
+          resolvedFirstName,
+          resolvedLastName,
+          resolvedEmail,
+          resolvedPhone
+        ),
+        contactEmail: resolvedEmail,
+        contactPhone: resolvedPhone,
+        pendingReply: row.pendingReply,
+        unreadCount: row.unreadCount,
+        lastMessageAt: row.lastMessageAt?.toISOString() ?? null
+      };
+    })
   });
 });
 
@@ -1131,6 +1143,12 @@ async function processMessageWebhookEvent(env: Env, event: NormalizedGhlMessageW
       phone: event.contact.phone ?? null
     }
   );
+  const inferredContactPhone = getContactPhoneFromMessageDirection(
+    event.message.direction,
+    event.message.from ?? null,
+    event.message.to ?? null
+  );
+  const inferredContactEmail = inferEmailAddress(event.message.from ?? null, event.message.to ?? null);
 
   const [contact] = await db
     .insert(contacts)
@@ -1139,8 +1157,8 @@ async function processMessageWebhookEvent(env: Env, event: NormalizedGhlMessageW
       ghlContactId: event.contact.ghlContactId,
       firstName: event.contact.firstName ?? contactProfile?.firstName ?? null,
       lastName: event.contact.lastName ?? contactProfile?.lastName ?? null,
-      email: event.contact.email ?? contactProfile?.email ?? null,
-      phone: event.contact.phone ?? contactProfile?.phone ?? null,
+      email: event.contact.email ?? contactProfile?.email ?? inferredContactEmail ?? null,
+      phone: event.contact.phone ?? contactProfile?.phone ?? inferredContactPhone ?? null,
       tags: contactProfile?.tags ?? null,
       updatedAt: now
     })
@@ -1792,25 +1810,112 @@ async function getContactIdentityFromLatestMessage(
 ): Promise<{ firstName: string | null; lastName: string | null; email: string | null; phone: string | null } | null> {
   const [latestMessage] = await db
     .select({
-      raw: messages.raw
+      raw: messages.raw,
+      direction: messages.direction,
+      from: messages.from,
+      to: messages.to
     })
     .from(messages)
     .where(eq(messages.contactId, contactId))
     .orderBy(desc(messages.sentAt))
     .limit(1);
 
-  if (!latestMessage?.raw) {
+  if (!latestMessage) {
     return null;
   }
 
-  const raw = asRecord(latestMessage.raw);
-  const rawContact = asRecord(raw.contact ?? raw.message?.contact ?? raw.messageData?.contact);
-  const rawName = stringOrNull(raw.contactName ?? rawContact.name ?? raw.name);
+  return extractContactIdentityFromMessage({
+    raw: latestMessage.raw,
+    direction: latestMessage.direction,
+    from: latestMessage.from,
+    to: latestMessage.to
+  });
+}
+
+async function getLatestMessageIdentityByContactId(
+  db: ReturnType<typeof createDb>,
+  contactIds: string[]
+) {
+  const uniqueContactIds = Array.from(new Set(contactIds));
+  if (uniqueContactIds.length === 0) {
+    return new Map<string, { firstName: string | null; lastName: string | null; email: string | null; phone: string | null }>();
+  }
+
+  const latestMessages = await db
+    .select({
+      contactId: messages.contactId,
+      raw: messages.raw,
+      direction: messages.direction,
+      from: messages.from,
+      to: messages.to
+    })
+    .from(messages)
+    .where(inArray(messages.contactId, uniqueContactIds))
+    .orderBy(desc(messages.sentAt));
+
+  const identityMap = new Map<
+    string,
+    { firstName: string | null; lastName: string | null; email: string | null; phone: string | null }
+  >();
+  for (const message of latestMessages) {
+    if (identityMap.has(message.contactId)) {
+      continue;
+    }
+    const identity = extractContactIdentityFromMessage({
+      raw: message.raw,
+      direction: message.direction,
+      from: message.from,
+      to: message.to
+    });
+    if (identity) {
+      identityMap.set(message.contactId, identity);
+    }
+  }
+
+  return identityMap;
+}
+
+function extractContactIdentityFromMessage(message: {
+  raw: unknown;
+  direction: MessageDirection;
+  from: string | null;
+  to: string | null;
+}): { firstName: string | null; lastName: string | null; email: string | null; phone: string | null } | null {
+  const raw = asRecord(message.raw);
+  const rawMessage = asRecord(raw.message ?? raw.messageData ?? raw.payload?.message);
+  const rawContact = asRecord(
+    raw.contact ??
+      rawMessage.contact ??
+      raw.messageData?.contact ??
+      raw.payload?.contact ??
+      raw.contactDetails
+  );
+  const rawName = stringOrNull(
+    raw.contactName ??
+      rawContact.name ??
+      rawContact.fullName ??
+      rawMessage.contactName ??
+      rawMessage.fullName ??
+      raw.name
+  );
   const splitRawName = splitContactName(rawName);
-  const firstName = stringOrNull(rawContact.firstName ?? raw.firstName ?? splitRawName.firstName);
-  const lastName = stringOrNull(rawContact.lastName ?? raw.lastName ?? splitRawName.lastName);
-  const email = stringOrNull(rawContact.email ?? raw.email);
-  const phone = stringOrNull(rawContact.phone ?? raw.phone);
+  const firstName = stringOrNull(
+    rawContact.firstName ?? raw.firstName ?? rawMessage.firstName ?? splitRawName.firstName
+  );
+  const lastName = stringOrNull(
+    rawContact.lastName ?? raw.lastName ?? rawMessage.lastName ?? splitRawName.lastName
+  );
+  const email =
+    stringOrNull(
+      rawContact.email ??
+        raw.email ??
+        rawMessage.email ??
+        rawContact.emailAddress ??
+        rawMessage.emailAddress
+    ) ?? inferEmailAddress(message.from, message.to);
+  const phone =
+    stringOrNull(rawContact.phone ?? raw.phone ?? rawMessage.phone ?? rawContact.phoneNumber) ??
+    getContactPhoneFromMessageDirection(message.direction, message.from, message.to);
 
   if (!firstName && !lastName && !email && !phone) {
     return null;
@@ -2212,10 +2317,36 @@ async function normalizeMessageWebhook(
     },
     contact: {
       ghlContactId,
-      firstName: stringOrNull(root.contact?.firstName ?? root.firstName),
-      lastName: stringOrNull(root.contact?.lastName ?? root.lastName),
-      email: stringOrNull(root.contact?.email ?? root.email),
-      phone: stringOrNull(root.contact?.phone ?? root.phone)
+      firstName: stringOrNull(
+        root.contact?.firstName ??
+          message.contact?.firstName ??
+          message.contact?.name?.first ??
+          root.firstName
+      ),
+      lastName: stringOrNull(
+        root.contact?.lastName ??
+          message.contact?.lastName ??
+          message.contact?.name?.last ??
+          root.lastName
+      ),
+      email: stringOrNull(
+        root.contact?.email ??
+          message.contact?.email ??
+          root.email ??
+          message.email ??
+          inferEmailAddress(stringOrNull(root.from ?? message.from), stringOrNull(root.to ?? message.to))
+      ),
+      phone: stringOrNull(
+        root.contact?.phone ??
+          message.contact?.phone ??
+          root.phone ??
+          message.phone ??
+          getContactPhoneFromMessageDirection(
+            direction,
+            stringOrNull(root.from ?? message.from),
+            stringOrNull(root.to ?? message.to)
+          )
+      )
     },
     message: {
       ghlMessageId,
@@ -2614,6 +2745,35 @@ function normalizeBoolean(value: unknown): boolean | null {
   }
   if (normalized === "false" || normalized === "0" || normalized === "no") {
     return false;
+  }
+  return null;
+}
+
+function getContactPhoneFromMessageDirection(
+  direction: MessageDirection,
+  from: string | null,
+  to: string | null
+) {
+  const inboundPhone = normalizePhoneCandidate(from);
+  const outboundPhone = normalizePhoneCandidate(to);
+  return direction === "inbound" ? inboundPhone ?? outboundPhone : outboundPhone ?? inboundPhone;
+}
+
+function normalizePhoneCandidate(value: string | null) {
+  const normalized = stringOrNull(value);
+  if (!normalized || normalized.includes("@")) {
+    return null;
+  }
+  return /\d/.test(normalized) ? normalized : null;
+}
+
+function inferEmailAddress(...values: Array<string | null>) {
+  for (const value of values) {
+    const normalized = stringOrNull(value);
+    if (!normalized || !normalized.includes("@")) {
+      continue;
+    }
+    return normalized;
   }
   return null;
 }
