@@ -42,6 +42,7 @@ GHL_INSTALL_URL
 GHL_APP_ID (optional, recommended for Marketplace v2 URLs)
 GHL_OAUTH_REDIRECT_URI
 GHL_OAUTH_USER_TYPE
+GHL_OAUTH_SCOPE
 FRONTEND_BASE_URL
 ```
 
@@ -80,6 +81,8 @@ Install flow entrypoint:
 ```txt
 https://api.agentflow.autowiz.net/oauth/gohighlevel/start
 ```
+
+Frontend "Connect GoHighLevel" actions should point to the backend start endpoint above so OAuth state handling and token exchange stay centralized server-side.
 
 ## Validation
 

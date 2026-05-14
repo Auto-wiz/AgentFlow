@@ -39,6 +39,7 @@ type Env = {
   GHL_INSTALL_URL?: string;
   GHL_OAUTH_REDIRECT_URI?: string;
   GHL_OAUTH_USER_TYPE?: string;
+  GHL_OAUTH_SCOPE?: string;
   FRONTEND_BASE_URL?: string;
   MESSAGE_QUEUE: Queue<NormalizedGhlWebhookEvent>;
 };
@@ -47,6 +48,8 @@ type HonoBindings = {
   Bindings: Env;
 };
 
+type GhlOAuthUserType = "Company" | "Location";
+
 type GhlOAuthTokenResponse = {
   accessToken: string;
   refreshToken: string;
@@ -54,7 +57,7 @@ type GhlOAuthTokenResponse = {
   expiresIn: number;
   scope: string | null;
   refreshTokenId: string | null;
-  userType: "Company" | "Location";
+  userType: GhlOAuthUserType;
   companyId: string;
   locationId: string | null;
   userId: string | null;
@@ -108,37 +111,32 @@ app.get("/oauth/gohighlevel/start", (c) => {
   const versionId =
     getNonEmptyQueryParam(installUrl, "versionId") ?? getNonEmptyQueryParam(installUrl, "version_id");
 
-  const clientId =
-    getNonEmptyQueryParam(installUrl, "client_id") ??
-    getNonEmptyQueryParam(installUrl, "appId") ??
-    c.env.GHL_CLIENT_ID?.trim() ??
-    null;
-  const appId =
-    getNonEmptyQueryParam(installUrl, "appId") ?? c.env.GHL_APP_ID?.trim() ?? versionId ?? clientId;
-  if (!appId) {
-    return c.json(
-      { error: "Missing GoHighLevel app identifier", hint: "Set appId/version_id in GHL_INSTALL_URL" },
-      500
-    );
+  const clientId = getNonEmptyQueryParam(installUrl, "client_id") ?? c.env.GHL_CLIENT_ID?.trim() ?? null;
+  if (!clientId) {
+    return c.json({ error: "Missing GoHighLevel client_id", hint: "Set GHL_CLIENT_ID or client_id in install URL" }, 500);
   }
 
-  // Keep install URLs valid even if dashboard vars omit one of these keys.
-  if (clientId) {
-    installUrl.searchParams.set("client_id", clientId);
-  }
-  installUrl.searchParams.set("appId", appId);
+  installUrl.searchParams.set("client_id", clientId);
   installUrl.searchParams.set("response_type", "code");
+  installUrl.searchParams.set("state", state);
 
   if (versionId) {
     installUrl.searchParams.set("versionId", versionId);
     installUrl.searchParams.set("version_id", versionId);
   }
 
+  const appId = getNonEmptyQueryParam(installUrl, "appId") ?? c.env.GHL_APP_ID?.trim() ?? null;
+  if (appId) {
+    installUrl.searchParams.set("appId", appId);
+  }
+
   if (!getNonEmptyQueryParam(installUrl, "user_type") && c.env.GHL_OAUTH_USER_TYPE?.trim()) {
     installUrl.searchParams.set("user_type", c.env.GHL_OAUTH_USER_TYPE.trim());
   }
 
-  installUrl.searchParams.set("state", state);
+  if (c.env.GHL_OAUTH_SCOPE?.trim()) {
+    installUrl.searchParams.set("scope", c.env.GHL_OAUTH_SCOPE.trim());
+  }
 
   if (c.env.GHL_OAUTH_REDIRECT_URI) {
     installUrl.searchParams.set("redirect_uri", c.env.GHL_OAUTH_REDIRECT_URI);
@@ -166,9 +164,10 @@ app.get("/oauth/gohighlevel/callback", async (c) => {
     return c.json({ error: "Missing OAuth code" }, 400);
   }
 
-  if (state && storedState && state !== storedState) {
-    return c.json({ error: "Invalid OAuth state" }, 400);
+  if (!state || !storedState || state !== storedState) {
+    return redirectToFrontend(c, "/settings/integrations?ghl=error&reason=invalid_oauth_state");
   }
+  clearCookie(c, "ghl_oauth_state");
 
   const missing = ["GHL_CLIENT_ID", "GHL_CLIENT_SECRET", "GHL_OAUTH_REDIRECT_URI"].filter(
     (key) => !c.env[key as keyof Env]
@@ -1053,61 +1052,63 @@ async function exchangeGhlOAuthCode(
   code: string
 ): Promise<GhlOAuthTokenResponse> {
   const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
-  const requestBody = new URLSearchParams({
-    client_id: env.GHL_CLIENT_ID ?? "",
-    client_secret: env.GHL_CLIENT_SECRET ?? "",
-    grant_type: "authorization_code",
-    code,
-    user_type: env.GHL_OAUTH_USER_TYPE ?? "Company",
-    redirect_uri: env.GHL_OAUTH_REDIRECT_URI ?? ""
-  });
-  const response = await fetch(`${baseUrl}/oauth/token`, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded"
-    },
-    body: requestBody.toString()
-  });
+  const userTypeAttempts = getOAuthUserTypeAttempts(env.GHL_OAUTH_USER_TYPE ?? null);
+  let lastError = "oauth_code_exchange_failed";
 
-  const raw = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = asRecord(raw);
-    const message =
-      stringValue(error.message) ||
-      stringValue(error.error_description) ||
-      stringValue(error.error) ||
-      response.statusText ||
-      String(response.status);
-    throw new Error(`GoHighLevel token exchange failed: ${message}`);
+  for (const userType of userTypeAttempts) {
+    const requestBody = new URLSearchParams({
+      client_id: env.GHL_CLIENT_ID ?? "",
+      client_secret: env.GHL_CLIENT_SECRET ?? "",
+      grant_type: "authorization_code",
+      code,
+      user_type: userType,
+      redirect_uri: env.GHL_OAUTH_REDIRECT_URI ?? ""
+    });
+    const response = await fetch(`${baseUrl}/oauth/token`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: requestBody.toString()
+    });
+
+    const raw = await response.json().catch(() => ({}));
+    const token = asRecord(raw);
+    if (!response.ok) {
+      lastError =
+        stringOrNull(token.message ?? token.error_description ?? token.error) ??
+        response.statusText ??
+        String(response.status);
+      continue;
+    }
+
+    const accessToken = stringValue(token.access_token ?? token.accessToken);
+    const refreshToken = stringValue(token.refresh_token ?? token.refreshToken);
+    const companyId = stringValue(token.companyId ?? token.company_id);
+    const resolvedUserType = normalizeOAuthUserType(stringOrNull(token.userType ?? token.user_type), userType);
+
+    if (!accessToken || !refreshToken || !companyId) {
+      lastError = "GoHighLevel token response is missing required fields";
+      continue;
+    }
+
+    return {
+      accessToken,
+      refreshToken,
+      tokenType: stringValue(token.token_type ?? token.tokenType) || "Bearer",
+      expiresIn: Number(token.expires_in ?? token.expiresIn ?? 86400),
+      scope: stringOrNull(token.scope),
+      refreshTokenId: stringOrNull(token.refreshTokenId ?? token.refresh_token_id),
+      userType: resolvedUserType,
+      companyId,
+      locationId: stringOrNull(token.locationId ?? token.location_id),
+      userId: stringOrNull(token.userId ?? token.user_id),
+      raw
+    };
   }
 
-  const token = asRecord(raw);
-  const userType = stringValue(token.userType ?? token.user_type);
-  const companyId = stringValue(token.companyId ?? token.company_id);
-
-  if (
-    !stringValue(token.access_token ?? token.accessToken) ||
-    !stringValue(token.refresh_token ?? token.refreshToken) ||
-    !companyId ||
-    (userType !== "Company" && userType !== "Location")
-  ) {
-    throw new Error("GoHighLevel token response is missing required fields");
-  }
-
-  return {
-    accessToken: stringValue(token.access_token ?? token.accessToken),
-    refreshToken: stringValue(token.refresh_token ?? token.refreshToken),
-    tokenType: stringValue(token.token_type ?? token.tokenType) || "Bearer",
-    expiresIn: Number(token.expires_in ?? token.expiresIn ?? 86400),
-    scope: stringOrNull(token.scope),
-    refreshTokenId: stringOrNull(token.refreshTokenId ?? token.refresh_token_id),
-    userType,
-    companyId,
-    locationId: stringOrNull(token.locationId ?? token.location_id),
-    userId: stringOrNull(token.userId ?? token.user_id),
-    raw
-  };
+  throw new Error(`GoHighLevel token exchange failed: ${lastError}`);
 }
 
 function redirectToFrontend(c: Context<HonoBindings>, path: string) {
@@ -1123,6 +1124,10 @@ function setCookie(
     "Set-Cookie",
     `${cookie.name}=${cookie.value}; Max-Age=${cookie.maxAge}; Path=/; HttpOnly; Secure; SameSite=Lax`
   );
+}
+
+function clearCookie(c: Context<HonoBindings>, name: string) {
+  c.header("Set-Cookie", `${name}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax`);
 }
 
 function getCookie(headers: Headers, name: string): string | null {
@@ -2204,33 +2209,60 @@ async function updateContactIdentity(
 async function getAccessTokensForLocation(
   env: Env,
   db: ReturnType<typeof createDb>,
-  ghlLocationId: string
+  ghlLocationId: string,
+  allowRefresh = true
 ) {
-  const candidates: Array<string | null | undefined> = [];
+  const refreshCutoff = new Date(Date.now() + 60 * 1000);
+  let hasExpiringInstallationToken = false;
+  const candidates: string[] = [];
 
-  const [locationInstallation] = await db
+  const addCandidate = (tokenValue: string | null | undefined, expiresAt?: Date | null) => {
+    const token = tokenValue?.trim();
+    if (!token) {
+      return;
+    }
+    if (expiresAt && expiresAt <= refreshCutoff) {
+      hasExpiringInstallationToken = true;
+      return;
+    }
+    candidates.push(token);
+  };
+
+  const locationInstallations = await db
     .select({
-      accessToken: ghlOAuthInstallations.accessToken
+      accessToken: ghlOAuthInstallations.accessToken,
+      expiresAt: ghlOAuthInstallations.expiresAt
     })
     .from(ghlOAuthInstallations)
     .where(eq(ghlOAuthInstallations.locationId, ghlLocationId))
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
-    .limit(1);
-  candidates.push(locationInstallation?.accessToken);
+    .limit(6);
+  for (const installation of locationInstallations) {
+    addCandidate(installation.accessToken, installation.expiresAt);
+  }
 
   const companyInstallation = await getCompanyOAuthInstallationForLocation(db, ghlLocationId);
-  candidates.push(companyInstallation?.accessToken);
-  const fallbackCompanyInstallations = await getRecentCompanyOAuthInstallations(db);
-  for (const installation of fallbackCompanyInstallations) {
-    candidates.push(installation.accessToken);
+  addCandidate(companyInstallation?.accessToken, companyInstallation?.expiresAt ?? null);
+
+  const fallbackInstallations = await getRecentOAuthInstallations(db);
+  for (const installation of fallbackInstallations) {
+    addCandidate(installation.accessToken, installation.expiresAt);
   }
-  candidates.push(env.GHL_API_TOKEN?.trim());
 
   const deduped = new Set<string>();
   for (const token of candidates) {
-    const normalized = token?.trim();
-    if (normalized) {
-      deduped.add(normalized);
+    deduped.add(token);
+  }
+
+  const envToken = env.GHL_API_TOKEN?.trim();
+  if (envToken) {
+    deduped.add(envToken);
+  }
+
+  if (allowRefresh && hasExpiringInstallationToken) {
+    const refreshedCount = await refreshOAuthAccessTokensForLocation(env, db, ghlLocationId);
+    if (refreshedCount > 0) {
+      return getAccessTokensForLocation(env, db, ghlLocationId, false);
     }
   }
   return Array.from(deduped);
@@ -2291,7 +2323,7 @@ async function getCompanyOAuthInstallationForLocation(
   return companyInstallation ?? null;
 }
 
-async function getRecentCompanyOAuthInstallations(db: ReturnType<typeof createDb>, limit = 5) {
+async function getRecentOAuthInstallations(db: ReturnType<typeof createDb>, limit = 8) {
   const safeLimit = Math.max(1, Math.min(limit, 20));
   return db
     .select({
@@ -2303,7 +2335,6 @@ async function getRecentCompanyOAuthInstallations(db: ReturnType<typeof createDb
       updatedAt: ghlOAuthInstallations.updatedAt
     })
     .from(ghlOAuthInstallations)
-    .where(eq(ghlOAuthInstallations.userType, "Company"))
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
     .limit(safeLimit);
 }
@@ -2440,7 +2471,7 @@ async function sendConversationMessageWithToken(
     payload.subject = params.subject;
   }
 
-  const requestVersions = ["2021-04-15", "2021-07-28"];
+  const requestVersions = ["2023-02-21", "2021-07-28", "2021-04-15"];
   let lastError: string | null = null;
   let shouldRefreshToken = false;
   let lastStatus = 0;
@@ -2973,7 +3004,6 @@ async function refreshOAuthAccessTokensForLocation(
         userType: ghlOAuthInstallations.userType
       })
       .from(ghlOAuthInstallations)
-      .where(eq(ghlOAuthInstallations.userType, "Company"))
       .orderBy(desc(ghlOAuthInstallations.updatedAt))
       .limit(8);
   }
@@ -3015,11 +3045,9 @@ async function refreshGhlAccessTokenWithRefreshToken(
   }
 
   const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
-  const configuredUserType = normalizeOAuthUserType(
+  const userTypeAttempts = getOAuthUserTypeAttempts(
     stringOrNull(installationUserType) ?? env.GHL_OAUTH_USER_TYPE ?? "Company"
   );
-  const fallbackUserType = configuredUserType === "Company" ? "Location" : "Company";
-  const userTypeAttempts = [configuredUserType, fallbackUserType];
 
   for (const userType of userTypeAttempts) {
     const requestBody = new URLSearchParams({
@@ -3064,12 +3092,23 @@ function addSecondsToNow(seconds: number) {
   return new Date(Date.now() + safeSeconds * 1000);
 }
 
-function normalizeOAuthUserType(value: string | null) {
+function getOAuthUserTypeAttempts(value: string | null | undefined) {
+  const preferred = normalizeOAuthUserType(value, "Company");
+  return preferred === "Company" ? (["Company", "Location"] as const) : (["Location", "Company"] as const);
+}
+
+function normalizeOAuthUserType(
+  value: string | null | undefined,
+  fallback: GhlOAuthUserType = "Company"
+): GhlOAuthUserType {
   const normalized = (value ?? "").trim().toLowerCase();
   if (normalized === "location") {
     return "Location";
   }
-  return "Company";
+  if (normalized === "company") {
+    return "Company";
+  }
+  return fallback;
 }
 
 function buildGhlLocationLookupRequest(env: Env, ghlLocationId: string) {
