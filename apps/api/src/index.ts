@@ -2707,9 +2707,8 @@ async function updateOpportunityWithToken(
     payload.opportunityStatus = params.status;
   }
 
-  const attempts: Array<{ method: "PUT" | "PATCH"; endpoint: string }> = [
-    { method: "PUT", endpoint: `${baseUrl}/opportunities/${encodeURIComponent(params.opportunityId)}` },
-    { method: "PATCH", endpoint: `${baseUrl}/opportunities/${encodeURIComponent(params.opportunityId)}` }
+  const attempts: Array<{ method: "PUT"; endpoint: string }> = [
+    { method: "PUT", endpoint: `${baseUrl}/opportunities/${encodeURIComponent(params.opportunityId)}` }
   ];
   let lastError: string | null = null;
 
