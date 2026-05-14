@@ -709,6 +709,20 @@ app.get("/threads/:id/messages", async (c) => {
     .where(eq(messages.threadId, threadId))
     .orderBy(messages.sentAt);
 
+  const [paymentsRow] = await db
+    .select({
+      total: sql<number>`COALESCE(SUM(${invoices.amountPaid}), 0)::float`,
+      currency: sql<string | null>`MAX(${invoices.currency})`
+    })
+    .from(invoices)
+    .where(
+      and(
+        eq(invoices.locationId, threadRow.locationId),
+        eq(invoices.contactId, threadRow.contactId),
+        eq(invoices.isDeleted, false)
+      )
+    );
+
   const contactDetails =
     (await fetchContactDetailsOnDemand(c.env, db, threadRow.ghlLocationId, threadRow.ghlContactId)) ??
     toStoredContactDetails({
@@ -750,7 +764,11 @@ app.get("/threads/:id/messages", async (c) => {
       to: message.to,
       sentAt: message.sentAt.toISOString()
     })),
-    contactDetails
+    contactDetails,
+    paymentsSummary: {
+      total: Number(paymentsRow?.total ?? 0),
+      currency: paymentsRow?.currency ?? "USD"
+    }
   });
 });
 

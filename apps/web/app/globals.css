@@ -672,6 +672,23 @@ input {
   padding: 8px 10px;
 }
 
+.inbox-payments-card {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  box-shadow: none;
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+}
+
+.inbox-payments-card p {
+  color: var(--accent);
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1;
+  margin: 0;
+}
+
 .inbox-contact-metric {
   background: linear-gradient(135deg, var(--accent), #3e477f);
   border-radius: 12px;

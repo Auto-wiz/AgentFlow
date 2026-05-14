@@ -227,6 +227,9 @@ export default function ThreadsPage() {
     phone: selectedContact?.phone ?? threadData?.thread.contactPhone ?? selectedThreadSummary?.contactPhone ?? null
   });
   const selectedContactInitial = selectedContactName.slice(0, 1).toUpperCase() || "?";
+  const paymentsTotal = threadData?.paymentsSummary?.total ?? 0;
+  const paymentsCurrency = threadData?.paymentsSummary?.currency ?? "USD";
+  const shouldShowOpportunityCard = opportunities.length > 0;
 
   async function markSelectedRead() {
     if (!selectedThreadId) {
@@ -396,7 +399,7 @@ export default function ThreadsPage() {
             >
               <strong>{formatLocationName(subaccount.locationName, subaccount.ghlLocationId)}</strong>
               <span className="muted">
-                {subaccount.conversationCount} conv · {subaccount.pendingCount} pending
+                {subaccount.conversationCount} conversations · {subaccount.pendingCount} pending
               </span>
             </button>
           ))}
@@ -538,97 +541,96 @@ export default function ThreadsPage() {
             <p className="muted">{selectedLocationLabel}</p>
           </div>
         </div>
-        <div className="inbox-contact-metric">
-          <span className="muted">Unread messages</span>
-          <strong>{threadData?.thread.unreadCount ?? selectedThreadSummary?.unreadCount ?? 0}</strong>
-        </div>
-        <section className="inbox-opportunity-card panel">
-          <div className="inbox-opportunity-header">
-            <strong>Opportunity pipeline</strong>
-            <span className="muted">{opportunities.length} records</span>
-          </div>
-          {opportunitiesLoading ? <p className="muted">Loading opportunities...</p> : null}
-          {opportunitiesError ? <p className="inbox-reply-error">{opportunitiesError}</p> : null}
-          {!opportunitiesLoading && !opportunitiesError && opportunities.length === 0 ? (
-            <p className="muted">No opportunities linked to this contact yet.</p>
-          ) : null}
-          <div className="inbox-opportunity-list">
-            {opportunities.map((opportunity) => {
-              const draft = opportunityDrafts[opportunity.id] ?? {
-                stageId: opportunity.stageId ?? "",
-                status: opportunity.status ?? "open"
-              };
-              const stagesForOpportunity =
-                opportunity.pipelineId != null
-                  ? stageOptions.filter((stage) => stage.pipelineId === opportunity.pipelineId)
-                  : stageOptions;
-              return (
-                <article className="inbox-opportunity-item" key={opportunity.id}>
-                  <div className="inbox-opportunity-row">
-                    <strong>{opportunity.name ?? `Opportunity ${opportunity.id.slice(0, 8)}`}</strong>
-                    <span className="muted">
-                      {formatOpportunityValue(opportunity.monetaryValue, opportunity.currency)}
-                    </span>
-                  </div>
-                  <div className="inbox-opportunity-row">
-                    <span className="muted">Stage: {opportunity.stageName ?? "Not set"}</span>
-                    <span className="muted">Status: {opportunity.status ?? "open"}</span>
-                  </div>
-                  <div className="inbox-opportunity-controls">
-                    <select
-                      aria-label={`Stage for ${opportunity.name ?? opportunity.id}`}
-                      value={draft.stageId}
-                      onChange={(event) =>
-                        setOpportunityDrafts((current) => ({
-                          ...current,
-                          [opportunity.id]: {
-                            ...draft,
-                            stageId: event.target.value
-                          }
-                        }))
-                      }
-                    >
-                      <option value="">Keep stage</option>
-                      {stagesForOpportunity.map((stage) => (
-                        <option key={stage.id} value={stage.id}>
-                          {stage.pipelineName ? `${stage.pipelineName} · ` : ""}
-                          {stage.name}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      aria-label={`Status for ${opportunity.name ?? opportunity.id}`}
-                      value={draft.status}
-                      onChange={(event) =>
-                        setOpportunityDrafts((current) => ({
-                          ...current,
-                          [opportunity.id]: {
-                            ...draft,
-                            status: event.target.value
-                          }
-                        }))
-                      }
-                    >
-                      {["open", "won", "lost", "abandoned"].map((status) => (
-                        <option key={status} value={status}>
-                          {status}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      className="button secondary"
-                      disabled={savingOpportunityId === opportunity.id}
-                      onClick={() => saveOpportunity(opportunity.id)}
-                      type="button"
-                    >
-                      {savingOpportunityId === opportunity.id ? "Updating..." : "Update"}
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
+        <section className="inbox-payments-card panel">
+          <strong>Payments total</strong>
+          <p>{formatOpportunityValue(paymentsTotal, paymentsCurrency)}</p>
         </section>
+        {shouldShowOpportunityCard ? (
+          <section className="inbox-opportunity-card panel">
+            <div className="inbox-opportunity-header">
+              <strong>Opportunity pipeline</strong>
+              <span className="muted">{opportunities.length} records</span>
+            </div>
+            {opportunitiesLoading ? <p className="muted">Loading opportunities...</p> : null}
+            {opportunitiesError ? <p className="inbox-reply-error">{opportunitiesError}</p> : null}
+            <div className="inbox-opportunity-list">
+              {opportunities.map((opportunity) => {
+                const draft = opportunityDrafts[opportunity.id] ?? {
+                  stageId: opportunity.stageId ?? "",
+                  status: opportunity.status ?? "open"
+                };
+                const stagesForOpportunity =
+                  opportunity.pipelineId != null
+                    ? stageOptions.filter((stage) => stage.pipelineId === opportunity.pipelineId)
+                    : stageOptions;
+                return (
+                  <article className="inbox-opportunity-item" key={opportunity.id}>
+                    <div className="inbox-opportunity-row">
+                      <strong>{opportunity.name ?? `Opportunity ${opportunity.id.slice(0, 8)}`}</strong>
+                      <span className="muted">
+                        {formatOpportunityValue(opportunity.monetaryValue, opportunity.currency)}
+                      </span>
+                    </div>
+                    <div className="inbox-opportunity-row">
+                      <span className="muted">Stage: {opportunity.stageName ?? "Not set"}</span>
+                      <span className="muted">Status: {opportunity.status ?? "open"}</span>
+                    </div>
+                    <div className="inbox-opportunity-controls">
+                      <select
+                        aria-label={`Stage for ${opportunity.name ?? opportunity.id}`}
+                        value={draft.stageId}
+                        onChange={(event) =>
+                          setOpportunityDrafts((current) => ({
+                            ...current,
+                            [opportunity.id]: {
+                              ...draft,
+                              stageId: event.target.value
+                            }
+                          }))
+                        }
+                      >
+                        <option value="">Keep stage</option>
+                        {stagesForOpportunity.map((stage) => (
+                          <option key={stage.id} value={stage.id}>
+                            {stage.pipelineName ? `${stage.pipelineName} · ` : ""}
+                            {stage.name}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        aria-label={`Status for ${opportunity.name ?? opportunity.id}`}
+                        value={draft.status}
+                        onChange={(event) =>
+                          setOpportunityDrafts((current) => ({
+                            ...current,
+                            [opportunity.id]: {
+                              ...draft,
+                              status: event.target.value
+                            }
+                          }))
+                        }
+                      >
+                        {["open", "won", "lost", "abandoned"].map((status) => (
+                          <option key={status} value={status}>
+                            {status}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        className="button secondary"
+                        disabled={savingOpportunityId === opportunity.id}
+                        onClick={() => saveOpportunity(opportunity.id)}
+                        type="button"
+                      >
+                        {savingOpportunityId === opportunity.id ? "Updating..." : "Update"}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
         <div className="inbox-contact-section">
           <strong>Email</strong>
           <p>

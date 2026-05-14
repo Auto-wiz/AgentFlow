@@ -186,6 +186,10 @@ export type ThreadMessagesResponse = {
     sentAt: string;
   }>;
   contactDetails: ContactOnDemandDetails | null;
+  paymentsSummary: {
+    total: number;
+    currency: string;
+  };
 };
 
 export type ThreadOpportunity = {
