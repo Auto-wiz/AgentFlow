@@ -7,7 +7,7 @@
     "dev": "next dev",
     "check": "tsc --noEmit",
     "build": "next build",
-    "pages:build": "next-on-pages"
+    "pages:build": "next-on-pages --outdir ../../.vercel/output/static"
   },
   "dependencies": {
     "@agentflow/shared": "0.1.0",
