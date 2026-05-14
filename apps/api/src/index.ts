@@ -326,19 +326,6 @@ app.get("/threads", async (c) => {
       locationName: row.locationName
     }))
   );
-  const contactFieldMap = await hydrateMissingContactFields(
-    c.env,
-    db,
-    rows.map((row) => ({
-      contactId: row.contactId,
-      ghlContactId: row.ghlContactId,
-      ghlLocationId: row.ghlLocationId,
-      firstName: row.firstName,
-      lastName: row.lastName,
-      email: row.email,
-      phone: row.phone
-    }))
-  );
   return c.json({
     threads: rows.map((row) => ({
       id: row.threadId,
@@ -347,13 +334,13 @@ app.get("/threads", async (c) => {
       locationName: locationNameMap.get(row.locationId) ?? row.locationName,
       contactId: row.contactId,
       contactName: formatContactName(
-        contactFieldMap.get(row.contactId)?.firstName ?? row.firstName,
-        contactFieldMap.get(row.contactId)?.lastName ?? row.lastName,
-        contactFieldMap.get(row.contactId)?.email ?? row.email,
-        contactFieldMap.get(row.contactId)?.phone ?? row.phone
+        row.firstName,
+        row.lastName,
+        row.email,
+        row.phone
       ),
-      contactEmail: contactFieldMap.get(row.contactId)?.email ?? row.email,
-      contactPhone: contactFieldMap.get(row.contactId)?.phone ?? row.phone,
+      contactEmail: row.email,
+      contactPhone: row.phone,
       pendingReply: row.pendingReply,
       unreadCount: row.unreadCount,
       lastMessageAt: row.lastMessageAt?.toISOString() ?? null
@@ -407,21 +394,6 @@ app.get("/appointments", async (c) => {
       locationName: row.locationName
     }))
   );
-  const contactFieldMap = await hydrateMissingContactFields(
-    c.env,
-    db,
-    rows
-      .filter((row) => row.contactId && row.ghlContactId)
-      .map((row) => ({
-        contactId: row.contactId as string,
-        ghlContactId: row.ghlContactId as string,
-        ghlLocationId: row.ghlLocationId,
-        firstName: row.firstName,
-        lastName: row.lastName,
-        email: row.email,
-        phone: row.phone
-      }))
-  );
   return c.json({
     appointments: rows.map((row) => ({
       id: row.appointmentId,
@@ -430,14 +402,9 @@ app.get("/appointments", async (c) => {
       ghlLocationId: row.ghlLocationId,
       locationName: locationNameMap.get(row.locationId) ?? row.locationName,
       contactId: row.contactId ?? null,
-      contactName: formatContactName(
-        row.contactId ? contactFieldMap.get(row.contactId)?.firstName ?? row.firstName : row.firstName,
-        row.contactId ? contactFieldMap.get(row.contactId)?.lastName ?? row.lastName : row.lastName,
-        row.contactId ? contactFieldMap.get(row.contactId)?.email ?? row.email : row.email,
-        row.contactId ? contactFieldMap.get(row.contactId)?.phone ?? row.phone : row.phone
-      ),
-      contactEmail: row.contactId ? contactFieldMap.get(row.contactId)?.email ?? row.email : row.email,
-      contactPhone: row.contactId ? contactFieldMap.get(row.contactId)?.phone ?? row.phone : row.phone,
+      contactName: formatContactName(row.firstName, row.lastName, row.email, row.phone),
+      contactEmail: row.email,
+      contactPhone: row.phone,
       title: row.title,
       status: row.status,
       startTime: row.startTime?.toISOString() ?? null,
