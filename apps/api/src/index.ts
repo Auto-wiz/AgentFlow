@@ -818,28 +818,70 @@ app.post("/threads/:id/reply", async (c) => {
     return c.json({ error: "Thread not found" }, 404);
   }
 
-  const accessTokens = await getAccessTokensForLocation(c.env, db, threadRow.ghlLocationId);
-  if (accessTokens.length === 0) {
+  let lastError: string | null = null;
+  const trySendWithCurrentTokens = async () => {
+    const accessTokens = await getAccessTokensForLocation(c.env, db, threadRow.ghlLocationId);
+    if (accessTokens.length === 0) {
+      return {
+        ok: false as const,
+        shouldRefreshToken: false,
+        noTokens: true
+      };
+    }
+
+    let shouldRefreshToken = false;
+    for (const accessToken of accessTokens) {
+      const sent = await sendConversationMessageWithToken(c.env, {
+        accessToken,
+        channel,
+        ghlContactId: threadRow.ghlContactId,
+        ghlLocationId: threadRow.ghlLocationId,
+        message: messageBody,
+        subject
+      });
+      if (!sent.ok) {
+        lastError = sent.error ?? `status_${sent.status}`;
+        shouldRefreshToken = shouldRefreshToken || sent.shouldRefreshToken;
+        continue;
+      }
+
+      return {
+        ok: true as const,
+        sent
+      };
+    }
+
+    return {
+      ok: false as const,
+      shouldRefreshToken,
+      noTokens: false
+    };
+  };
+
+  const initialAttempt = await trySendWithCurrentTokens();
+  if (initialAttempt.noTokens) {
     return c.json({ error: "No GoHighLevel token available for this location" }, 400);
   }
 
-  let lastError: string | null = null;
-  for (const accessToken of accessTokens) {
-    const sent = await sendConversationMessageWithToken(c.env, {
-      accessToken,
-      channel,
-      ghlContactId: threadRow.ghlContactId,
-      ghlLocationId: threadRow.ghlLocationId,
-      message: messageBody,
-      subject
-    });
-    if (!sent.ok) {
-      lastError = sent.error ?? `status_${sent.status}`;
-      continue;
-    }
+  const successfulSend = initialAttempt.ok
+    ? initialAttempt.sent
+    : initialAttempt.shouldRefreshToken
+      ? await (async () => {
+          const refreshedCount = await refreshOAuthAccessTokensForLocation(c.env, db, threadRow.ghlLocationId);
+          if (refreshedCount <= 0) {
+            return null;
+          }
+          const retriedAttempt = await trySendWithCurrentTokens();
+          if (retriedAttempt.ok) {
+            return retriedAttempt.sent;
+          }
+          return null;
+        })()
+      : null;
 
+  if (successfulSend) {
     const sentAt = new Date();
-    const ghlMessageId = sent.messageId ?? `outbound-${crypto.randomUUID()}`;
+    const ghlMessageId = successfulSend.messageId ?? `outbound-${crypto.randomUUID()}`;
     const [stored] = await db
       .insert(messages)
       .values({
@@ -854,7 +896,7 @@ app.post("/threads/:id/reply", async (c) => {
         from: null,
         to: null,
         sentAt,
-        raw: sent.raw
+        raw: successfulSend.raw
       })
       .onConflictDoNothing({
         target: [messages.threadId, messages.ghlMessageId]
@@ -2380,7 +2422,14 @@ async function sendConversationMessageWithToken(
     message: string;
     subject: string | null;
   }
-): Promise<{ ok: boolean; status: number; messageId: string | null; raw: unknown; error: string | null }> {
+): Promise<{
+  ok: boolean;
+  status: number;
+  messageId: string | null;
+  raw: unknown;
+  error: string | null;
+  shouldRefreshToken: boolean;
+}> {
   const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
   const payload: Record<string, unknown> = {
     type: params.channel === "email" ? "Email" : "SMS",
@@ -2392,43 +2441,66 @@ async function sendConversationMessageWithToken(
     payload.subject = params.subject;
   }
 
-  try {
-    const response = await fetch(`${baseUrl}/conversations/messages`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${params.accessToken}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        Version: "2021-04-15",
-        "Location-Id": params.ghlLocationId,
-        locationId: params.ghlLocationId
-      },
-      body: JSON.stringify(payload)
-    });
-    const rawBody = await response.text();
-    const parsed = asRecord(safeJsonParse(rawBody) ?? {});
-    return {
-      ok: response.ok,
-      status: response.status,
-      messageId: stringOrNull(parsed.messageId ?? parsed.id ?? parsed.message?.id ?? parsed.msgId),
-      raw: {
-        request: payload,
-        response: parsed,
-        responseRawBody: rawBody
-      },
-      error: response.ok
-        ? null
-        : stringOrNull(parsed.message ?? parsed.error ?? parsed.error_description) ?? response.statusText
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      status: 0,
-      messageId: null,
-      raw: { request: payload, response: error instanceof Error ? error.message : String(error) },
-      error: error instanceof Error ? error.message : "request_failed"
-    };
+  const requestVersions = ["2021-04-15", "2021-07-28"];
+  let lastError: string | null = null;
+  let shouldRefreshToken = false;
+  let lastStatus = 0;
+
+  for (const requestVersion of requestVersions) {
+    try {
+      const response = await fetch(`${baseUrl}/conversations/messages`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${params.accessToken}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Version: requestVersion,
+          "Location-Id": params.ghlLocationId,
+          locationId: params.ghlLocationId
+        },
+        body: JSON.stringify(payload)
+      });
+      const rawBody = await response.text();
+      const parsed = asRecord(safeJsonParse(rawBody) ?? {});
+      const parsedError =
+        stringOrNull(parsed.message ?? parsed.error ?? parsed.error_description) ?? response.statusText;
+      if (!response.ok) {
+        lastError = parsedError;
+        lastStatus = response.status;
+        shouldRefreshToken =
+          shouldRefreshToken ||
+          response.status === 401 ||
+          response.status === 403 ||
+          isTokenError(parsedError);
+        continue;
+      }
+      return {
+        ok: response.ok,
+        status: response.status,
+        messageId: stringOrNull(parsed.messageId ?? parsed.id ?? parsed.message?.id ?? parsed.msgId),
+        raw: {
+          request: payload,
+          response: parsed,
+          responseRawBody: rawBody
+        },
+        error: null,
+        shouldRefreshToken: false
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "request_failed";
+      lastStatus = 0;
+      shouldRefreshToken = shouldRefreshToken || isTokenError(lastError);
+    }
   }
+
+  return {
+    ok: false,
+    status: lastStatus,
+    messageId: null,
+    raw: { request: payload },
+    error: lastError,
+    shouldRefreshToken
+  };
 }
 
 async function getThreadContextById(db: ReturnType<typeof createDb>, threadId: string) {
