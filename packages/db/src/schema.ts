@@ -199,6 +199,30 @@ export const ghlOAuthInstallations = pgTable(
   })
 );
 
+export const userSubaccountVisibilities = pgTable(
+  "user_subaccount_visibilities",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userKey: text("user_key").notNull(),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => locations.id, { onDelete: "cascade" }),
+    isVisible: boolean("is_visible").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    userLocationUnique: uniqueIndex("user_subaccount_visibilities_user_location_unique").on(
+      table.userKey,
+      table.locationId
+    ),
+    userKeyIdx: index("user_subaccount_visibilities_user_key_idx").on(table.userKey),
+    locationIdx: index("user_subaccount_visibilities_location_id_idx").on(table.locationId)
+  })
+);
+
 export const appointments = pgTable(
   "appointments",
   {
@@ -291,12 +315,23 @@ export const locationsRelations = relations(locations, ({ one, many }) => ({
     fields: [locations.agencyId],
     references: [agencies.id]
   }),
+  subaccountVisibilities: many(userSubaccountVisibilities),
   contacts: many(contacts),
   threads: many(threads),
   messages: many(messages),
   appointments: many(appointments),
   invoices: many(invoices)
 }));
+
+export const userSubaccountVisibilitiesRelations = relations(
+  userSubaccountVisibilities,
+  ({ one }) => ({
+    location: one(locations, {
+      fields: [userSubaccountVisibilities.locationId],
+      references: [locations.id]
+    })
+  })
+);
 
 export const contactsRelations = relations(contacts, ({ one, many }) => ({
   location: one(locations, {

@@ -25,6 +25,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link className="button secondary" href="/appointments">
                 Appointments
               </Link>
+              <Link className="button secondary" href="/subaccounts">
+                Subaccounts
+              </Link>
               <Link className="button secondary" href="/debug">
                 Debug
               </Link>

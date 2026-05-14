@@ -1,10 +1,9 @@
 "use client";
 
 import type { ThreadMessagesResponse } from "@agentflow/shared";
+import { getApiBaseUrl } from "../../../lib/api-base-url";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "https://api.agentflow.autowiz.net";
 
 function formatLocationName(locationName: string | null, ghlLocationId: string) {
   return locationName ? `${locationName} (${ghlLocationId})` : ghlLocationId;
@@ -13,6 +12,7 @@ function formatLocationName(locationName: string | null, ghlLocationId: string) 
 export const runtime = "edge";
 
 export default function ThreadMessagesPage({ params }: { params: { id: string } }) {
+  const apiBaseUrl = getApiBaseUrl();
   const [data, setData] = useState<ThreadMessagesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

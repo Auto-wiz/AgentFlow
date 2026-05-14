@@ -189,3 +189,19 @@ export type AppointmentSummary = {
 export type AppointmentsResponse = {
   appointments: AppointmentSummary[];
 };
+
+export type SubaccountOverview = {
+  locationId: string;
+  ghlLocationId: string;
+  locationName: string | null;
+  agencyId: string;
+  agencyName: string | null;
+  pendingCount: number;
+  appointmentCount: number;
+  visible: boolean;
+};
+
+export type SubaccountsOverviewResponse = {
+  viewerKey: string;
+  subaccounts: SubaccountOverview[];
+};
