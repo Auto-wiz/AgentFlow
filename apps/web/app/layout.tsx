@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { ThemeToggle } from "./components/theme-toggle";
 
 import "./globals.css";
 
@@ -31,6 +32,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link className="button secondary" href="/debug">
                 Debug
               </Link>
+              <ThemeToggle />
             </div>
           </header>
           {children}
