@@ -1,9 +1,9 @@
 "use client";
 
 import type { SubaccountOverview } from "@agentflow/shared";
+import { getApiBaseUrl } from "../../lib/api-base-url";
 import { useEffect, useMemo, useState } from "react";
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "https://api.agentflow.autowiz.net";
 const viewerKey = "default";
 
 function formatLocationName(locationName: string | null, ghlLocationId: string) {
@@ -11,6 +11,7 @@ function formatLocationName(locationName: string | null, ghlLocationId: string) 
 }
 
 export default function SubaccountsPage() {
+  const apiBaseUrl = getApiBaseUrl();
   const [subaccounts, setSubaccounts] = useState<SubaccountOverview[]>([]);
   const [searchLocationId, setSearchLocationId] = useState("");
   const [savingIds, setSavingIds] = useState<Record<string, boolean>>({});

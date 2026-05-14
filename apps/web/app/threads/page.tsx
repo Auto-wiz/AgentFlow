@@ -1,10 +1,10 @@
 "use client";
 
 import type { SubaccountOverview, ThreadSummary } from "@agentflow/shared";
+import { getApiBaseUrl } from "../../lib/api-base-url";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "https://api.agentflow.autowiz.net";
 const viewerKey = "default";
 
 function formatLocationName(locationName: string | null, ghlLocationId: string) {
@@ -12,6 +12,7 @@ function formatLocationName(locationName: string | null, ghlLocationId: string) 
 }
 
 export default function ThreadsPage() {
+  const apiBaseUrl = getApiBaseUrl();
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [subaccounts, setSubaccounts] = useState<SubaccountOverview[]>([]);
   const [selectedLocationId, setSelectedLocationId] = useState("");

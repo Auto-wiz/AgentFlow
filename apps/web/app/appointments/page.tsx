@@ -1,9 +1,9 @@
 "use client";
 
 import type { AppointmentSummary, SubaccountOverview } from "@agentflow/shared";
+import { getApiBaseUrl } from "../../lib/api-base-url";
 import { useEffect, useState } from "react";
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "https://api.agentflow.autowiz.net";
 const viewerKey = "default";
 
 function formatLocationName(locationName: string | null, ghlLocationId: string) {
@@ -18,6 +18,7 @@ function formatDate(value: string | null) {
 }
 
 export default function AppointmentsPage() {
+  const apiBaseUrl = getApiBaseUrl();
   const [appointments, setAppointments] = useState<AppointmentSummary[]>([]);
   const [subaccounts, setSubaccounts] = useState<SubaccountOverview[]>([]);
   const [selectedLocationId, setSelectedLocationId] = useState("");
