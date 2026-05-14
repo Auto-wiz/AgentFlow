@@ -1239,7 +1239,9 @@ async function fetchContactProfileWithToken(
         headers: {
           Authorization: `Bearer ${accessToken}`,
           Accept: "application/json",
-          Version: "2021-07-28"
+          Version: "2021-07-28",
+          "Location-Id": ghlLocationId,
+          locationId: ghlLocationId
         }
       });
 
