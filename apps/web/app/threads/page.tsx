@@ -13,6 +13,7 @@ function formatLocationName(locationName: string | null, ghlLocationId: string) 
 export default function ThreadsPage() {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [locationId, setLocationId] = useState("");
+  const [accessToken, setAccessToken] = useState("");
   const [pendingOnly, setPendingOnly] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,10 +31,16 @@ export default function ThreadsPage() {
       if (locationId.trim()) {
         params.set("locationId", locationId.trim());
       }
+      const normalizedToken = accessToken.trim();
 
       try {
         const response = await fetch(`${apiBaseUrl}/threads?${params.toString()}`, {
-          signal: controller.signal
+          signal: controller.signal,
+          headers: normalizedToken
+            ? {
+                "x-ghl-access-token": normalizedToken
+              }
+            : undefined
         });
         if (!response.ok) {
           throw new Error("Failed to load threads");
@@ -53,7 +60,7 @@ export default function ThreadsPage() {
 
     loadThreads();
     return () => controller.abort();
-  }, [locationId, pendingOnly]);
+  }, [locationId, pendingOnly, accessToken]);
 
   return (
     <section>
@@ -63,6 +70,13 @@ export default function ThreadsPage() {
           placeholder="Filter by locationId"
           value={locationId}
           onChange={(event) => setLocationId(event.target.value)}
+        />
+        <input
+          aria-label="GoHighLevel access token"
+          placeholder="Optional token to hydrate location names"
+          type="password"
+          value={accessToken}
+          onChange={(event) => setAccessToken(event.target.value)}
         />
         <button className="button secondary" onClick={() => setPendingOnly((value) => !value)}>
           {pendingOnly ? "Showing pending" : "Showing all"}
