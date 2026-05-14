@@ -70,6 +70,7 @@ export const contacts = pgTable(
     lastName: text("last_name"),
     email: text("email"),
     phone: text("phone"),
+    tags: jsonb("tags").$type<string[]>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
   },

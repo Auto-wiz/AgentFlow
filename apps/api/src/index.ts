@@ -631,6 +631,7 @@ app.get("/threads/:id/messages", async (c) => {
       firstName: contacts.firstName,
       lastName: contacts.lastName,
       email: contacts.email,
+      tags: contacts.tags,
       phone: contacts.phone,
       pendingReply: threads.pendingReply,
       unreadCount: threads.unreadCount,
@@ -683,12 +684,9 @@ app.get("/threads/:id/messages", async (c) => {
     .where(eq(messages.threadId, threadId))
     .orderBy(messages.sentAt);
 
-  const contactDetails = await fetchContactDetailsOnDemand(
-    c.env,
-    db,
-    threadRow.ghlLocationId,
-    threadRow.ghlContactId
-  );
+  const contactDetails =
+    toStoredContactDetails(threadRow.tags) ??
+    (await fetchContactDetailsOnDemand(c.env, db, threadRow.ghlLocationId, threadRow.ghlContactId));
 
   return c.json({
     thread: {
@@ -861,6 +859,80 @@ async function processWebhookEvent(env: Env, event: NormalizedGhlWebhookEvent) {
   await processInstallWebhookEvent(env, event);
 }
 
+type ContactIdentitySnapshot = {
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+  phone: string | null;
+  tags: string[] | null;
+};
+
+async function fetchContactProfileForWebhookIfNeeded(
+  env: Env,
+  db: ReturnType<typeof createDb>,
+  locationId: string,
+  ghlLocationId: string,
+  ghlContactId: string,
+  webhookIdentity: Omit<ContactIdentitySnapshot, "tags">
+) {
+  const existingContact = await getStoredContactIdentity(db, locationId, ghlContactId);
+  const webhookIncludesIdentity = hasAnyContactIdentity(webhookIdentity);
+  const existingHasIdentity = hasAnyContactIdentity(existingContact);
+  const existingHasTags = Array.isArray(existingContact?.tags);
+
+  if (webhookIncludesIdentity || (existingHasIdentity && existingHasTags)) {
+    return null;
+  }
+
+  return fetchContactProfileOnDemand(env, db, ghlLocationId, ghlContactId);
+}
+
+async function getStoredContactIdentity(
+  db: ReturnType<typeof createDb>,
+  locationId: string,
+  ghlContactId: string
+): Promise<ContactIdentitySnapshot | null> {
+  const [existingContact] = await db
+    .select({
+      firstName: contacts.firstName,
+      lastName: contacts.lastName,
+      email: contacts.email,
+      phone: contacts.phone,
+      tags: contacts.tags
+    })
+    .from(contacts)
+    .where(and(eq(contacts.locationId, locationId), eq(contacts.ghlContactId, ghlContactId)))
+    .limit(1);
+
+  if (!existingContact) {
+    return null;
+  }
+
+  return {
+    firstName: existingContact.firstName,
+    lastName: existingContact.lastName,
+    email: existingContact.email,
+    phone: existingContact.phone,
+    tags: normalizeStoredContactTags(existingContact.tags)
+  };
+}
+
+function hasAnyContactIdentity(
+  identity: Pick<ContactIdentitySnapshot, "firstName" | "lastName" | "email" | "phone"> | null | undefined
+) {
+  if (!identity) {
+    return false;
+  }
+  return Boolean(identity.firstName || identity.lastName || identity.email || identity.phone);
+}
+
+function normalizeStoredContactTags(value: unknown): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  return value.map(stringValue).map((tag) => tag.trim()).filter(Boolean);
+}
+
 async function processMessageWebhookEvent(env: Env, event: NormalizedGhlMessageWebhookEvent) {
   const db = createDb(env.DATABASE_URL);
   const now = new Date();
@@ -908,24 +980,40 @@ async function processMessageWebhookEvent(env: Env, event: NormalizedGhlMessageW
     throw new Error("Failed to upsert location");
   }
 
+  const contactProfile = await fetchContactProfileForWebhookIfNeeded(
+    env,
+    db,
+    location.id,
+    event.location.ghlLocationId,
+    event.contact.ghlContactId,
+    {
+      firstName: event.contact.firstName ?? null,
+      lastName: event.contact.lastName ?? null,
+      email: event.contact.email ?? null,
+      phone: event.contact.phone ?? null
+    }
+  );
+
   const [contact] = await db
     .insert(contacts)
     .values({
       locationId: location.id,
       ghlContactId: event.contact.ghlContactId,
-      firstName: event.contact.firstName ?? null,
-      lastName: event.contact.lastName ?? null,
-      email: event.contact.email ?? null,
-      phone: event.contact.phone ?? null,
+      firstName: event.contact.firstName ?? contactProfile?.firstName ?? null,
+      lastName: event.contact.lastName ?? contactProfile?.lastName ?? null,
+      email: event.contact.email ?? contactProfile?.email ?? null,
+      phone: event.contact.phone ?? contactProfile?.phone ?? null,
+      tags: contactProfile?.tags ?? null,
       updatedAt: now
     })
     .onConflictDoUpdate({
       target: [contacts.locationId, contacts.ghlContactId],
       set: {
-        firstName: event.contact.firstName ?? null,
-        lastName: event.contact.lastName ?? null,
-        email: event.contact.email ?? null,
-        phone: event.contact.phone ?? null,
+        firstName: sql`COALESCE(EXCLUDED.first_name, ${contacts.firstName})`,
+        lastName: sql`COALESCE(EXCLUDED.last_name, ${contacts.lastName})`,
+        email: sql`COALESCE(EXCLUDED.email, ${contacts.email})`,
+        phone: sql`COALESCE(EXCLUDED.phone, ${contacts.phone})`,
+        tags: sql`COALESCE(EXCLUDED.tags, ${contacts.tags})`,
         updatedAt: now
       }
     })
@@ -1042,16 +1130,42 @@ async function processAppointmentWebhookEvent(
 
   let contactId: string | null = null;
   if (event.contact.ghlContactId) {
+    const contactProfile = await fetchContactProfileForWebhookIfNeeded(
+      env,
+      db,
+      location.id,
+      event.location.ghlLocationId,
+      event.contact.ghlContactId,
+      {
+        firstName: null,
+        lastName: null,
+        email: null,
+        phone: null
+      }
+    );
+
     const [contact] = await db
       .insert(contacts)
       .values({
         locationId: location.id,
         ghlContactId: event.contact.ghlContactId,
+        firstName: contactProfile?.firstName ?? null,
+        lastName: contactProfile?.lastName ?? null,
+        email: contactProfile?.email ?? null,
+        phone: contactProfile?.phone ?? null,
+        tags: contactProfile?.tags ?? null,
         updatedAt: now
       })
       .onConflictDoUpdate({
         target: [contacts.locationId, contacts.ghlContactId],
-        set: { updatedAt: now }
+        set: {
+          firstName: sql`COALESCE(EXCLUDED.first_name, ${contacts.firstName})`,
+          lastName: sql`COALESCE(EXCLUDED.last_name, ${contacts.lastName})`,
+          email: sql`COALESCE(EXCLUDED.email, ${contacts.email})`,
+          phone: sql`COALESCE(EXCLUDED.phone, ${contacts.phone})`,
+          tags: sql`COALESCE(EXCLUDED.tags, ${contacts.tags})`,
+          updatedAt: now
+        }
       })
       .returning({ id: contacts.id });
     contactId = contact?.id ?? null;
@@ -1295,6 +1409,17 @@ async function fetchContactDetailsOnDemand(
   };
 }
 
+function toStoredContactDetails(tags: unknown): ContactOnDemandDetails | null {
+  const normalizedTags = normalizeStoredContactTags(tags);
+  if (!normalizedTags) {
+    return null;
+  }
+  return {
+    tags: normalizedTags,
+    customFields: []
+  };
+}
+
 type ContactProfileOnDemand = ContactOnDemandDetails & {
   firstName: string | null;
   lastName: string | null;
@@ -1475,7 +1600,8 @@ async function hydrateMissingContactFields(
         firstName: profile.firstName,
         lastName: profile.lastName,
         email: profile.email,
-        phone: profile.phone
+        phone: profile.phone,
+        tags: profile.tags
       };
       contactFieldMap.set(contactId, resolved);
       await updateContactIdentity(db, contactId, resolved);
@@ -1521,9 +1647,15 @@ async function getContactIdentityFromLatestMessage(
 async function updateContactIdentity(
   db: ReturnType<typeof createDb>,
   contactId: string,
-  identity: { firstName: string | null; lastName: string | null; email: string | null; phone: string | null }
+  identity: {
+    firstName: string | null;
+    lastName: string | null;
+    email: string | null;
+    phone: string | null;
+    tags?: string[] | null;
+  }
 ) {
-  const update: Record<string, string | Date> = { updatedAt: new Date() };
+  const update: Record<string, string | string[] | Date> = { updatedAt: new Date() };
   if (identity.firstName) {
     update.firstName = identity.firstName;
   }
@@ -1535,6 +1667,9 @@ async function updateContactIdentity(
   }
   if (identity.phone) {
     update.phone = identity.phone;
+  }
+  if (Array.isArray(identity.tags)) {
+    update.tags = identity.tags;
   }
 
   if (Object.keys(update).length > 1) {
