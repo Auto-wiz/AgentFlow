@@ -1,8 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { getApiBaseUrl } from "../../lib/api-base-url";
 
 export default function SettingsPage() {
+  const apiBaseUrl = getApiBaseUrl();
+  const goHighLevelConnectUrl = `${apiBaseUrl}/oauth/gohighlevel/start`;
+
   return (
     <section className="module-shell">
       <div className="panel" style={{ padding: 18 }}>
@@ -18,6 +22,9 @@ export default function SettingsPage() {
           <article className="placeholder-card">
             <strong>GoHighLevel setup</strong>
             <span className="muted">OAuth, connected locations, and token diagnostics</span>
+            <a className="button" href={goHighLevelConnectUrl}>
+              Connect GoHighLevel
+            </a>
             <Link className="button secondary" href="/debug">
               Open debug tools
             </Link>
