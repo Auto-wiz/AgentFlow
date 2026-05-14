@@ -46,7 +46,7 @@ export function AppChrome({ children }: { children: ReactNode }) {
         <header className="app-topbar panel">
           <div>
             <p className="eyebrow">GHL Agency Hub</p>
-            <h1>Fullscreen Dynamic</h1>
+            <h1>Agency workspace</h1>
           </div>
           <div className="app-topbar-actions">
             <button className="button secondary" type="button">
@@ -61,7 +61,6 @@ export function AppChrome({ children }: { children: ReactNode }) {
             <button className="button" type="button">
               Apply changes
             </button>
-            <ThemeToggle />
           </div>
         </header>
         <section className="app-page">{children}</section>

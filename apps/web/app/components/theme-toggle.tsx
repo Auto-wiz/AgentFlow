@@ -44,11 +44,13 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
 
   return (
     <button
-      className={`button secondary ${compact ? "theme-toggle-compact" : ""}`}
+      aria-label={mounted ? (theme === "light" ? "Switch to dark mode" : "Switch to light mode") : "Toggle theme"}
+      className={`button secondary theme-toggle-icon ${compact ? "theme-toggle-compact" : ""}`}
       onClick={toggleTheme}
+      title={mounted ? (theme === "light" ? "Dark mode" : "Light mode") : "Theme"}
       type="button"
     >
-      {mounted ? (theme === "light" ? "Dark mode" : "Light mode") : "Theme"}
+      {mounted ? (theme === "light" ? "☾" : "☀") : "◐"}
     </button>
   );
 }
