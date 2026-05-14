@@ -1212,7 +1212,7 @@ async function fetchContactProfileOnDemand(
 ): Promise<ContactProfileOnDemand | null> {
   const accessTokens = await getAccessTokensForLocation(env, db, ghlLocationId);
   for (const accessToken of accessTokens) {
-    const profile = await fetchContactProfileWithToken(env, ghlContactId, accessToken);
+    const profile = await fetchContactProfileWithToken(env, ghlLocationId, ghlContactId, accessToken);
     if (profile) {
       return profile;
     }
@@ -1223,33 +1223,42 @@ async function fetchContactProfileOnDemand(
 
 async function fetchContactProfileWithToken(
   env: Env,
+  ghlLocationId: string,
   ghlContactId: string,
   accessToken: string
 ): Promise<ContactProfileOnDemand | null> {
   try {
     const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
-    const response = await fetch(`${baseUrl}/contacts/${encodeURIComponent(ghlContactId)}`, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/json",
-        Version: "2021-07-28"
+    const requestUrls = [
+      `${baseUrl}/contacts/${encodeURIComponent(ghlContactId)}?locationId=${encodeURIComponent(ghlLocationId)}`,
+      `${baseUrl}/contacts/${encodeURIComponent(ghlContactId)}`
+    ];
+
+    for (const requestUrl of requestUrls) {
+      const response = await fetch(requestUrl, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+          Version: "2021-07-28"
+        }
+      });
+
+      if (!response.ok) {
+        continue;
       }
-    });
 
-    if (!response.ok) {
-      return null;
+      const data = asRecord(await response.json());
+      const contact = asRecord(data.contact ?? data);
+      return {
+        firstName: stringOrNull(contact.firstName),
+        lastName: stringOrNull(contact.lastName),
+        email: stringOrNull(contact.email),
+        phone: stringOrNull(contact.phone),
+        tags: toStringArray(contact.tags),
+        customFields: toCustomFields(contact.customFields ?? contact.customField)
+      };
     }
-
-    const data = asRecord(await response.json());
-    const contact = asRecord(data.contact ?? data);
-    return {
-      firstName: stringOrNull(contact.firstName),
-      lastName: stringOrNull(contact.lastName),
-      email: stringOrNull(contact.email),
-      phone: stringOrNull(contact.phone),
-      tags: toStringArray(contact.tags),
-      customFields: toCustomFields(contact.customFields ?? contact.customField)
-    };
+    return null;
   } catch (error) {
     console.warn("Failed to fetch GoHighLevel contact details", error);
     return null;
