@@ -2262,7 +2262,7 @@ async function getAccessTokensForLocation(
   db: ReturnType<typeof createDb>,
   ghlLocationId: string
 ) {
-  const candidates: Array<string | null | undefined> = [env.GHL_API_TOKEN?.trim()];
+  const candidates: Array<string | null | undefined> = [];
 
   const [locationInstallation] = await db
     .select({
@@ -2276,12 +2276,11 @@ async function getAccessTokensForLocation(
 
   const companyInstallation = await getCompanyOAuthInstallationForLocation(db, ghlLocationId);
   candidates.push(companyInstallation?.accessToken);
-  if (!candidates.some((token) => token?.trim())) {
-    const fallbackCompanyInstallations = await getRecentCompanyOAuthInstallations(db);
-    for (const installation of fallbackCompanyInstallations) {
-      candidates.push(installation.accessToken);
-    }
+  const fallbackCompanyInstallations = await getRecentCompanyOAuthInstallations(db);
+  for (const installation of fallbackCompanyInstallations) {
+    candidates.push(installation.accessToken);
   }
+  candidates.push(env.GHL_API_TOKEN?.trim());
 
   const deduped = new Set<string>();
   for (const token of candidates) {
@@ -2290,7 +2289,23 @@ async function getAccessTokensForLocation(
       deduped.add(normalized);
     }
   }
-  return Array.from(deduped);
+  const resolved = Array.from(deduped);
+  // #region agent log
+  writeDebugLog({
+    hypothesisId: "E",
+    location: "index.ts:getAccessTokensForLocation",
+    message: "resolved_access_tokens_for_location",
+    data: {
+      ghlLocationId,
+      tokenCount: resolved.length,
+      hasLocationInstallationToken: Boolean(locationInstallation?.accessToken?.trim()),
+      hasMappedCompanyInstallationToken: Boolean(companyInstallation?.accessToken?.trim()),
+      fallbackCompanyTokenCount: fallbackCompanyInstallations.length,
+      hasEnvToken: Boolean(env.GHL_API_TOKEN?.trim())
+    }
+  });
+  // #endregion
+  return resolved;
 }
 
 async function fetchLocationNameOnDemand(
@@ -3026,7 +3041,7 @@ async function refreshOAuthAccessTokensForLocation(
     }
   }
 
-  const installations = await db
+  let installations = await db
     .select({
       id: ghlOAuthInstallations.id,
       refreshToken: ghlOAuthInstallations.refreshToken,
@@ -3037,6 +3052,21 @@ async function refreshOAuthAccessTokensForLocation(
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
     .limit(8);
 
+  let usedGlobalFallbackInstallations = false;
+  if (installations.length === 0) {
+    installations = await db
+      .select({
+        id: ghlOAuthInstallations.id,
+        refreshToken: ghlOAuthInstallations.refreshToken,
+        userType: ghlOAuthInstallations.userType
+      })
+      .from(ghlOAuthInstallations)
+      .where(eq(ghlOAuthInstallations.userType, "Company"))
+      .orderBy(desc(ghlOAuthInstallations.updatedAt))
+      .limit(8);
+    usedGlobalFallbackInstallations = true;
+  }
+
   // #region agent log
   writeDebugLog({
     hypothesisId: "B",
@@ -3045,7 +3075,8 @@ async function refreshOAuthAccessTokensForLocation(
     data: {
       ghlLocationId,
       installationCount: installations.length,
-      userTypes: installations.map((installation) => installation.userType)
+      userTypes: installations.map((installation) => installation.userType),
+      usedGlobalFallbackInstallations
     }
   });
   // #endregion
