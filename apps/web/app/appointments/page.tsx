@@ -102,58 +102,66 @@ export default function AppointmentsPage() {
   );
 
   return (
-    <section className="split-layout">
-      <aside className="panel subaccount-sidebar">
-        <p className="eyebrow">Subaccounts</p>
-        <h3 style={{ marginTop: 8 }}>Appointments</h3>
-        <div className="subaccount-list">
-          <button
-            className={`subaccount-item ${selectedLocationId ? "" : "active"}`}
-            onClick={() => setSelectedLocationId("")}
-            type="button"
-          >
-            <strong>All tracked subaccounts</strong>
-            <span className="muted">{totalAppointments} appointments</span>
-          </button>
-          {subaccounts.map((subaccount) => (
+    <section className="module-shell">
+      <div className="panel" style={{ padding: 18 }}>
+        <p className="eyebrow">Calendar module</p>
+        <h2 style={{ marginTop: 8 }}>Appointments</h2>
+        <p className="muted">Vista en formato módulo, siguiendo el shell general del workspace.</p>
+      </div>
+
+      <div className="split-layout">
+        <aside className="panel subaccount-sidebar">
+          <p className="eyebrow">Subaccounts</p>
+          <h3 style={{ marginTop: 8 }}>Appointments</h3>
+          <div className="subaccount-list">
             <button
-              className={`subaccount-item ${
-                selectedLocationId === subaccount.locationId ? "active" : ""
-              }`}
-              key={subaccount.locationId}
-              onClick={() => setSelectedLocationId(subaccount.locationId)}
+              className={`subaccount-item ${selectedLocationId ? "" : "active"}`}
+              onClick={() => setSelectedLocationId("")}
               type="button"
             >
-              <strong>{formatLocationName(subaccount.locationName, subaccount.ghlLocationId)}</strong>
-              <span className="muted">{subaccount.appointmentCount} appointments</span>
+              <strong>All tracked subaccounts</strong>
+              <span className="muted">{totalAppointments} appointments</span>
             </button>
-          ))}
-        </div>
-      </aside>
+            {subaccounts.map((subaccount) => (
+              <button
+                className={`subaccount-item ${
+                  selectedLocationId === subaccount.locationId ? "active" : ""
+                }`}
+                key={subaccount.locationId}
+                onClick={() => setSelectedLocationId(subaccount.locationId)}
+                type="button"
+              >
+                <strong>{formatLocationName(subaccount.locationName, subaccount.ghlLocationId)}</strong>
+                <span className="muted">{subaccount.appointmentCount} appointments</span>
+              </button>
+            ))}
+          </div>
+        </aside>
 
-      <div className="panel" style={{ padding: 18 }}>
-        {loading ? <div className="empty muted">Loading appointments...</div> : null}
-        {error ? <div className="empty">{error}</div> : null}
-        {!loading && !error && appointments.length === 0 ? (
-          <div className="empty muted">No appointments found.</div>
-        ) : null}
-        <div className="thread-list">
-          {appointments.map((appointment) => (
-            <article className="thread-card" key={appointment.id}>
-              <strong>{appointment.title ?? "Untitled appointment"}</strong>
-              <span className="muted">
-                {formatLocationName(appointment.locationName, appointment.ghlLocationId)}
-              </span>
-              <span className="muted">
-                Contact: {appointment.contactName} - Starts {formatDate(appointment.startTime)}
-              </span>
-              <div className="badge-row">
-                <span className="badge">{appointment.status ?? "status unknown"}</span>
-                <span className="badge">GHL: {appointment.ghlAppointmentId}</span>
-                <span className="badge">Updated: {formatDate(appointment.updatedAt)}</span>
-              </div>
-            </article>
-          ))}
+        <div className="panel" style={{ padding: 18 }}>
+          {loading ? <div className="empty muted">Loading appointments...</div> : null}
+          {error ? <div className="empty">{error}</div> : null}
+          {!loading && !error && appointments.length === 0 ? (
+            <div className="empty muted">No appointments found.</div>
+          ) : null}
+          <div className="thread-list">
+            {appointments.map((appointment) => (
+              <article className="thread-card" key={appointment.id}>
+                <strong>{appointment.title ?? "Untitled appointment"}</strong>
+                <span className="muted">
+                  {formatLocationName(appointment.locationName, appointment.ghlLocationId)}
+                </span>
+                <span className="muted">
+                  Contact: {appointment.contactName} - Starts {formatDate(appointment.startTime)}
+                </span>
+                <div className="badge-row">
+                  <span className="badge">{appointment.status ?? "status unknown"}</span>
+                  <span className="badge">GHL: {appointment.ghlAppointmentId}</span>
+                  <span className="badge">Updated: {formatDate(appointment.updatedAt)}</span>
+                </div>
+              </article>
+            ))}
+          </div>
         </div>
       </div>
     </section>
