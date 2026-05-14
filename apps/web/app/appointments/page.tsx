@@ -1,9 +1,10 @@
 "use client";
 
-import type { AppointmentSummary } from "@agentflow/shared";
+import type { AppointmentSummary, SubaccountOverview } from "@agentflow/shared";
 import { useEffect, useState } from "react";
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "https://api.agentflow.autowiz.net";
+const viewerKey = "default";
 
 function formatLocationName(locationName: string | null, ghlLocationId: string) {
   return locationName ? `${locationName} (${ghlLocationId})` : ghlLocationId;
@@ -18,7 +19,8 @@ function formatDate(value: string | null) {
 
 export default function AppointmentsPage() {
   const [appointments, setAppointments] = useState<AppointmentSummary[]>([]);
-  const [locationId, setLocationId] = useState("");
+  const [subaccounts, setSubaccounts] = useState<SubaccountOverview[]>([]);
+  const [selectedLocationId, setSelectedLocationId] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,17 +31,49 @@ export default function AppointmentsPage() {
       setLoading(true);
       setError(null);
       setAppointments([]);
-      const params = new URLSearchParams();
-      if (locationId.trim()) {
-        params.set("locationId", locationId.trim());
-      }
 
       try {
+        const subaccountsResponse = await fetch(
+          `${apiBaseUrl}/subaccounts/overview?surface=appointments`,
+          {
+            signal: controller.signal,
+            headers: {
+              "x-viewer-key": viewerKey
+            }
+          }
+        );
+        if (!subaccountsResponse.ok) {
+          throw new Error("Failed to load subaccounts");
+        }
+        const subaccountsData = (await subaccountsResponse.json()) as {
+          subaccounts: SubaccountOverview[];
+        };
+        setSubaccounts(subaccountsData.subaccounts);
+
+        let nextSelectedLocationId = selectedLocationId;
+        if (
+          nextSelectedLocationId &&
+          !subaccountsData.subaccounts.some(
+            (subaccount) => subaccount.locationId === nextSelectedLocationId
+          )
+        ) {
+          nextSelectedLocationId = "";
+          setSelectedLocationId("");
+        }
+
+        const params = new URLSearchParams();
+        if (nextSelectedLocationId) {
+          params.set("locationId", nextSelectedLocationId);
+        }
+
         const url = params.toString()
           ? `${apiBaseUrl}/appointments?${params.toString()}`
           : `${apiBaseUrl}/appointments`;
         const response = await fetch(url, {
-          signal: controller.signal
+          signal: controller.signal,
+          headers: {
+            "x-viewer-key": viewerKey
+          }
         });
         if (!response.ok) {
           throw new Error("Failed to load appointments");
@@ -59,18 +93,42 @@ export default function AppointmentsPage() {
 
     loadAppointments();
     return () => controller.abort();
-  }, [locationId]);
+  }, [selectedLocationId]);
+
+  const totalAppointments = subaccounts.reduce(
+    (sum, subaccount) => sum + subaccount.appointmentCount,
+    0
+  );
 
   return (
-    <section>
-      <div className="toolbar">
-        <input
-          aria-label="GoHighLevel location ID"
-          placeholder="Filter by locationId"
-          value={locationId}
-          onChange={(event) => setLocationId(event.target.value)}
-        />
-      </div>
+    <section className="split-layout">
+      <aside className="panel subaccount-sidebar">
+        <p className="eyebrow">Subaccounts</p>
+        <h3 style={{ marginTop: 8 }}>Appointments</h3>
+        <div className="subaccount-list">
+          <button
+            className={`subaccount-item ${selectedLocationId ? "" : "active"}`}
+            onClick={() => setSelectedLocationId("")}
+            type="button"
+          >
+            <strong>All tracked subaccounts</strong>
+            <span className="muted">{totalAppointments} appointments</span>
+          </button>
+          {subaccounts.map((subaccount) => (
+            <button
+              className={`subaccount-item ${
+                selectedLocationId === subaccount.locationId ? "active" : ""
+              }`}
+              key={subaccount.locationId}
+              onClick={() => setSelectedLocationId(subaccount.locationId)}
+              type="button"
+            >
+              <strong>{formatLocationName(subaccount.locationName, subaccount.ghlLocationId)}</strong>
+              <span className="muted">{subaccount.appointmentCount} appointments</span>
+            </button>
+          ))}
+        </div>
+      </aside>
 
       <div className="panel" style={{ padding: 18 }}>
         {loading ? <div className="empty muted">Loading appointments...</div> : null}

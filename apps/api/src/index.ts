@@ -8,6 +8,7 @@ import {
   locations,
   messages,
   threads,
+  userSubaccountVisibilities,
   webhookEvents
 } from "@agentflow/db";
 import type {
@@ -20,7 +21,7 @@ import type {
   NormalizedGhlMessageWebhookEvent,
   NormalizedGhlWebhookEvent
 } from "@agentflow/shared";
-import { and, desc, eq, or, sql } from "drizzle-orm";
+import { and, desc, eq, notInArray, or, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -65,7 +66,7 @@ app.use(
   cors({
     origin: "*",
     allowMethods: ["GET", "POST", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization", "x-ghl-access-token"]
+    allowHeaders: ["Content-Type", "Authorization", "x-ghl-access-token", "x-viewer-key"]
   })
 );
 
@@ -277,6 +278,8 @@ app.get("/threads", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   const pendingReply = c.req.query("pendingReply");
   const locationId = c.req.query("locationId");
+  const viewerKey = getViewerKey(c);
+  const hiddenLocationIds = await getHiddenLocationIdsForViewer(db, viewerKey);
   const filters = [];
 
   if (pendingReply === "true") {
@@ -289,6 +292,10 @@ app.get("/threads", async (c) => {
       locationFilters.push(eq(threads.locationId, locationId));
     }
     filters.push(or(...locationFilters));
+  }
+
+  if (hiddenLocationIds.length > 0) {
+    filters.push(notInArray(threads.locationId, hiddenLocationIds));
   }
 
   let query = db
@@ -351,6 +358,9 @@ app.get("/threads", async (c) => {
 app.get("/appointments", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   const locationId = c.req.query("locationId");
+  const viewerKey = getViewerKey(c);
+  const hiddenLocationIds = await getHiddenLocationIdsForViewer(db, viewerKey);
+  const filters = [];
 
   let query = db
     .select({
@@ -381,7 +391,15 @@ app.get("/appointments", async (c) => {
     if (isUuid(locationId)) {
       locationFilters.push(eq(appointments.locationId, locationId));
     }
-    query = query.where(or(...locationFilters));
+    filters.push(or(...locationFilters));
+  }
+
+  if (hiddenLocationIds.length > 0) {
+    filters.push(notInArray(appointments.locationId, hiddenLocationIds));
+  }
+
+  if (filters.length > 0) {
+    query = query.where(and(...filters));
   }
 
   const rows = await query.orderBy(desc(appointments.startTime), desc(appointments.updatedAt)).limit(200);
@@ -441,6 +459,119 @@ app.get("/locations", async (c) => {
       agencyName: row.agencyName,
       updatedAt: row.updatedAt.toISOString()
     }))
+  });
+});
+
+app.get("/subaccounts/overview", async (c) => {
+  const db = createDb(c.env.DATABASE_URL);
+  const viewerKey = getViewerKey(c);
+  const surface = c.req.query("surface") ?? "all";
+
+  const [locationRows, pendingRows, appointmentRows, visibilityRows] = await Promise.all([
+    db
+      .select({
+        locationId: locations.id,
+        ghlLocationId: locations.ghlLocationId,
+        locationName: locations.name,
+        agencyId: locations.agencyId,
+        agencyName: agencies.name
+      })
+      .from(locations)
+      .leftJoin(agencies, eq(locations.agencyId, agencies.id))
+      .orderBy(locations.ghlLocationId),
+    db
+      .select({
+        locationId: threads.locationId,
+        count: sql<number>`count(*)::int`
+      })
+      .from(threads)
+      .where(eq(threads.pendingReply, true))
+      .groupBy(threads.locationId),
+    db
+      .select({
+        locationId: appointments.locationId,
+        count: sql<number>`count(*)::int`
+      })
+      .from(appointments)
+      .groupBy(appointments.locationId),
+    db
+      .select({
+        locationId: userSubaccountVisibilities.locationId,
+        isVisible: userSubaccountVisibilities.isVisible
+      })
+      .from(userSubaccountVisibilities)
+      .where(eq(userSubaccountVisibilities.userKey, viewerKey))
+  ]);
+
+  const pendingByLocation = new Map(pendingRows.map((row) => [row.locationId, Number(row.count)]));
+  const appointmentsByLocation = new Map(
+    appointmentRows.map((row) => [row.locationId, Number(row.count)])
+  );
+  const visibilityByLocation = new Map(visibilityRows.map((row) => [row.locationId, row.isVisible]));
+
+  const subaccounts = locationRows
+    .map((row) => ({
+      locationId: row.locationId,
+      ghlLocationId: row.ghlLocationId,
+      locationName: row.locationName,
+      agencyId: row.agencyId,
+      agencyName: row.agencyName,
+      pendingCount: pendingByLocation.get(row.locationId) ?? 0,
+      appointmentCount: appointmentsByLocation.get(row.locationId) ?? 0,
+      visible: visibilityByLocation.get(row.locationId) ?? true
+    }))
+    .filter((row) => {
+      if (surface === "threads") {
+        return row.visible && row.pendingCount > 0;
+      }
+      if (surface === "appointments") {
+        return row.visible && row.appointmentCount > 0;
+      }
+      return true;
+    });
+
+  return c.json({
+    viewerKey,
+    subaccounts
+  });
+});
+
+app.post("/subaccounts/visibility", async (c) => {
+  const db = createDb(c.env.DATABASE_URL);
+  const viewerKey = getViewerKey(c);
+  const body = asRecord(await c.req.json().catch(() => ({})));
+  const locationId = stringValue(body.locationId).trim();
+  const visible =
+    typeof body.visible === "boolean"
+      ? body.visible
+      : stringValue(body.visible).toLowerCase() !== "false";
+
+  if (!isUuid(locationId)) {
+    return c.json({ error: "Invalid locationId" }, 400);
+  }
+
+  const now = new Date();
+  await db
+    .insert(userSubaccountVisibilities)
+    .values({
+      userKey: viewerKey,
+      locationId,
+      isVisible: visible,
+      updatedAt: now
+    })
+    .onConflictDoUpdate({
+      target: [userSubaccountVisibilities.userKey, userSubaccountVisibilities.locationId],
+      set: {
+        isVisible: visible,
+        updatedAt: now
+      }
+    });
+
+  return c.json({
+    ok: true,
+    viewerKey,
+    locationId,
+    visible
   });
 });
 
@@ -2083,6 +2214,30 @@ function stringValue(value: unknown): string {
 function stringOrNull(value: unknown): string | null {
   const result = stringValue(value).trim();
   return result ? result : null;
+}
+
+function getViewerKey(c: Context<HonoBindings>) {
+  const viewerHeader = c.req.header("x-viewer-key");
+  const viewerQuery = c.req.query("viewerKey");
+  return (viewerHeader ?? viewerQuery ?? "default").trim() || "default";
+}
+
+async function getHiddenLocationIdsForViewer(
+  db: ReturnType<typeof createDb>,
+  viewerKey: string
+) {
+  const hiddenRows = await db
+    .select({
+      locationId: userSubaccountVisibilities.locationId
+    })
+    .from(userSubaccountVisibilities)
+    .where(
+      and(
+        eq(userSubaccountVisibilities.userKey, viewerKey),
+        eq(userSubaccountVisibilities.isVisible, false)
+      )
+    );
+  return hiddenRows.map((row) => row.locationId);
 }
 
 function isUuid(value: string) {

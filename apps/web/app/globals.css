@@ -177,3 +177,70 @@ input {
   padding: 12px;
   white-space: pre-wrap;
 }
+
+.split-layout {
+  align-items: start;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 280px minmax(0, 1fr);
+}
+
+.subaccount-sidebar {
+  max-height: calc(100vh - 120px);
+  overflow: auto;
+  padding: 16px;
+  position: sticky;
+  top: 16px;
+}
+
+.subaccount-list {
+  display: grid;
+  gap: 10px;
+}
+
+.subaccount-item {
+  background: #f8faff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  text-align: left;
+}
+
+.subaccount-item.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.subaccounts-config-list {
+  display: grid;
+  gap: 10px;
+}
+
+.subaccount-config-row {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.subaccount-config-row input[type="checkbox"] {
+  height: 18px;
+  width: 18px;
+}
+
+@media (max-width: 980px) {
+  .split-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .subaccount-sidebar {
+    max-height: none;
+    position: static;
+  }
+}
