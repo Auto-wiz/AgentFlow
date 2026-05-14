@@ -34,6 +34,7 @@ body {
   margin: 0;
   background: var(--background);
   color: var(--foreground);
+  min-height: 100vh;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
@@ -49,12 +50,6 @@ input {
   font: inherit;
 }
 
-.shell {
-  margin: 0 auto;
-  max-width: 1120px;
-  padding: 32px 20px 56px;
-}
-
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -62,12 +57,96 @@ input {
   box-shadow: var(--shadow);
 }
 
-.header {
+.app-shell {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.app-sidebar {
+  background: var(--rail);
+  border-right: 1px solid rgb(255 255 255 / 6%);
   display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 10px;
+}
+
+.app-brand {
   align-items: center;
+  background: rgb(125 135 255 / 26%);
+  border: 1px solid rgb(125 135 255 / 45%);
+  border-radius: 14px;
+  color: #fff;
+  display: flex;
+  font-weight: 700;
+  justify-content: center;
+  min-height: 44px;
+}
+
+.app-sidebar-nav {
+  display: grid;
+  gap: 8px;
+}
+
+.app-sidebar-link {
+  align-items: center;
+  border-radius: 12px;
+  color: #c6cee5;
+  display: flex;
+  font-size: 11px;
+  font-weight: 700;
+  justify-content: center;
+  min-height: 40px;
+  transition: background 0.15s ease;
+}
+
+.app-sidebar-link:hover {
+  background: rgb(255 255 255 / 9%);
+}
+
+.app-sidebar-link.active {
+  background: rgb(125 135 255 / 26%);
+  color: #fff;
+}
+
+.app-sidebar-footer {
+  margin-top: auto;
+}
+
+.app-main {
+  padding: 18px;
+}
+
+.app-topbar {
+  align-items: center;
+  display: flex;
   justify-content: space-between;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+}
+
+.app-topbar h1 {
+  font-size: 22px;
+  margin: 6px 0 0;
+}
+
+.app-topbar-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
   gap: 16px;
-  margin-bottom: 24px;
+}
+
+.app-page {
+  min-height: calc(100vh - 124px);
+}
+
+.theme-toggle-compact {
+  border-radius: 12px;
+  font-size: 11px;
+  padding: 8px 10px;
+  width: 100%;
 }
 
 .eyebrow {
@@ -108,8 +187,10 @@ input {
 }
 
 .toolbar input {
+  background: var(--panel-soft);
   border: 1px solid var(--border);
   border-radius: 999px;
+  color: var(--foreground);
   min-width: 260px;
   padding: 10px 14px;
 }
@@ -129,7 +210,7 @@ input {
 
 .thread-card.pending {
   border-color: var(--accent);
-  background: linear-gradient(90deg, var(--accent-soft), white 45%);
+  background: linear-gradient(90deg, var(--accent-soft), var(--panel) 45%);
 }
 
 .badge-row {
@@ -139,7 +220,7 @@ input {
 }
 
 .badge {
-  background: #eef1f7;
+  background: var(--panel-soft);
   border-radius: 999px;
   color: var(--muted);
   font-size: 12px;
@@ -255,38 +336,8 @@ input {
   align-items: stretch;
   display: grid;
   gap: 12px;
-  grid-template-columns: 64px 240px 310px minmax(380px, 1fr) 290px;
+  grid-template-columns: 240px 310px minmax(360px, 1fr) 290px;
   min-height: 72vh;
-}
-
-.inbox-nav-rail {
-  align-items: center;
-  background: var(--rail);
-  border-color: transparent;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  justify-content: flex-start;
-  padding: 10px 8px;
-}
-
-.inbox-rail-button {
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 12px;
-  color: #c5ccdf;
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 10px 6px;
-  text-transform: uppercase;
-  width: 100%;
-}
-
-.inbox-rail-button.active {
-  background: rgb(125 135 255 / 22%);
-  border-color: rgb(125 135 255 / 38%);
-  color: #fff;
 }
 
 .inbox-subaccounts,
@@ -432,7 +483,72 @@ input {
   margin: 0;
 }
 
+.module-shell {
+  display: grid;
+  gap: 14px;
+}
+
+.placeholder-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.placeholder-card {
+  background: var(--panel-soft);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  display: grid;
+  gap: 8px;
+  min-height: 98px;
+  padding: 14px;
+}
+
 @media (max-width: 980px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .app-sidebar {
+    border-right: 0;
+    border-top: 1px solid rgb(255 255 255 / 6%);
+    bottom: 0;
+    flex-direction: row;
+    left: 0;
+    position: fixed;
+    right: 0;
+    z-index: 40;
+  }
+
+  .app-brand {
+    min-width: 42px;
+  }
+
+  .app-sidebar-nav {
+    display: flex;
+    flex: 1;
+  }
+
+  .app-sidebar-link {
+    flex: 1;
+    min-height: 42px;
+  }
+
+  .app-sidebar-footer {
+    margin-top: 0;
+    width: 110px;
+  }
+
+  .app-main {
+    padding: 14px 14px 90px;
+  }
+
+  .app-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
   .split-layout {
     grid-template-columns: 1fr;
   }
@@ -444,11 +560,6 @@ input {
 
   .ghl-inbox-shell {
     grid-template-columns: 1fr;
-  }
-
-  .inbox-nav-rail {
-    flex-direction: row;
-    justify-content: center;
   }
 
   .inbox-message-bubble {

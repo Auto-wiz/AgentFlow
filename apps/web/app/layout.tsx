@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { ThemeToggle } from "./components/theme-toggle";
+import { AppChrome } from "./components/app-chrome";
 
 import "./globals.css";
 
@@ -13,30 +12,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
-        <main className="shell">
-          <header className="header">
-            <Link href="/">
-              <div className="eyebrow">AgentFlow</div>
-              <h1>Unified agency inbox</h1>
-            </Link>
-            <div className="badge-row">
-              <Link className="button secondary" href="/threads">
-                Pending replies
-              </Link>
-              <Link className="button secondary" href="/appointments">
-                Appointments
-              </Link>
-              <Link className="button secondary" href="/subaccounts">
-                Subaccounts
-              </Link>
-              <Link className="button secondary" href="/debug">
-                Debug
-              </Link>
-              <ThemeToggle />
-            </div>
-          </header>
-          {children}
-        </main>
+        <AppChrome>{children}</AppChrome>
       </body>
     </html>
   );

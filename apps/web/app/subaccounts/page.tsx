@@ -99,7 +99,13 @@ export default function SubaccountsPage() {
   }
 
   return (
-    <section>
+    <section className="module-shell">
+      <div className="panel" style={{ padding: 18 }}>
+        <p className="eyebrow">Management module</p>
+        <h2 style={{ marginTop: 8 }}>Subaccounts tracking</h2>
+        <p className="muted">Configuración visual integrada al shell general del dashboard.</p>
+      </div>
+
       <div className="panel" style={{ padding: 18, marginBottom: 12 }}>
         <p className="eyebrow">Subaccounts</p>
         <h2 style={{ marginTop: 8 }}>Track and filter visible subaccounts</h2>

@@ -44,7 +44,13 @@ export default function DebugPage() {
   }
 
   return (
-    <section>
+    <section className="module-shell">
+      <div className="panel" style={{ padding: 18 }}>
+        <p className="eyebrow">Tools module</p>
+        <h2 style={{ marginTop: 8 }}>Debug workspace</h2>
+        <p className="muted">Módulo técnico dentro de la misma estructura visual del front.</p>
+      </div>
+
       <div className="panel" style={{ padding: 20, marginBottom: 16 }}>
         <p className="eyebrow">Debug tools</p>
         <h2 style={{ marginTop: 8 }}>GET /locations/:id (direct from frontend)</h2>

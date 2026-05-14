@@ -172,12 +172,6 @@ export default function ThreadsPage() {
 
   return (
     <section className="ghl-inbox-shell">
-      <aside className="inbox-nav-rail panel">
-        <button className="inbox-rail-button active">IN</button>
-        <button className="inbox-rail-button">DM</button>
-        <button className="inbox-rail-button">AT</button>
-      </aside>
-
       <aside className="panel inbox-subaccounts">
         <p className="eyebrow">Advanced filters</p>
         <h3 style={{ marginTop: 8 }}>Subaccounts</h3>

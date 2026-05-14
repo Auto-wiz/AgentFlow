@@ -25,7 +25,7 @@ function applyTheme(theme: Theme) {
   window.localStorage.setItem(storageKey, theme);
 }
 
-export function ThemeToggle() {
+export function ThemeToggle({ compact = false }: { compact?: boolean }) {
   const [theme, setTheme] = useState<Theme>("light");
   const [mounted, setMounted] = useState(false);
 
@@ -43,7 +43,11 @@ export function ThemeToggle() {
   }
 
   return (
-    <button className="button secondary" onClick={toggleTheme} type="button">
+    <button
+      className={`button secondary ${compact ? "theme-toggle-compact" : ""}`}
+      onClick={toggleTheme}
+      type="button"
+    >
       {mounted ? (theme === "light" ? "Dark mode" : "Light mode") : "Theme"}
     </button>
   );
