@@ -4,6 +4,30 @@ import {
   appointments,
   contacts,
   ghlOAuthInstallations,
+  ghlWebhookAppMirror,
+  ghlWebhookAppointmentMirror,
+  ghlWebhookAssociationMirror,
+  ghlWebhookCampaignMirror,
+  ghlWebhookContactMirror,
+  ghlWebhookConversationMirror,
+  ghlWebhookEmailStatsMirror,
+  ghlWebhookExternalAuthMirror,
+  ghlWebhookInvoiceMirror,
+  ghlWebhookLocationMirror,
+  ghlWebhookMiscMirror,
+  ghlWebhookMirrorEvents,
+  ghlWebhookNoteMirror,
+  ghlWebhookObjectSchemaMirror,
+  ghlWebhookOpportunityMirror,
+  ghlWebhookOrderMirror,
+  ghlWebhookPriceMirror,
+  ghlWebhookProductMirror,
+  ghlWebhookRecordMirror,
+  ghlWebhookRelationMirror,
+  ghlWebhookSaasPlanMirror,
+  ghlWebhookTaskMirror,
+  ghlWebhookUserMirror,
+  ghlWebhookVoiceAiMirror,
   invoices,
   locations,
   messages,
@@ -61,6 +85,125 @@ type GhlOAuthTokenResponse = {
   raw: unknown;
 };
 
+type WebhookMirrorCategory =
+  | "app"
+  | "appointment"
+  | "association"
+  | "campaign"
+  | "contact"
+  | "conversation"
+  | "external_auth"
+  | "invoice"
+  | "email_stats"
+  | "location"
+  | "note"
+  | "object_schema"
+  | "opportunity"
+  | "order"
+  | "price"
+  | "product"
+  | "record"
+  | "relation"
+  | "saas_plan"
+  | "task"
+  | "user"
+  | "voice_ai"
+  | "misc";
+
+const supportedWebhookEvents = [
+  "AppInstall",
+  "AppUninstall",
+  "AppUpdate",
+  "AppointmentCreate",
+  "AppointmentDelete",
+  "AppointmentUpdate",
+  "AssociationCreate",
+  "AssociationDelete",
+  "AssociationUpdate",
+  "CampaignStatusUpdate",
+  "ContactCreate",
+  "ContactUpdate",
+  "ContactDelete",
+  "ContactDndUpdate",
+  "ContactTagUpdate",
+  "ConversationUnreadWebhook",
+  "ConversationUpdate",
+  "ExternalAuthConnected",
+  "InboundMessage",
+  "OutboundMessage",
+  "ProviderOutboundMessage",
+  "InvoiceCreate",
+  "InvoiceDelete",
+  "InvoicePaid",
+  "InvoicePartiallyPaid",
+  "InvoiceSent",
+  "InvoiceUpdate",
+  "InvoiceVoid",
+  "LCEmailStats",
+  "LocationCreate",
+  "LocationUpdate",
+  "NoteCreate",
+  "NoteDelete",
+  "NoteUpdate",
+  "ObjectSchemaCreate",
+  "ObjectSchemaUpdate",
+  "OpportunityAssignedToUpdate",
+  "OpportunityCreate",
+  "OpportunityDelete",
+  "OpportunityMonetaryValueUpdate",
+  "OpportunityStageUpdate",
+  "OpportunityStatusUpdate",
+  "OpportunityUpdate",
+  "OrderCreate",
+  "OrderStatusUpdate",
+  "PlanChange",
+  "PriceCreate",
+  "PriceDelete",
+  "PriceUpdate",
+  "ProductCreate",
+  "ProductDelete",
+  "ProductUpdate",
+  "RecordCreate",
+  "RecordDelete",
+  "RecordUpdate",
+  "RelationCreate",
+  "RelationDelete",
+  "SaaSPlanCreate",
+  "TaskComplete",
+  "TaskCreate",
+  "TaskDelete",
+  "UserCreate",
+  "UserDelete",
+  "UserUpdate",
+  "VoiceAiCallEnd"
+] as const;
+
+const mirrorTableByCategory = {
+  app: ghlWebhookAppMirror,
+  appointment: ghlWebhookAppointmentMirror,
+  association: ghlWebhookAssociationMirror,
+  campaign: ghlWebhookCampaignMirror,
+  contact: ghlWebhookContactMirror,
+  conversation: ghlWebhookConversationMirror,
+  external_auth: ghlWebhookExternalAuthMirror,
+  invoice: ghlWebhookInvoiceMirror,
+  email_stats: ghlWebhookEmailStatsMirror,
+  location: ghlWebhookLocationMirror,
+  note: ghlWebhookNoteMirror,
+  object_schema: ghlWebhookObjectSchemaMirror,
+  opportunity: ghlWebhookOpportunityMirror,
+  order: ghlWebhookOrderMirror,
+  price: ghlWebhookPriceMirror,
+  product: ghlWebhookProductMirror,
+  record: ghlWebhookRecordMirror,
+  relation: ghlWebhookRelationMirror,
+  saas_plan: ghlWebhookSaasPlanMirror,
+  task: ghlWebhookTaskMirror,
+  user: ghlWebhookUserMirror,
+  voice_ai: ghlWebhookVoiceAiMirror,
+  misc: ghlWebhookMiscMirror
+} satisfies Record<WebhookMirrorCategory, any>;
+
 const app = new Hono<HonoBindings>();
 
 app.use(
@@ -79,21 +222,7 @@ app.get("/webhooks/gohighlevel", (c) =>
     provider: "gohighlevel",
     defaultWebhookUrl: `${new URL(c.req.url).origin}/webhooks/gohighlevel`,
     method: "POST",
-    events: [
-      "INSTALL",
-      "InboundMessage",
-      "OutboundMessage",
-      "AppointmentCreate",
-      "AppointmentUpdate",
-      "AppointmentDelete",
-      "InvoiceCreate",
-      "InvoiceUpdate",
-      "InvoiceSent",
-      "InvoicePaid",
-      "InvoicePartiallyPaid",
-      "InvoiceVoid",
-      "InvoiceDelete"
-    ],
+    events: supportedWebhookEvents,
     callsExcluded: true
   })
 );
@@ -238,20 +367,58 @@ app.post("/webhooks/gohighlevel", async (c) => {
     return c.json({ accepted: true, verified: false, ignored: true }, 202);
   }
 
+  const db = createDb(c.env.DATABASE_URL);
   let payload: unknown;
   try {
     payload = JSON.parse(rawBody);
-  } catch {
-    return c.json({ accepted: true, ignored: true, reason: "invalid_json" }, 202);
+  } catch (error) {
+    const invalidMirrorEvent = await buildWebhookMirrorRecord({
+      payload: { invalidJson: true },
+      rawBody,
+      headers: c.req.raw.headers,
+      webhookType: "invalid_json",
+      fallbackCategory: "misc"
+    });
+    try {
+      await persistWebhookMirrorRecord(db, invalidMirrorEvent);
+    } catch (mirrorError) {
+      console.error("Failed to persist invalid-json webhook mirror event", mirrorError);
+      return c.json({
+        accepted: true,
+        mirrored: false,
+        ignored: true,
+        reason: "invalid_json"
+      }, 202);
+    }
+    console.error("Invalid GoHighLevel webhook payload JSON", error);
+    return c.json({ accepted: true, mirrored: true, ignored: true, reason: "invalid_json" }, 202);
+  }
+
+  const mirrorRecord = await buildWebhookMirrorRecord({
+    payload,
+    rawBody,
+    headers: c.req.raw.headers
+  });
+  let mirrored = true;
+  try {
+    await persistWebhookMirrorRecord(db, mirrorRecord);
+  } catch (error) {
+    console.error("Failed to persist mirrored webhook event", error);
+    mirrored = false;
   }
 
   const normalized = await normalizeGhlWebhook(payload, c.req.raw.headers, rawBody);
   if (!normalized) {
-    return c.json({ accepted: true, ignored: true, reason: "unsupported_event" }, 202);
+    return c.json({
+      accepted: true,
+      mirrored,
+      ignored: true,
+      reason: "unsupported_event",
+      webhookType: mirrorRecord.webhookType
+    });
   }
 
   try {
-    const db = createDb(c.env.DATABASE_URL);
     const inserted = await db
       .insert(webhookEvents)
       .values({
@@ -269,10 +436,10 @@ app.post("/webhooks/gohighlevel", async (c) => {
     }
 
     await c.env.MESSAGE_QUEUE.send(normalized);
-    return c.json({ accepted: true, queued: true }, 202);
+    return c.json({ accepted: true, mirrored, queued: true }, 202);
   } catch (error) {
     console.error("Failed to persist GoHighLevel webhook", error);
-    return c.json({ accepted: true, queued: false }, 202);
+    return c.json({ accepted: false, queued: false, error: "webhook_queue_persist_failed" }, 500);
   }
 });
 
@@ -1148,6 +1315,273 @@ function getNonEmptyQueryParam(url: URL, name: string): string | null {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+type WebhookMirrorRecord = {
+  idempotencyKey: string;
+  webhookType: string;
+  category: WebhookMirrorCategory;
+  companyId: string | null;
+  locationId: string | null;
+  contactId: string | null;
+  entityId: string | null;
+  eventTimestamp: Date | null;
+  payload: unknown;
+  headers: Record<string, string>;
+  rawBody: string;
+};
+
+async function buildWebhookMirrorRecord(args: {
+  payload: unknown;
+  rawBody: string;
+  headers: Headers;
+  webhookType?: string;
+  fallbackCategory?: WebhookMirrorCategory;
+}): Promise<WebhookMirrorRecord> {
+  const payloadRecord = asRecord(args.payload);
+  const webhookType =
+    args.webhookType ??
+    firstNonEmptyString(
+      stringOrNull(payloadRecord.type),
+      stringOrNull(payloadRecord.event),
+      stringOrNull(payloadRecord.eventType),
+      "unknown"
+    ) ??
+    "unknown";
+  const category = args.fallbackCategory ?? mapWebhookTypeToMirrorCategory(webhookType);
+  const explicitIdempotency =
+    getWebhookIdempotencyHeader(args.headers) ??
+    firstNonEmptyString(
+      stringOrNull(payloadRecord.idempotencyKey),
+      stringOrNull(payloadRecord.webhookId),
+      stringOrNull(payloadRecord.eventId)
+    );
+  const idempotencyKey = explicitIdempotency ?? `${webhookType}:${await sha256Hex(args.rawBody)}`;
+
+  const message = asRecord(payloadRecord.message ?? payloadRecord.messageData);
+  const appointment = asRecord(payloadRecord.appointment);
+  const invoice = asRecord(payloadRecord.invoice);
+  const contact = asRecord(payloadRecord.contact ?? message.contact ?? appointment.contact ?? invoice.contact);
+  const location = asRecord(payloadRecord.location ?? appointment.location ?? invoice.location);
+  const company = asRecord(payloadRecord.company ?? payloadRecord.agency);
+  const note = asRecord(payloadRecord.note);
+  const opportunity = asRecord(payloadRecord.opportunity);
+  const task = asRecord(payloadRecord.task);
+  const user = asRecord(payloadRecord.user);
+  const order = asRecord(payloadRecord.order);
+  const product = asRecord(payloadRecord.product);
+  const price = asRecord(payloadRecord.price);
+  const relation = asRecord(payloadRecord.relation);
+  const record = asRecord(payloadRecord.record);
+  const objectSchema = asRecord(payloadRecord.objectSchema ?? payloadRecord.object_schema);
+
+  const companyId = firstNonEmptyString(
+    stringOrNull(payloadRecord.companyId),
+    stringOrNull(payloadRecord.agencyId),
+    stringOrNull(payloadRecord.company_id),
+    stringOrNull(payloadRecord.agency_id),
+    stringOrNull(company.id)
+  );
+  const locationId = firstNonEmptyString(
+    stringOrNull(payloadRecord.locationId),
+    stringOrNull(payloadRecord.location_id),
+    stringOrNull(location.id),
+    stringOrNull(message.locationId),
+    stringOrNull(appointment.locationId),
+    stringOrNull(invoice.locationId),
+    stringOrNull(opportunity.locationId),
+    stringOrNull(task.locationId),
+    stringOrNull(contact.locationId)
+  );
+  const contactId = firstNonEmptyString(
+    stringOrNull(payloadRecord.contactId),
+    stringOrNull(payloadRecord.contact_id),
+    stringOrNull(contact.id),
+    stringOrNull(message.contactId),
+    stringOrNull(appointment.contactId),
+    stringOrNull(invoice.contactId),
+    stringOrNull(opportunity.contactId),
+    stringOrNull(task.contactId)
+  );
+  const entityId = firstNonEmptyString(
+    stringOrNull(payloadRecord.id),
+    stringOrNull(payloadRecord.messageId),
+    stringOrNull(payloadRecord.appointmentId),
+    stringOrNull(payloadRecord.invoiceId),
+    stringOrNull(payloadRecord.noteId),
+    stringOrNull(payloadRecord.opportunityId),
+    stringOrNull(payloadRecord.taskId),
+    stringOrNull(payloadRecord.userId),
+    stringOrNull(payloadRecord.orderId),
+    stringOrNull(payloadRecord.productId),
+    stringOrNull(payloadRecord.priceId),
+    stringOrNull(payloadRecord.recordId),
+    stringOrNull(payloadRecord.relationId),
+    stringOrNull(message.id),
+    stringOrNull(appointment.id),
+    stringOrNull(invoice.id),
+    stringOrNull(note.id),
+    stringOrNull(opportunity.id),
+    stringOrNull(task.id),
+    stringOrNull(user.id),
+    stringOrNull(order.id),
+    stringOrNull(product.id),
+    stringOrNull(price.id),
+    stringOrNull(record.id),
+    stringOrNull(relation.id),
+    stringOrNull(objectSchema.id)
+  );
+  const eventTimestamp = parseNullableDate(
+    payloadRecord.timestamp ??
+      payloadRecord.timeStamp ??
+      payloadRecord.eventTimestamp ??
+      payloadRecord.dateAdded ??
+      payloadRecord.dateUpdated ??
+      payloadRecord.createdAt ??
+      payloadRecord.updatedAt ??
+      message.dateAdded ??
+      message.dateUpdated ??
+      appointment.dateAdded ??
+      appointment.dateUpdated ??
+      invoice.createdAt ??
+      invoice.updatedAt ??
+      note.createdAt ??
+      note.updatedAt ??
+      opportunity.dateUpdated ??
+      task.updatedAt
+  );
+
+  return {
+    idempotencyKey,
+    webhookType,
+    category,
+    companyId,
+    locationId,
+    contactId,
+    entityId,
+    eventTimestamp,
+    payload: payloadRecord,
+    headers: headersToRecord(args.headers),
+    rawBody: args.rawBody
+  };
+}
+
+async function persistWebhookMirrorRecord(db: ReturnType<typeof createDb>, record: WebhookMirrorRecord) {
+  const now = new Date();
+  const commonValues = {
+    idempotencyKey: record.idempotencyKey,
+    webhookType: record.webhookType,
+    companyId: record.companyId,
+    locationId: record.locationId,
+    contactId: record.contactId,
+    entityId: record.entityId,
+    eventTimestamp: record.eventTimestamp,
+    payload: record.payload,
+    headers: record.headers,
+    rawBody: record.rawBody,
+    updatedAt: now
+  };
+
+  await db
+    .insert(ghlWebhookMirrorEvents)
+    .values({
+      ...commonValues
+    })
+    .onConflictDoUpdate({
+      target: [ghlWebhookMirrorEvents.idempotencyKey],
+      set: {
+        ...commonValues
+      }
+    });
+
+  const categoryTable = mirrorTableByCategory[record.category];
+  await db
+    .insert(categoryTable)
+    .values({
+      ...commonValues
+    })
+    .onConflictDoUpdate({
+      target: [categoryTable.idempotencyKey],
+      set: {
+        ...commonValues
+      }
+    });
+}
+
+function mapWebhookTypeToMirrorCategory(webhookType: string): WebhookMirrorCategory {
+  const normalized = webhookType.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (normalized.startsWith("appinstall") || normalized.startsWith("appuninstall") || normalized.startsWith("appupdate") || normalized.startsWith("planchange")) {
+    return "app";
+  }
+  if (normalized.startsWith("appointment")) {
+    return "appointment";
+  }
+  if (normalized.startsWith("association")) {
+    return "association";
+  }
+  if (normalized.startsWith("campaign")) {
+    return "campaign";
+  }
+  if (normalized.startsWith("contact")) {
+    return "contact";
+  }
+  if (
+    normalized.startsWith("conversation") ||
+    normalized === "inboundmessage" ||
+    normalized === "outboundmessage" ||
+    normalized === "provideroutboundmessage"
+  ) {
+    return "conversation";
+  }
+  if (normalized.startsWith("externalauth")) {
+    return "external_auth";
+  }
+  if (normalized.startsWith("invoice")) {
+    return "invoice";
+  }
+  if (normalized === "lcemailstats") {
+    return "email_stats";
+  }
+  if (normalized.startsWith("location")) {
+    return "location";
+  }
+  if (normalized.startsWith("note")) {
+    return "note";
+  }
+  if (normalized.startsWith("objectschema")) {
+    return "object_schema";
+  }
+  if (normalized.startsWith("opportunity")) {
+    return "opportunity";
+  }
+  if (normalized.startsWith("order")) {
+    return "order";
+  }
+  if (normalized.startsWith("price")) {
+    return "price";
+  }
+  if (normalized.startsWith("product")) {
+    return "product";
+  }
+  if (normalized.startsWith("record")) {
+    return "record";
+  }
+  if (normalized.startsWith("relation")) {
+    return "relation";
+  }
+  if (normalized.startsWith("saasplan")) {
+    return "saas_plan";
+  }
+  if (normalized.startsWith("task")) {
+    return "task";
+  }
+  if (normalized.startsWith("user")) {
+    return "user";
+  }
+  if (normalized.startsWith("voiceai")) {
+    return "voice_ai";
+  }
+  return "misc";
 }
 
 async function processWebhookEvent(env: Env, event: NormalizedGhlWebhookEvent) {
@@ -2206,34 +2640,79 @@ async function getAccessTokensForLocation(
   db: ReturnType<typeof createDb>,
   ghlLocationId: string
 ) {
-  const candidates: Array<string | null | undefined> = [];
+  const tokenCandidates = new Set<string>();
+  const addTokenCandidate = (value: string | null | undefined) => {
+    const token = value?.trim();
+    if (token) {
+      tokenCandidates.add(token);
+    }
+  };
+  const isStillValid = (expiresAt: Date | null | undefined) => {
+    if (!expiresAt) {
+      return true;
+    }
+    return expiresAt.getTime() > Date.now() + 60_000;
+  };
 
-  const [locationInstallation] = await db
+  const locationInstallations = await db
     .select({
-      accessToken: ghlOAuthInstallations.accessToken
+      accessToken: ghlOAuthInstallations.accessToken,
+      expiresAt: ghlOAuthInstallations.expiresAt
     })
     .from(ghlOAuthInstallations)
-    .where(eq(ghlOAuthInstallations.locationId, ghlLocationId))
+    .where(
+      and(
+        eq(ghlOAuthInstallations.locationId, ghlLocationId),
+        eq(ghlOAuthInstallations.userType, "Location")
+      )
+    )
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
-    .limit(1);
-  candidates.push(locationInstallation?.accessToken);
-
-  const companyInstallation = await getCompanyOAuthInstallationForLocation(db, ghlLocationId);
-  candidates.push(companyInstallation?.accessToken);
-  const fallbackCompanyInstallations = await getRecentCompanyOAuthInstallations(db);
-  for (const installation of fallbackCompanyInstallations) {
-    candidates.push(installation.accessToken);
-  }
-  candidates.push(env.GHL_API_TOKEN?.trim());
-
-  const deduped = new Set<string>();
-  for (const token of candidates) {
-    const normalized = token?.trim();
-    if (normalized) {
-      deduped.add(normalized);
+    .limit(5);
+  for (const installation of locationInstallations) {
+    if (isStillValid(installation.expiresAt)) {
+      addTokenCandidate(installation.accessToken);
     }
   }
-  return Array.from(deduped);
+
+  const companyInstallations = [
+    ...(await getCompanyOAuthInstallationsForLocation(db, ghlLocationId)),
+    ...(await getRecentCompanyOAuthInstallations(db, 5))
+  ];
+  const seenCompanyTokens = new Set<string>();
+  for (const installation of companyInstallations) {
+    const companyToken = installation.accessToken?.trim();
+    if (!companyToken || seenCompanyTokens.has(companyToken)) {
+      continue;
+    }
+    seenCompanyTokens.add(companyToken);
+
+    const locationToken = await exchangeLocationAccessTokenFromCompanyToken(env, {
+      companyId: installation.companyId,
+      ghlLocationId,
+      companyAccessToken: companyToken
+    });
+    if (!locationToken) {
+      continue;
+    }
+
+    addTokenCandidate(locationToken.accessToken);
+    await upsertLocationOAuthInstallationFromExchange(db, {
+      companyId: installation.companyId,
+      ghlLocationId,
+      fallbackRefreshToken: installation.refreshToken,
+      token: locationToken
+    });
+  }
+
+  if (tokenCandidates.size === 0) {
+    // Last-resort fallback for legacy setups where only company tokens were stored.
+    for (const installation of companyInstallations) {
+      addTokenCandidate(installation.accessToken);
+    }
+  }
+
+  addTokenCandidate(env.GHL_API_TOKEN?.trim());
+  return Array.from(tokenCandidates);
 }
 
 async function fetchLocationNameOnDemand(
@@ -2256,6 +2735,14 @@ async function getCompanyOAuthInstallationForLocation(
   db: ReturnType<typeof createDb>,
   ghlLocationId: string
 ) {
+  const [installation] = await getCompanyOAuthInstallationsForLocation(db, ghlLocationId);
+  return installation ?? null;
+}
+
+async function getCompanyOAuthInstallationsForLocation(
+  db: ReturnType<typeof createDb>,
+  ghlLocationId: string
+) {
   const [locationWithAgency] = await db
     .select({
       ghlAgencyId: agencies.ghlAgencyId
@@ -2266,15 +2753,16 @@ async function getCompanyOAuthInstallationForLocation(
     .limit(1);
 
   if (!locationWithAgency?.ghlAgencyId) {
-    return null;
+    return [];
   }
 
-  const [companyInstallation] = await db
+  return db
     .select({
       companyId: ghlOAuthInstallations.companyId,
       locationId: ghlOAuthInstallations.locationId,
       userType: ghlOAuthInstallations.userType,
       accessToken: ghlOAuthInstallations.accessToken,
+      refreshToken: ghlOAuthInstallations.refreshToken,
       expiresAt: ghlOAuthInstallations.expiresAt,
       updatedAt: ghlOAuthInstallations.updatedAt
     })
@@ -2286,9 +2774,7 @@ async function getCompanyOAuthInstallationForLocation(
       )
     )
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
-    .limit(1);
-
-  return companyInstallation ?? null;
+    .limit(5);
 }
 
 async function getRecentCompanyOAuthInstallations(db: ReturnType<typeof createDb>, limit = 5) {
@@ -2299,6 +2785,7 @@ async function getRecentCompanyOAuthInstallations(db: ReturnType<typeof createDb
       locationId: ghlOAuthInstallations.locationId,
       userType: ghlOAuthInstallations.userType,
       accessToken: ghlOAuthInstallations.accessToken,
+      refreshToken: ghlOAuthInstallations.refreshToken,
       expiresAt: ghlOAuthInstallations.expiresAt,
       updatedAt: ghlOAuthInstallations.updatedAt
     })
@@ -2306,6 +2793,124 @@ async function getRecentCompanyOAuthInstallations(db: ReturnType<typeof createDb
     .where(eq(ghlOAuthInstallations.userType, "Company"))
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
     .limit(safeLimit);
+}
+
+async function exchangeLocationAccessTokenFromCompanyToken(
+  env: Env,
+  params: {
+    companyId: string;
+    ghlLocationId: string;
+    companyAccessToken: string;
+  }
+) {
+  const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
+  const requestBody = new URLSearchParams({
+    companyId: params.companyId,
+    locationId: params.ghlLocationId
+  });
+
+  try {
+    const response = await fetch(`${baseUrl}/oauth/locationToken`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.companyAccessToken}`,
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+        Version: "2021-07-28"
+      },
+      body: requestBody.toString()
+    });
+    const raw = asRecord(await response.json().catch(() => ({})));
+    if (!response.ok) {
+      return null;
+    }
+
+    const accessToken = stringOrNull(raw.access_token ?? raw.accessToken);
+    if (!accessToken) {
+      return null;
+    }
+
+    return {
+      accessToken,
+      refreshToken: stringOrNull(raw.refresh_token ?? raw.refreshToken),
+      tokenType: stringOrNull(raw.token_type ?? raw.tokenType) ?? "Bearer",
+      expiresIn: Number(raw.expires_in ?? raw.expiresIn ?? 86400),
+      scope: stringOrNull(raw.scope),
+      userId: stringOrNull(raw.userId ?? raw.user_id),
+      raw
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function upsertLocationOAuthInstallationFromExchange(
+  db: ReturnType<typeof createDb>,
+  params: {
+    companyId: string;
+    ghlLocationId: string;
+    fallbackRefreshToken: string | null;
+    token: {
+      accessToken: string;
+      refreshToken: string | null;
+      tokenType: string;
+      expiresIn: number;
+      scope: string | null;
+      userId: string | null;
+      raw: Record<string, any>;
+    };
+  }
+) {
+  const now = new Date();
+  let refreshToken = params.token.refreshToken ?? params.fallbackRefreshToken;
+  if (!refreshToken) {
+    const [existing] = await db
+      .select({
+        refreshToken: ghlOAuthInstallations.refreshToken
+      })
+      .from(ghlOAuthInstallations)
+      .where(
+        and(
+          eq(ghlOAuthInstallations.companyId, params.companyId),
+          eq(ghlOAuthInstallations.locationId, params.ghlLocationId),
+          eq(ghlOAuthInstallations.userType, "Location")
+        )
+      )
+      .limit(1);
+    refreshToken = existing?.refreshToken ?? null;
+  }
+  if (!refreshToken) {
+    return;
+  }
+
+  const values = {
+    companyId: params.companyId,
+    locationId: params.ghlLocationId,
+    userId: params.token.userId,
+    userType: "Location" as const,
+    accessToken: params.token.accessToken,
+    refreshToken,
+    tokenType: params.token.tokenType,
+    scope: params.token.scope,
+    refreshTokenId: stringOrNull(
+      params.token.raw.refreshTokenId ?? params.token.raw.refresh_token_id
+    ),
+    expiresAt: addSecondsToNow(params.token.expiresIn),
+    raw: params.token.raw,
+    updatedAt: now
+  };
+
+  await db
+    .insert(ghlOAuthInstallations)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [
+        ghlOAuthInstallations.companyId,
+        ghlOAuthInstallations.locationId,
+        ghlOAuthInstallations.userType
+      ],
+      set: values
+    });
 }
 
 async function fetchLocationNameWithToken(
@@ -2440,7 +3045,7 @@ async function sendConversationMessageWithToken(
     payload.subject = params.subject;
   }
 
-  const requestVersions = ["2021-04-15", "2021-07-28"];
+  const requestVersions = ["2023-02-21", "2021-07-28", "2021-04-15"];
   let lastError: string | null = null;
   let shouldRefreshToken = false;
   let lastStatus = 0;
