@@ -367,9 +367,9 @@ input {
   display: grid;
   gap: 12px;
   grid-template-columns: 240px 310px minmax(360px, 1fr) 290px;
-  height: min(68vh, 760px);
-  max-height: 760px;
-  min-height: 560px;
+  height: calc(100vh - 165px);
+  max-height: none;
+  min-height: 620px;
 }
 
 .inbox-subaccounts,
@@ -479,12 +479,14 @@ input {
 }
 
 .inbox-message-bubble {
+  align-self: flex-start;
   border: 1px solid var(--border);
   border-radius: 14px;
   display: grid;
   gap: 8px;
-  max-width: 82%;
+  max-width: min(76%, 680px);
   padding: 12px 14px;
+  width: fit-content;
 }
 
 .inbox-message-bubble p {
@@ -499,7 +501,7 @@ input {
 .inbox-message-bubble.outbound {
   background: var(--bubble-outbound);
   border-color: rgb(82 109 255 / 34%);
-  justify-self: end;
+  align-self: flex-end;
 }
 
 .inbox-status-row {
