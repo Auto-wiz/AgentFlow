@@ -204,35 +204,6 @@ const mirrorTableByCategory = {
   misc: ghlWebhookMiscMirror
 } satisfies Record<WebhookMirrorCategory, any>;
 
-const webhookMirrorTableDefinitions = [
-  { tableName: "ghl_webhook_mirror_events", indexPrefix: "ghl_wh_mirror_events" },
-  { tableName: "ghl_webhook_app_mirror", indexPrefix: "ghl_wh_app" },
-  { tableName: "ghl_webhook_appointment_mirror", indexPrefix: "ghl_wh_appt" },
-  { tableName: "ghl_webhook_association_mirror", indexPrefix: "ghl_wh_assoc" },
-  { tableName: "ghl_webhook_campaign_mirror", indexPrefix: "ghl_wh_campaign" },
-  { tableName: "ghl_webhook_contact_mirror", indexPrefix: "ghl_wh_contact" },
-  { tableName: "ghl_webhook_conversation_mirror", indexPrefix: "ghl_wh_conversation" },
-  { tableName: "ghl_webhook_external_auth_mirror", indexPrefix: "ghl_wh_external_auth" },
-  { tableName: "ghl_webhook_invoice_mirror", indexPrefix: "ghl_wh_invoice" },
-  { tableName: "ghl_webhook_email_stats_mirror", indexPrefix: "ghl_wh_email_stats" },
-  { tableName: "ghl_webhook_location_mirror", indexPrefix: "ghl_wh_location" },
-  { tableName: "ghl_webhook_note_mirror", indexPrefix: "ghl_wh_note" },
-  { tableName: "ghl_webhook_object_schema_mirror", indexPrefix: "ghl_wh_object_schema" },
-  { tableName: "ghl_webhook_opportunity_mirror", indexPrefix: "ghl_wh_opportunity" },
-  { tableName: "ghl_webhook_order_mirror", indexPrefix: "ghl_wh_order" },
-  { tableName: "ghl_webhook_price_mirror", indexPrefix: "ghl_wh_price" },
-  { tableName: "ghl_webhook_product_mirror", indexPrefix: "ghl_wh_product" },
-  { tableName: "ghl_webhook_record_mirror", indexPrefix: "ghl_wh_record" },
-  { tableName: "ghl_webhook_relation_mirror", indexPrefix: "ghl_wh_relation" },
-  { tableName: "ghl_webhook_saas_plan_mirror", indexPrefix: "ghl_wh_saas_plan" },
-  { tableName: "ghl_webhook_task_mirror", indexPrefix: "ghl_wh_task" },
-  { tableName: "ghl_webhook_user_mirror", indexPrefix: "ghl_wh_user" },
-  { tableName: "ghl_webhook_voice_ai_mirror", indexPrefix: "ghl_wh_voice_ai" },
-  { tableName: "ghl_webhook_misc_mirror", indexPrefix: "ghl_wh_misc" }
-] as const;
-
-let webhookMirrorSchemaReady = false;
-
 const app = new Hono<HonoBindings>();
 
 app.use(
@@ -397,13 +368,6 @@ app.post("/webhooks/gohighlevel", async (c) => {
   }
 
   const db = createDb(c.env.DATABASE_URL);
-  try {
-    await ensureWebhookMirrorSchema(db);
-  } catch (error) {
-    console.error("Failed to ensure webhook mirror schema", error);
-    return c.json({ accepted: false, error: "webhook_mirror_schema_unavailable" }, 500);
-  }
-
   let payload: unknown;
   try {
     payload = JSON.parse(rawBody);
@@ -419,7 +383,12 @@ app.post("/webhooks/gohighlevel", async (c) => {
       await persistWebhookMirrorRecord(db, invalidMirrorEvent);
     } catch (mirrorError) {
       console.error("Failed to persist invalid-json webhook mirror event", mirrorError);
-      return c.json({ accepted: false, error: "webhook_mirror_persist_failed" }, 500);
+      return c.json({
+        accepted: true,
+        mirrored: false,
+        ignored: true,
+        reason: "invalid_json"
+      }, 202);
     }
     console.error("Invalid GoHighLevel webhook payload JSON", error);
     return c.json({ accepted: true, mirrored: true, ignored: true, reason: "invalid_json" }, 202);
@@ -430,18 +399,19 @@ app.post("/webhooks/gohighlevel", async (c) => {
     rawBody,
     headers: c.req.raw.headers
   });
+  let mirrored = true;
   try {
     await persistWebhookMirrorRecord(db, mirrorRecord);
   } catch (error) {
     console.error("Failed to persist mirrored webhook event", error);
-    return c.json({ accepted: false, error: "webhook_mirror_persist_failed" }, 500);
+    mirrored = false;
   }
 
   const normalized = await normalizeGhlWebhook(payload, c.req.raw.headers, rawBody);
   if (!normalized) {
     return c.json({
       accepted: true,
-      mirrored: true,
+      mirrored,
       ignored: true,
       reason: "unsupported_event",
       webhookType: mirrorRecord.webhookType
@@ -466,7 +436,7 @@ app.post("/webhooks/gohighlevel", async (c) => {
     }
 
     await c.env.MESSAGE_QUEUE.send(normalized);
-    return c.json({ accepted: true, queued: true }, 202);
+    return c.json({ accepted: true, mirrored, queued: true }, 202);
   } catch (error) {
     console.error("Failed to persist GoHighLevel webhook", error);
     return c.json({ accepted: false, queued: false, error: "webhook_queue_persist_failed" }, 500);
@@ -1345,54 +1315,6 @@ function getNonEmptyQueryParam(url: URL, name: string): string | null {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-async function ensureWebhookMirrorSchema(db: ReturnType<typeof createDb>) {
-  if (webhookMirrorSchemaReady) {
-    return;
-  }
-
-  for (const definition of webhookMirrorTableDefinitions) {
-    await db.execute(
-      sql.raw(`CREATE TABLE IF NOT EXISTS ${definition.tableName} (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        idempotency_key text NOT NULL,
-        webhook_type text NOT NULL,
-        company_id text,
-        location_id text,
-        contact_id text,
-        entity_id text,
-        event_timestamp timestamp with time zone,
-        payload jsonb NOT NULL,
-        headers jsonb NOT NULL DEFAULT '{}'::jsonb,
-        raw_body text NOT NULL,
-        created_at timestamp with time zone NOT NULL DEFAULT now(),
-        updated_at timestamp with time zone NOT NULL DEFAULT now()
-      )`)
-    );
-    await db.execute(
-      sql.raw(
-        `CREATE UNIQUE INDEX IF NOT EXISTS ${definition.indexPrefix}_idempotency_key_unique ON ${definition.tableName} (idempotency_key)`
-      )
-    );
-    await db.execute(
-      sql.raw(
-        `CREATE INDEX IF NOT EXISTS ${definition.indexPrefix}_webhook_type_idx ON ${definition.tableName} (webhook_type)`
-      )
-    );
-    await db.execute(
-      sql.raw(
-        `CREATE INDEX IF NOT EXISTS ${definition.indexPrefix}_location_id_idx ON ${definition.tableName} (location_id)`
-      )
-    );
-    await db.execute(
-      sql.raw(
-        `CREATE INDEX IF NOT EXISTS ${definition.indexPrefix}_created_at_idx ON ${definition.tableName} (created_at)`
-      )
-    );
-  }
-
-  webhookMirrorSchemaReady = true;
 }
 
 type WebhookMirrorRecord = {
