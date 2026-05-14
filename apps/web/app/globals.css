@@ -363,7 +363,7 @@ input {
   display: grid;
   gap: 12px;
   grid-template-columns: 240px 310px minmax(360px, 1fr) 290px;
-  min-height: 72vh;
+  min-height: 74vh;
 }
 
 .inbox-subaccounts,
@@ -383,7 +383,7 @@ input {
 }
 
 .inbox-subaccount-search {
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .inbox-subaccount-search input {
@@ -392,11 +392,35 @@ input {
 }
 
 .inbox-panel-header {
-  align-items: flex-start;
+  align-items: center;
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 10px;
   justify-content: space-between;
   margin-bottom: 12px;
+}
+
+.inbox-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.inbox-tab {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 7px 10px;
+  text-transform: uppercase;
+}
+
+.inbox-tab.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .inbox-conversation-items {
@@ -490,6 +514,76 @@ input {
 
 .inbox-contact-panel {
   gap: 12px;
+  overflow: auto;
+}
+
+.inbox-filter-block {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.inbox-field-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.inbox-filter-block select {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--foreground);
+  padding: 9px 10px;
+}
+
+.inbox-reply-error {
+  color: #cf304a;
+  font-size: 13px;
+  margin: 8px 0 0;
+}
+
+.inbox-contact-header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.inbox-contact-avatar {
+  align-items: center;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--accent);
+  display: inline-flex;
+  font-size: 20px;
+  font-weight: 700;
+  height: 48px;
+  justify-content: center;
+  min-width: 48px;
+}
+
+.inbox-contact-field-list {
+  display: grid;
+  gap: 8px;
+}
+
+.inbox-contact-field-row {
+  align-items: center;
+  display: flex;
+  font-size: 13px;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.inbox-contact-field-row span:last-child {
+  max-width: 140px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .inbox-contact-metric {

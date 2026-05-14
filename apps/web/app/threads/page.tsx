@@ -16,11 +16,16 @@ export default function ThreadsPage() {
   const [subaccounts, setSubaccounts] = useState<SubaccountOverview[]>([]);
   const [subaccountSearch, setSubaccountSearch] = useState("");
   const [selectedLocationId, setSelectedLocationId] = useState("");
+  const [selectedUserFilter, setSelectedUserFilter] = useState("all");
+  const [conversationFilter, setConversationFilter] = useState<"all" | "pending">("all");
   const [selectedThreadId, setSelectedThreadId] = useState("");
   const [threadData, setThreadData] = useState<ThreadMessagesResponse | null>(null);
+  const [replyDraft, setReplyDraft] = useState("");
+  const [replySending, setReplySending] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
-  const [pendingOnly, setPendingOnly] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,7 +63,7 @@ export default function ThreadsPage() {
         }
 
         const params = new URLSearchParams();
-        if (pendingOnly) {
+        if (conversationFilter === "pending") {
           params.set("pendingReply", "true");
         }
         if (nextSelectedLocationId) {
@@ -96,7 +101,7 @@ export default function ThreadsPage() {
 
     loadThreads();
     return () => controller.abort();
-  }, [selectedLocationId, pendingOnly]);
+  }, [apiBaseUrl, selectedLocationId, conversationFilter, reloadKey]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -134,9 +139,13 @@ export default function ThreadsPage() {
 
     loadThreadDetails();
     return () => controller.abort();
-  }, [apiBaseUrl, selectedThreadId]);
+  }, [apiBaseUrl, selectedThreadId, reloadKey]);
 
   const totalPending = subaccounts.reduce((sum, subaccount) => sum + subaccount.pendingCount, 0);
+  const totalConversations = subaccounts.reduce(
+    (sum, subaccount) => sum + subaccount.conversationCount,
+    0
+  );
   const filteredSubaccounts = subaccounts.filter((subaccount) => {
     const query = subaccountSearch.trim().toLowerCase();
     if (!query) {
@@ -151,6 +160,13 @@ export default function ThreadsPage() {
   const selectedLocationLabel = selectedThreadSummary
     ? formatLocationName(selectedThreadSummary.locationName, selectedThreadSummary.ghlLocationId)
     : "No conversation selected";
+  const selectedContact = threadData?.contactDetails;
+  const selectedContactName =
+    selectedContact?.fullName ??
+    threadData?.thread.contactName ??
+    selectedThreadSummary?.contactName ??
+    "No contact selected";
+  const selectedContactInitial = selectedContactName.slice(0, 1).toUpperCase() || "?";
 
   async function markSelectedRead() {
     if (!selectedThreadId) {
@@ -181,10 +197,62 @@ export default function ThreadsPage() {
     );
   }
 
+  async function sendReply() {
+    const message = replyDraft.trim();
+    if (!selectedThreadId || !message || replySending) {
+      return;
+    }
+
+    setReplySending(true);
+    setReplyError(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/threads/${selectedThreadId}/reply`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          channel: "sms",
+          message
+        })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? "Failed to send reply");
+      }
+
+      setReplyDraft("");
+      setThreads((current) =>
+        current.map((thread) =>
+          thread.id === selectedThreadId
+            ? {
+                ...thread,
+                pendingReply: false,
+                unreadCount: 0,
+                lastMessageAt: new Date().toISOString()
+              }
+            : thread
+        )
+      );
+      setReloadKey((value) => value + 1);
+    } catch (caught) {
+      setReplyError(caught instanceof Error ? caught.message : "Failed to send reply");
+    } finally {
+      setReplySending(false);
+    }
+  }
+
+  function renderContactValue(value: string | null | undefined, fallback: string) {
+    if (!value || !value.trim()) {
+      return <span className="muted">{fallback}</span>;
+    }
+    return value;
+  }
+
   return (
     <section className="ghl-inbox-shell">
       <aside className="panel inbox-subaccounts">
-        <p className="eyebrow">Advanced filters</p>
+        <p className="eyebrow">Filters</p>
         <h3 style={{ marginTop: 8 }}>Subaccounts</h3>
         <div className="toolbar inbox-subaccount-search">
           <input
@@ -194,6 +262,21 @@ export default function ThreadsPage() {
             onChange={(event) => setSubaccountSearch(event.target.value)}
           />
         </div>
+        <div className="inbox-filter-block">
+          <label className="inbox-field-label" htmlFor="inbox-user-filter">
+            User
+          </label>
+          <select
+            id="inbox-user-filter"
+            value={selectedUserFilter}
+            onChange={(event) => setSelectedUserFilter(event.target.value)}
+          >
+            <option value="all">All users</option>
+            <option value="coming-soon" disabled>
+              User groups (coming soon)
+            </option>
+          </select>
+        </div>
         <div className="subaccount-list">
           <button
             className={`subaccount-item subaccount-item-compact ${selectedLocationId ? "" : "active"}`}
@@ -201,7 +284,9 @@ export default function ThreadsPage() {
             type="button"
           >
             <strong>All tracked subaccounts</strong>
-            <span className="muted">{totalPending} pending replies</span>
+            <span className="muted">
+              {totalConversations} conversations · {totalPending} pending
+            </span>
           </button>
           {filteredSubaccounts.map((subaccount) => (
             <button
@@ -213,7 +298,9 @@ export default function ThreadsPage() {
               type="button"
             >
               <strong>{formatLocationName(subaccount.locationName, subaccount.ghlLocationId)}</strong>
-              <span className="muted">{subaccount.pendingCount} pending</span>
+              <span className="muted">
+                {subaccount.conversationCount} conv · {subaccount.pendingCount} pending
+              </span>
             </button>
           ))}
         </div>
@@ -223,11 +310,24 @@ export default function ThreadsPage() {
         <div className="inbox-panel-header">
           <div>
             <p className="eyebrow">Inbox</p>
-            <h3 style={{ marginTop: 8 }}>Pending replies</h3>
+            <h3 style={{ marginTop: 8 }}>All conversations</h3>
           </div>
-          <button className="button secondary" onClick={() => setPendingOnly((value) => !value)}>
-            {pendingOnly ? "Pending only" : "All conversations"}
-          </button>
+          <div className="inbox-tabs" role="tablist" aria-label="Conversation filters">
+            <button
+              className={`inbox-tab ${conversationFilter === "all" ? "active" : ""}`}
+              onClick={() => setConversationFilter("all")}
+              type="button"
+            >
+              All conversations
+            </button>
+            <button
+              className={`inbox-tab ${conversationFilter === "pending" ? "active" : ""}`}
+              onClick={() => setConversationFilter("pending")}
+              type="button"
+            >
+              Pending replies
+            </button>
+          </div>
         </div>
 
         {loading ? <div className="empty muted">Loading conversations...</div> : null}
@@ -247,7 +347,7 @@ export default function ThreadsPage() {
               <div className="inbox-conversation-row">
                 <strong>{thread.contactName}</strong>
                 <span className="muted">
-                  {thread.lastMessageAt ? new Date(thread.lastMessageAt).toLocaleTimeString() : "No time"}
+                  {thread.lastMessageAt ? new Date(thread.lastMessageAt).toLocaleTimeString() : "--:--"}
                 </span>
               </div>
               <span className="muted">{formatLocationName(thread.locationName, thread.ghlLocationId)}</span>
@@ -298,23 +398,84 @@ export default function ThreadsPage() {
               ))}
             </div>
             <div className="inbox-composer">
-              <input disabled placeholder="Type a response... (messaging composer coming next)" />
-              <button className="button" disabled type="button">
-                Send
+              <input
+                placeholder={
+                  selectedThreadId
+                    ? `Type a response to ${selectedThreadSummary?.contactName ?? "contact"}...`
+                    : "Select a conversation to reply"
+                }
+                value={replyDraft}
+                onChange={(event) => setReplyDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void sendReply();
+                  }
+                }}
+              />
+              <button
+                className="button"
+                disabled={!selectedThreadId || !replyDraft.trim() || replySending}
+                onClick={sendReply}
+                type="button"
+              >
+                {replySending ? "Sending..." : "Send"}
               </button>
             </div>
+            {replyError ? <p className="inbox-reply-error">{replyError}</p> : null}
           </>
         ) : null}
       </div>
 
       <aside className="panel inbox-contact-panel">
-        <p className="eyebrow">Contact details</p>
-        <h3 style={{ marginTop: 8 }}>
-          {threadData?.thread.contactName ?? selectedThreadSummary?.contactName ?? "No contact selected"}
-        </h3>
+        <div className="inbox-contact-header">
+          <div className="inbox-contact-avatar">{selectedContactInitial}</div>
+          <div>
+            <p className="eyebrow">Contact details</p>
+            <h3 style={{ marginTop: 8 }}>{selectedContactName}</h3>
+            <p className="muted">{selectedLocationLabel}</p>
+          </div>
+        </div>
         <div className="inbox-contact-metric">
           <span className="muted">Unread messages</span>
           <strong>{threadData?.thread.unreadCount ?? selectedThreadSummary?.unreadCount ?? 0}</strong>
+        </div>
+        <div className="inbox-contact-section">
+          <strong>Email</strong>
+          <p>
+            {renderContactValue(
+              selectedContact?.email ?? threadData?.thread.contactEmail ?? selectedThreadSummary?.contactEmail,
+              "Email unavailable"
+            )}
+          </p>
+        </div>
+        <div className="inbox-contact-section">
+          <strong>Phone</strong>
+          <p>
+            {renderContactValue(
+              selectedContact?.phone ?? threadData?.thread.contactPhone ?? selectedThreadSummary?.contactPhone,
+              "Phone unavailable"
+            )}
+          </p>
+        </div>
+        <div className="inbox-contact-section">
+          <strong>Company</strong>
+          <p>{renderContactValue(selectedContact?.companyName, "Company unavailable")}</p>
+        </div>
+        <div className="inbox-contact-section">
+          <strong>Address</strong>
+          <p>
+            {renderContactValue(
+              [selectedContact?.address1, selectedContact?.city, selectedContact?.state, selectedContact?.country]
+                .filter(Boolean)
+                .join(", "),
+              "Address unavailable"
+            )}
+          </p>
+        </div>
+        <div className="inbox-contact-section">
+          <strong>Source</strong>
+          <p>{renderContactValue(selectedContact?.source, "Source unavailable")}</p>
         </div>
         <div className="inbox-contact-section">
           <strong>Tags</strong>
@@ -331,22 +492,35 @@ export default function ThreadsPage() {
           </div>
         </div>
         <div className="inbox-contact-section">
-          <strong>Email</strong>
-          <p className="muted">
-            {threadData?.thread.contactEmail ??
-              selectedThreadSummary?.contactEmail ??
-              "Email will appear after contact sync"}
-          </p>
+          <strong>Custom fields</strong>
+          <div className="inbox-contact-field-list">
+            {selectedContact?.customFields?.length ? (
+              selectedContact.customFields.slice(0, 8).map((field, index) => (
+                <div className="inbox-contact-field-row" key={`${field.id ?? field.name ?? "field"}-${index}`}>
+                  <span className="muted">{field.name ?? field.id ?? "Field"}</span>
+                  <span>{stringifyFieldValue(field.value)}</span>
+                </div>
+              ))
+            ) : (
+              <span className="muted">No custom fields returned by GHL.</span>
+            )}
+          </div>
         </div>
         <div className="inbox-contact-section">
-          <strong>Phone</strong>
-          <p className="muted">
-            {threadData?.thread.contactPhone ??
-              selectedThreadSummary?.contactPhone ??
-              "Phone will appear after contact sync"}
-          </p>
+          <strong>Activity</strong>
+          <p>{renderContactValue(selectedContact?.lastActivityDate, "No activity date from GHL")}</p>
         </div>
       </aside>
     </section>
   );
+}
+
+function stringifyFieldValue(value: unknown) {
+  if (value == null) {
+    return "—";
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
 }

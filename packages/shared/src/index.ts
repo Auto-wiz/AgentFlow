@@ -131,6 +131,25 @@ export type NormalizedGhlWebhookEvent =
   | NormalizedGhlInvoiceWebhookEvent;
 
 export type ContactOnDemandDetails = {
+  id: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  fullName: string | null;
+  email: string | null;
+  phone: string | null;
+  companyName: string | null;
+  address1: string | null;
+  city: string | null;
+  state: string | null;
+  country: string | null;
+  postalCode: string | null;
+  website: string | null;
+  source: string | null;
+  type: string | null;
+  dnd: boolean | null;
+  dateAdded: string | null;
+  dateUpdated: string | null;
+  lastActivityDate: string | null;
   tags: string[];
   customFields: Array<{
     id?: string;
@@ -196,6 +215,7 @@ export type SubaccountOverview = {
   locationName: string | null;
   agencyId: string;
   agencyName: string | null;
+  conversationCount: number;
   pendingCount: number;
   appointmentCount: number;
   visible: boolean;

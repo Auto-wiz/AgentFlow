@@ -467,7 +467,7 @@ app.get("/subaccounts/overview", async (c) => {
   const viewerKey = getViewerKey(c);
   const surface = c.req.query("surface") ?? "all";
 
-  const [locationRows, pendingRows, appointmentRows, visibilityRows] = await Promise.all([
+  const [locationRows, conversationRows, pendingRows, appointmentRows, visibilityRows] = await Promise.all([
     db
       .select({
         locationId: locations.id,
@@ -479,6 +479,13 @@ app.get("/subaccounts/overview", async (c) => {
       .from(locations)
       .leftJoin(agencies, eq(locations.agencyId, agencies.id))
       .orderBy(locations.ghlLocationId),
+    db
+      .select({
+        locationId: threads.locationId,
+        count: sql<number>`count(*)::int`
+      })
+      .from(threads)
+      .groupBy(threads.locationId),
     db
       .select({
         locationId: threads.locationId,
@@ -503,6 +510,9 @@ app.get("/subaccounts/overview", async (c) => {
       .where(eq(userSubaccountVisibilities.userKey, viewerKey))
   ]);
 
+  const conversationsByLocation = new Map(
+    conversationRows.map((row) => [row.locationId, Number(row.count)])
+  );
   const pendingByLocation = new Map(pendingRows.map((row) => [row.locationId, Number(row.count)]));
   const appointmentsByLocation = new Map(
     appointmentRows.map((row) => [row.locationId, Number(row.count)])
@@ -516,13 +526,14 @@ app.get("/subaccounts/overview", async (c) => {
       locationName: row.locationName,
       agencyId: row.agencyId,
       agencyName: row.agencyName,
+      conversationCount: conversationsByLocation.get(row.locationId) ?? 0,
       pendingCount: pendingByLocation.get(row.locationId) ?? 0,
       appointmentCount: appointmentsByLocation.get(row.locationId) ?? 0,
       visible: visibilityByLocation.get(row.locationId) ?? true
     }))
     .filter((row) => {
       if (surface === "threads") {
-        return row.visible && row.pendingCount > 0;
+        return row.visible && row.conversationCount > 0;
       }
       if (surface === "appointments") {
         return row.visible && row.appointmentCount > 0;
@@ -685,8 +696,15 @@ app.get("/threads/:id/messages", async (c) => {
     .orderBy(messages.sentAt);
 
   const contactDetails =
-    toStoredContactDetails(threadRow.tags) ??
-    (await fetchContactDetailsOnDemand(c.env, db, threadRow.ghlLocationId, threadRow.ghlContactId));
+    (await fetchContactDetailsOnDemand(c.env, db, threadRow.ghlLocationId, threadRow.ghlContactId)) ??
+    toStoredContactDetails({
+      tags: threadRow.tags,
+      firstName: resolvedContact?.firstName ?? threadRow.firstName,
+      lastName: resolvedContact?.lastName ?? threadRow.lastName,
+      email: resolvedContact?.email ?? threadRow.email,
+      phone: resolvedContact?.phone ?? threadRow.phone,
+      ghlContactId: threadRow.ghlContactId
+    });
 
   return c.json({
     thread: {
@@ -736,6 +754,126 @@ app.post("/threads/:id/read", async (c) => {
   }
 
   return c.json({ ok: true });
+});
+
+app.post("/threads/:id/reply", async (c) => {
+  const db = createDb(c.env.DATABASE_URL);
+  const threadId = c.req.param("id");
+  const body = asRecord(await c.req.json().catch(() => ({})));
+  const messageBody = stringValue(body.message).trim();
+  const subject = stringOrNull(body.subject)?.trim() || null;
+  const channel = normalizeReplyChannel(body.channel);
+
+  if (!messageBody) {
+    return c.json({ error: "message is required" }, 400);
+  }
+
+  const [threadRow] = await db
+    .select({
+      threadId: threads.id,
+      locationId: threads.locationId,
+      ghlLocationId: locations.ghlLocationId,
+      contactId: contacts.id,
+      ghlContactId: contacts.ghlContactId
+    })
+    .from(threads)
+    .innerJoin(locations, eq(threads.locationId, locations.id))
+    .innerJoin(contacts, eq(threads.contactId, contacts.id))
+    .where(eq(threads.id, threadId))
+    .limit(1);
+
+  if (!threadRow) {
+    return c.json({ error: "Thread not found" }, 404);
+  }
+
+  const accessTokens = await getAccessTokensForLocation(c.env, db, threadRow.ghlLocationId);
+  if (accessTokens.length === 0) {
+    return c.json({ error: "No GoHighLevel token available for this location" }, 400);
+  }
+
+  let lastError: string | null = null;
+  for (const accessToken of accessTokens) {
+    const sent = await sendConversationMessageWithToken(c.env, {
+      accessToken,
+      channel,
+      ghlContactId: threadRow.ghlContactId,
+      ghlLocationId: threadRow.ghlLocationId,
+      message: messageBody,
+      subject
+    });
+    if (!sent.ok) {
+      lastError = sent.error ?? `status_${sent.status}`;
+      continue;
+    }
+
+    const sentAt = new Date();
+    const ghlMessageId = sent.messageId ?? `outbound-${crypto.randomUUID()}`;
+    const [stored] = await db
+      .insert(messages)
+      .values({
+        threadId: threadRow.threadId,
+        locationId: threadRow.locationId,
+        contactId: threadRow.contactId,
+        ghlMessageId,
+        channel,
+        direction: "outbound",
+        subject: channel === "email" ? subject : null,
+        body: messageBody,
+        from: null,
+        to: null,
+        sentAt,
+        raw: sent.raw
+      })
+      .onConflictDoNothing({
+        target: [messages.threadId, messages.ghlMessageId]
+      })
+      .returning({
+        id: messages.id,
+        ghlMessageId: messages.ghlMessageId,
+        channel: messages.channel,
+        direction: messages.direction,
+        subject: messages.subject,
+        body: messages.body,
+        from: messages.from,
+        to: messages.to,
+        sentAt: messages.sentAt
+      });
+
+    await db
+      .update(threads)
+      .set({
+        pendingReply: false,
+        unreadCount: 0,
+        lastMessageAt: sentAt,
+        updatedAt: sentAt
+      })
+      .where(eq(threads.id, threadRow.threadId));
+
+    return c.json({
+      ok: true,
+      message: stored
+        ? {
+            id: stored.id,
+            ghlMessageId: stored.ghlMessageId,
+            channel: stored.channel,
+            direction: stored.direction,
+            subject: stored.subject,
+            body: stored.body,
+            from: stored.from,
+            to: stored.to,
+            sentAt: stored.sentAt.toISOString()
+          }
+        : null
+    });
+  }
+
+  return c.json(
+    {
+      error: "Unable to send message with available GoHighLevel token",
+      details: lastError
+    },
+    502
+  );
 });
 
 async function exchangeGhlOAuthCode(
@@ -1398,34 +1536,48 @@ async function fetchContactDetailsOnDemand(
   ghlLocationId: string,
   ghlContactId: string
 ): Promise<ContactOnDemandDetails | null> {
-  const profile = await fetchContactProfileOnDemand(env, db, ghlLocationId, ghlContactId);
-  if (!profile) {
-    return null;
-  }
-
-  return {
-    tags: profile.tags,
-    customFields: profile.customFields
-  };
+  return fetchContactProfileOnDemand(env, db, ghlLocationId, ghlContactId);
 }
 
-function toStoredContactDetails(tags: unknown): ContactOnDemandDetails | null {
-  const normalizedTags = normalizeStoredContactTags(tags);
-  if (!normalizedTags) {
-    return null;
-  }
-  return {
-    tags: normalizedTags,
-    customFields: []
-  };
-}
-
-type ContactProfileOnDemand = ContactOnDemandDetails & {
+function toStoredContactDetails(value: {
+  tags: unknown;
   firstName: string | null;
   lastName: string | null;
   email: string | null;
   phone: string | null;
-};
+  ghlContactId: string;
+}): ContactOnDemandDetails | null {
+  const normalizedTags = normalizeStoredContactTags(value.tags);
+  const fullName = formatContactName(value.firstName, value.lastName, value.email, value.phone);
+  if (!normalizedTags && fullName === "Unknown contact") {
+    return null;
+  }
+  return {
+    id: value.ghlContactId,
+    firstName: value.firstName,
+    lastName: value.lastName,
+    fullName: fullName === "Unknown contact" ? null : fullName,
+    email: value.email,
+    phone: value.phone,
+    companyName: null,
+    address1: null,
+    city: null,
+    state: null,
+    country: null,
+    postalCode: null,
+    website: null,
+    source: null,
+    type: null,
+    dnd: null,
+    dateAdded: null,
+    dateUpdated: null,
+    lastActivityDate: null,
+    tags: normalizedTags ?? [],
+    customFields: []
+  };
+}
+
+type ContactProfileOnDemand = ContactOnDemandDetails;
 
 async function fetchContactProfileOnDemand(
   env: Env,
@@ -1474,11 +1626,34 @@ async function fetchContactProfileWithToken(
 
       const data = asRecord(await response.json());
       const contact = asRecord(data.contact ?? data);
+      const firstName = stringOrNull(contact.firstName);
+      const lastName = stringOrNull(contact.lastName);
+      const email = stringOrNull(contact.email);
+      const phone = stringOrNull(contact.phone);
       return {
-        firstName: stringOrNull(contact.firstName),
-        lastName: stringOrNull(contact.lastName),
-        email: stringOrNull(contact.email),
-        phone: stringOrNull(contact.phone),
+        id: stringOrNull(contact.id ?? contact.contactId ?? ghlContactId),
+        firstName,
+        lastName,
+        fullName: firstNonEmptyString(
+          stringOrNull(contact.name),
+          stringOrNull(contact.contactName),
+          formatContactName(firstName, lastName, email, phone)
+        ),
+        email,
+        phone,
+        companyName: stringOrNull(contact.companyName ?? contact.company),
+        address1: stringOrNull(contact.address1 ?? contact.address),
+        city: stringOrNull(contact.city),
+        state: stringOrNull(contact.state),
+        country: stringOrNull(contact.country),
+        postalCode: stringOrNull(contact.postalCode ?? contact.zip),
+        website: stringOrNull(contact.website),
+        source: stringOrNull(contact.source),
+        type: stringOrNull(contact.type),
+        dnd: normalizeBoolean(contact.dnd),
+        dateAdded: stringOrNull(contact.dateAdded ?? contact.createdAt),
+        dateUpdated: stringOrNull(contact.dateUpdated ?? contact.updatedAt),
+        lastActivityDate: stringOrNull(contact.lastActivityDate ?? contact.lastActivityAt),
         tags: toStringArray(contact.tags),
         customFields: toCustomFields(contact.customFields ?? contact.customField)
       };
@@ -1888,6 +2063,67 @@ async function fetchRawLocationResponse(
   }
 }
 
+async function sendConversationMessageWithToken(
+  env: Env,
+  params: {
+    accessToken: string;
+    ghlLocationId: string;
+    ghlContactId: string;
+    channel: MessageChannel;
+    message: string;
+    subject: string | null;
+  }
+): Promise<{ ok: boolean; status: number; messageId: string | null; raw: unknown; error: string | null }> {
+  const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
+  const payload: Record<string, unknown> = {
+    type: params.channel === "email" ? "Email" : "SMS",
+    contactId: params.ghlContactId,
+    locationId: params.ghlLocationId,
+    message: params.message
+  };
+  if (params.channel === "email" && params.subject) {
+    payload.subject = params.subject;
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}/conversations/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.accessToken}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Version: "2021-04-15",
+        "Location-Id": params.ghlLocationId,
+        locationId: params.ghlLocationId
+      },
+      body: JSON.stringify(payload)
+    });
+    const rawBody = await response.text();
+    const parsed = asRecord(safeJsonParse(rawBody) ?? {});
+    return {
+      ok: response.ok,
+      status: response.status,
+      messageId: stringOrNull(parsed.messageId ?? parsed.id ?? parsed.message?.id ?? parsed.msgId),
+      raw: {
+        request: payload,
+        response: parsed,
+        responseRawBody: rawBody
+      },
+      error: response.ok
+        ? null
+        : stringOrNull(parsed.message ?? parsed.error ?? parsed.error_description) ?? response.statusText
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      messageId: null,
+      raw: { request: payload, response: error instanceof Error ? error.message : String(error) },
+      error: error instanceof Error ? error.message : "request_failed"
+    };
+  }
+}
+
 function buildGhlLocationLookupRequest(env: Env, ghlLocationId: string) {
   const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
   const requestUrl = new URL(`/locations/${encodeURIComponent(ghlLocationId)}`, baseUrl);
@@ -2239,6 +2475,11 @@ function normalizeChannel(value: unknown): MessageChannel | null {
   return null;
 }
 
+function normalizeReplyChannel(value: unknown): MessageChannel {
+  const normalized = normalizeChannel(value);
+  return normalized ?? "sms";
+}
+
 function normalizeDirection(value: unknown): MessageDirection | null {
   const normalized = stringValue(value).toLowerCase();
   if (normalized.includes("inbound") || normalized.includes("incoming")) {
@@ -2349,6 +2590,32 @@ function stringValue(value: unknown): string {
 function stringOrNull(value: unknown): string | null {
   const result = stringValue(value).trim();
   return result ? result : null;
+}
+
+function firstNonEmptyString(...values: Array<string | null | undefined>) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function normalizeBoolean(value: unknown): boolean | null {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  const normalized = stringValue(value).trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === "true" || normalized === "1" || normalized === "yes") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "0" || normalized === "no") {
+    return false;
+  }
+  return null;
 }
 
 function getViewerKey(c: Context<HonoBindings>) {

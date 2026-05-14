@@ -6,11 +6,11 @@ import type { ReactNode } from "react";
 import { ThemeToggle } from "./theme-toggle";
 
 const navItems = [
-  { href: "/", label: "Dashboard", short: "DB" },
-  { href: "/threads", label: "Inbox", short: "IN" },
-  { href: "/appointments", label: "Appointments", short: "AP" },
-  { href: "/subaccounts", label: "Subaccounts", short: "SB" },
-  { href: "/debug", label: "Debug", short: "DG" }
+  { href: "/", label: "Dashboard", icon: "⌂" },
+  { href: "/threads", label: "Inbox", icon: "✉" },
+  { href: "/appointments", label: "Appointments", icon: "◷" },
+  { href: "/subaccounts", label: "Subaccounts", icon: "◫" },
+  { href: "/debug", label: "Debug", icon: "⎇" }
 ];
 
 export function AppChrome({ children }: { children: ReactNode }) {
@@ -32,7 +32,7 @@ export function AppChrome({ children }: { children: ReactNode }) {
                 key={item.href}
                 title={item.label}
               >
-                {item.short}
+                {item.icon}
               </Link>
             );
           })}
@@ -47,20 +47,6 @@ export function AppChrome({ children }: { children: ReactNode }) {
           <div>
             <p className="eyebrow">GHL Agency Hub</p>
             <h1>Agency workspace</h1>
-          </div>
-          <div className="app-topbar-actions">
-            <button className="button secondary" type="button">
-              Advanced filters
-            </button>
-            <button className="button secondary" type="button">
-              Subaccounts
-            </button>
-            <button className="button secondary" type="button">
-              Save view
-            </button>
-            <button className="button" type="button">
-              Apply changes
-            </button>
           </div>
         </header>
         <section className="app-page">{children}</section>
