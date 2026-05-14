@@ -2640,34 +2640,79 @@ async function getAccessTokensForLocation(
   db: ReturnType<typeof createDb>,
   ghlLocationId: string
 ) {
-  const candidates: Array<string | null | undefined> = [];
+  const tokenCandidates = new Set<string>();
+  const addTokenCandidate = (value: string | null | undefined) => {
+    const token = value?.trim();
+    if (token) {
+      tokenCandidates.add(token);
+    }
+  };
+  const isStillValid = (expiresAt: Date | null | undefined) => {
+    if (!expiresAt) {
+      return true;
+    }
+    return expiresAt.getTime() > Date.now() + 60_000;
+  };
 
-  const [locationInstallation] = await db
+  const locationInstallations = await db
     .select({
-      accessToken: ghlOAuthInstallations.accessToken
+      accessToken: ghlOAuthInstallations.accessToken,
+      expiresAt: ghlOAuthInstallations.expiresAt
     })
     .from(ghlOAuthInstallations)
-    .where(eq(ghlOAuthInstallations.locationId, ghlLocationId))
+    .where(
+      and(
+        eq(ghlOAuthInstallations.locationId, ghlLocationId),
+        eq(ghlOAuthInstallations.userType, "Location")
+      )
+    )
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
-    .limit(1);
-  candidates.push(locationInstallation?.accessToken);
-
-  const companyInstallation = await getCompanyOAuthInstallationForLocation(db, ghlLocationId);
-  candidates.push(companyInstallation?.accessToken);
-  const fallbackCompanyInstallations = await getRecentCompanyOAuthInstallations(db);
-  for (const installation of fallbackCompanyInstallations) {
-    candidates.push(installation.accessToken);
-  }
-  candidates.push(env.GHL_API_TOKEN?.trim());
-
-  const deduped = new Set<string>();
-  for (const token of candidates) {
-    const normalized = token?.trim();
-    if (normalized) {
-      deduped.add(normalized);
+    .limit(5);
+  for (const installation of locationInstallations) {
+    if (isStillValid(installation.expiresAt)) {
+      addTokenCandidate(installation.accessToken);
     }
   }
-  return Array.from(deduped);
+
+  const companyInstallations = [
+    ...(await getCompanyOAuthInstallationsForLocation(db, ghlLocationId)),
+    ...(await getRecentCompanyOAuthInstallations(db, 5))
+  ];
+  const seenCompanyTokens = new Set<string>();
+  for (const installation of companyInstallations) {
+    const companyToken = installation.accessToken?.trim();
+    if (!companyToken || seenCompanyTokens.has(companyToken)) {
+      continue;
+    }
+    seenCompanyTokens.add(companyToken);
+
+    const locationToken = await exchangeLocationAccessTokenFromCompanyToken(env, {
+      companyId: installation.companyId,
+      ghlLocationId,
+      companyAccessToken: companyToken
+    });
+    if (!locationToken) {
+      continue;
+    }
+
+    addTokenCandidate(locationToken.accessToken);
+    await upsertLocationOAuthInstallationFromExchange(db, {
+      companyId: installation.companyId,
+      ghlLocationId,
+      fallbackRefreshToken: installation.refreshToken,
+      token: locationToken
+    });
+  }
+
+  if (tokenCandidates.size === 0) {
+    // Last-resort fallback for legacy setups where only company tokens were stored.
+    for (const installation of companyInstallations) {
+      addTokenCandidate(installation.accessToken);
+    }
+  }
+
+  addTokenCandidate(env.GHL_API_TOKEN?.trim());
+  return Array.from(tokenCandidates);
 }
 
 async function fetchLocationNameOnDemand(
@@ -2690,6 +2735,14 @@ async function getCompanyOAuthInstallationForLocation(
   db: ReturnType<typeof createDb>,
   ghlLocationId: string
 ) {
+  const [installation] = await getCompanyOAuthInstallationsForLocation(db, ghlLocationId);
+  return installation ?? null;
+}
+
+async function getCompanyOAuthInstallationsForLocation(
+  db: ReturnType<typeof createDb>,
+  ghlLocationId: string
+) {
   const [locationWithAgency] = await db
     .select({
       ghlAgencyId: agencies.ghlAgencyId
@@ -2700,15 +2753,16 @@ async function getCompanyOAuthInstallationForLocation(
     .limit(1);
 
   if (!locationWithAgency?.ghlAgencyId) {
-    return null;
+    return [];
   }
 
-  const [companyInstallation] = await db
+  return db
     .select({
       companyId: ghlOAuthInstallations.companyId,
       locationId: ghlOAuthInstallations.locationId,
       userType: ghlOAuthInstallations.userType,
       accessToken: ghlOAuthInstallations.accessToken,
+      refreshToken: ghlOAuthInstallations.refreshToken,
       expiresAt: ghlOAuthInstallations.expiresAt,
       updatedAt: ghlOAuthInstallations.updatedAt
     })
@@ -2720,9 +2774,7 @@ async function getCompanyOAuthInstallationForLocation(
       )
     )
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
-    .limit(1);
-
-  return companyInstallation ?? null;
+    .limit(5);
 }
 
 async function getRecentCompanyOAuthInstallations(db: ReturnType<typeof createDb>, limit = 5) {
@@ -2733,6 +2785,7 @@ async function getRecentCompanyOAuthInstallations(db: ReturnType<typeof createDb
       locationId: ghlOAuthInstallations.locationId,
       userType: ghlOAuthInstallations.userType,
       accessToken: ghlOAuthInstallations.accessToken,
+      refreshToken: ghlOAuthInstallations.refreshToken,
       expiresAt: ghlOAuthInstallations.expiresAt,
       updatedAt: ghlOAuthInstallations.updatedAt
     })
@@ -2740,6 +2793,124 @@ async function getRecentCompanyOAuthInstallations(db: ReturnType<typeof createDb
     .where(eq(ghlOAuthInstallations.userType, "Company"))
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
     .limit(safeLimit);
+}
+
+async function exchangeLocationAccessTokenFromCompanyToken(
+  env: Env,
+  params: {
+    companyId: string;
+    ghlLocationId: string;
+    companyAccessToken: string;
+  }
+) {
+  const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
+  const requestBody = new URLSearchParams({
+    companyId: params.companyId,
+    locationId: params.ghlLocationId
+  });
+
+  try {
+    const response = await fetch(`${baseUrl}/oauth/locationToken`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.companyAccessToken}`,
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+        Version: "2021-07-28"
+      },
+      body: requestBody.toString()
+    });
+    const raw = asRecord(await response.json().catch(() => ({})));
+    if (!response.ok) {
+      return null;
+    }
+
+    const accessToken = stringOrNull(raw.access_token ?? raw.accessToken);
+    if (!accessToken) {
+      return null;
+    }
+
+    return {
+      accessToken,
+      refreshToken: stringOrNull(raw.refresh_token ?? raw.refreshToken),
+      tokenType: stringOrNull(raw.token_type ?? raw.tokenType) ?? "Bearer",
+      expiresIn: Number(raw.expires_in ?? raw.expiresIn ?? 86400),
+      scope: stringOrNull(raw.scope),
+      userId: stringOrNull(raw.userId ?? raw.user_id),
+      raw
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function upsertLocationOAuthInstallationFromExchange(
+  db: ReturnType<typeof createDb>,
+  params: {
+    companyId: string;
+    ghlLocationId: string;
+    fallbackRefreshToken: string | null;
+    token: {
+      accessToken: string;
+      refreshToken: string | null;
+      tokenType: string;
+      expiresIn: number;
+      scope: string | null;
+      userId: string | null;
+      raw: Record<string, any>;
+    };
+  }
+) {
+  const now = new Date();
+  let refreshToken = params.token.refreshToken ?? params.fallbackRefreshToken;
+  if (!refreshToken) {
+    const [existing] = await db
+      .select({
+        refreshToken: ghlOAuthInstallations.refreshToken
+      })
+      .from(ghlOAuthInstallations)
+      .where(
+        and(
+          eq(ghlOAuthInstallations.companyId, params.companyId),
+          eq(ghlOAuthInstallations.locationId, params.ghlLocationId),
+          eq(ghlOAuthInstallations.userType, "Location")
+        )
+      )
+      .limit(1);
+    refreshToken = existing?.refreshToken ?? null;
+  }
+  if (!refreshToken) {
+    return;
+  }
+
+  const values = {
+    companyId: params.companyId,
+    locationId: params.ghlLocationId,
+    userId: params.token.userId,
+    userType: "Location" as const,
+    accessToken: params.token.accessToken,
+    refreshToken,
+    tokenType: params.token.tokenType,
+    scope: params.token.scope,
+    refreshTokenId: stringOrNull(
+      params.token.raw.refreshTokenId ?? params.token.raw.refresh_token_id
+    ),
+    expiresAt: addSecondsToNow(params.token.expiresIn),
+    raw: params.token.raw,
+    updatedAt: now
+  };
+
+  await db
+    .insert(ghlOAuthInstallations)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [
+        ghlOAuthInstallations.companyId,
+        ghlOAuthInstallations.locationId,
+        ghlOAuthInstallations.userType
+      ],
+      set: values
+    });
 }
 
 async function fetchLocationNameWithToken(
@@ -2874,7 +3045,7 @@ async function sendConversationMessageWithToken(
     payload.subject = params.subject;
   }
 
-  const requestVersions = ["2021-04-15", "2021-07-28"];
+  const requestVersions = ["2023-02-21", "2021-07-28", "2021-04-15"];
   let lastError: string | null = null;
   let shouldRefreshToken = false;
   let lastStatus = 0;
