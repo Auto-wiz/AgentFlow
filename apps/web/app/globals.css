@@ -164,6 +164,134 @@ input {
   gap: 16px;
 }
 
+.app-topbar-split {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+}
+
+.app-topbar-split.appointments-topbar-compact .app-topbar-agency-compact .eyebrow {
+  font-size: 11px;
+}
+
+.app-topbar-split.appointments-topbar-compact .app-topbar-agency-compact h1 {
+  font-size: 18px;
+  margin: 4px 0 0;
+}
+
+.app-topbar-agency-compact {
+  flex: 0 1 260px;
+}
+
+.app-topbar-appointments-compact {
+  flex: 1;
+  margin-left: auto;
+  max-width: min(460px, 100%);
+  text-align: right;
+}
+
+.app-topbar-appointments-compact .eyebrow {
+  font-size: 11px;
+}
+
+.app-topbar-split .app-topbar-appointments-compact h2 {
+  color: var(--foreground);
+}
+
+@media (max-width: 900px) {
+  .app-topbar-appointments-compact {
+    margin-left: 0;
+    max-width: none;
+    text-align: left;
+  }
+}
+
+.appointments-workspace-grid {
+  align-items: stretch;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+  min-height: 0;
+}
+
+@media (max-width: 960px) {
+  .appointments-workspace-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.appointments-list-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 14px;
+}
+
+.appointments-scroll-list {
+  display: grid;
+  gap: 8px;
+  max-height: min(720px, calc(100vh - 240px));
+  min-height: 200px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+button.appointments-row {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  text-align: left;
+  transition: border-color 0.12s ease, background 0.12s ease;
+  width: 100%;
+}
+
+button.appointments-row:hover {
+  border-color: var(--accent);
+}
+
+button.appointments-row.active {
+  background: linear-gradient(90deg, var(--accent-soft), var(--panel) 52%);
+  border-color: var(--accent);
+}
+
+.appointments-embed-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: min(620px, 72vh);
+  padding: 16px;
+}
+
+.appointments-embed-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.appointments-embed-panel .muted.iframe-hint {
+  font-size: 11px;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.appointments-ghl-iframe {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  flex: 1;
+  margin: 0;
+  min-height: 520px;
+  width: 100%;
+}
+
 .app-page {
   flex: 1;
   min-height: 0;

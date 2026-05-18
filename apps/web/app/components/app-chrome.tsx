@@ -13,6 +13,7 @@ const navItems = [
 
 export function AppChrome({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const appointmentsContext = pathname === "/appointments" || pathname.startsWith("/appointments/");
 
   return (
     <div className="app-shell">
@@ -44,11 +45,24 @@ export function AppChrome({ children }: { children: ReactNode }) {
       </aside>
 
       <main className="app-main">
-        <header className="app-topbar panel">
-          <div>
+        <header
+          className={`app-topbar panel ${appointmentsContext ? "app-topbar-split appointments-topbar-compact" : ""}`}
+        >
+          <div className={appointmentsContext ? "app-topbar-agency-compact" : undefined}>
             <p className="eyebrow">GHL Agency Hub</p>
             <h1>Agency workspace</h1>
           </div>
+          {appointmentsContext ? (
+            <div className="app-topbar-appointments-compact">
+              <p className="eyebrow">Calendar module</p>
+              <h2 style={{ margin: "6px 0 4px", fontSize: "1.05rem", fontWeight: 700 }}>
+                Appointments
+              </h2>
+              <p className="muted" style={{ fontSize: 12, lineHeight: 1.4, margin: 0 }}>
+                Citas sin pago completo entre creación de la cita y la fecha agendada.
+              </p>
+            </div>
+          ) : null}
         </header>
         <section className="app-page">{children}</section>
       </main>

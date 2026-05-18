@@ -223,6 +223,7 @@ export type AppointmentSummary = {
   ghlLocationId: string;
   locationName: string | null;
   contactId: string | null;
+  ghlContactId: string | null;
   contactName: string;
   contactEmail: string | null;
   contactPhone: string | null;

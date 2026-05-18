@@ -2,7 +2,7 @@
 
 import type { AppointmentSummary, SubaccountOverview } from "@agentflow/shared";
 import { getApiBaseUrl } from "../../lib/api-base-url";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const viewerKey = "default";
 type AppointmentTimeFilter = "future" | "past" | "all";
@@ -18,12 +18,20 @@ function formatDate(value: string | null) {
   return new Date(value).toLocaleString();
 }
 
+function buildGhlContactEmbedUrl(locationId: string, contactId: string | null) {
+  if (!contactId?.trim()) {
+    return null;
+  }
+  return `https://app.gohighlevel.com/v2/location/${encodeURIComponent(locationId)}/contacts/detail/${encodeURIComponent(contactId)}`;
+}
+
 export default function AppointmentsPage() {
   const apiBaseUrl = getApiBaseUrl();
   const [appointments, setAppointments] = useState<AppointmentSummary[]>([]);
   const [subaccounts, setSubaccounts] = useState<SubaccountOverview[]>([]);
   const [selectedLocationId, setSelectedLocationId] = useState("");
   const [timeFilter, setTimeFilter] = useState<AppointmentTimeFilter>("future");
+  const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -102,24 +110,40 @@ export default function AppointmentsPage() {
     return () => controller.abort();
   }, [apiBaseUrl, selectedLocationId, timeFilter]);
 
+  useEffect(() => {
+    setSelectedAppointmentId((current) => {
+      if (!appointments.length) {
+        return null;
+      }
+      if (current && appointments.some((appointment) => appointment.id === current)) {
+        return current;
+      }
+      return appointments[0]?.id ?? null;
+    });
+  }, [appointments]);
+
   const totalAppointments = subaccounts.reduce(
     (sum, subaccount) => sum + subaccount.appointmentCount,
     0
   );
 
+  const selectedAppointment = useMemo(
+    () => appointments.find((appointment) => appointment.id === selectedAppointmentId) ?? null,
+    [appointments, selectedAppointmentId]
+  );
+
+  const ghlEmbedUrl = useMemo(() => {
+    if (!selectedAppointment) {
+      return null;
+    }
+    return buildGhlContactEmbedUrl(selectedAppointment.ghlLocationId, selectedAppointment.ghlContactId);
+  }, [selectedAppointment]);
+
   return (
     <section className="module-shell">
       <div className="panel" style={{ padding: 18 }}>
-        <p className="eyebrow">Calendar module</p>
-        <h2 style={{ marginTop: 8 }}>Appointments</h2>
-        <p className="muted">
-          Citas sin pago completo detectado entre la creación del appointment y la fecha de la cita.
-        </p>
-      </div>
-
-      <div className="panel" style={{ padding: 18 }}>
-        <p className="eyebrow">Filters</p>
-        <h3 style={{ marginTop: 8 }}>Unpaid appointment filters</h3>
+        <p className="eyebrow">Appointments</p>
+        <h2 style={{ marginTop: 8 }}>Unpaid appointment filters</h2>
         <div className="toolbar" style={{ marginBottom: 0 }}>
           <div className="inbox-filter-block" style={{ minWidth: 280 }}>
             <label className="inbox-field-label" htmlFor="appointment-subaccount-filter">
@@ -168,31 +192,79 @@ export default function AppointmentsPage() {
         </div>
       </div>
 
-      <div className="panel" style={{ padding: 18 }}>
-        {loading ? <div className="empty muted">Loading appointments...</div> : null}
-        {error ? <div className="empty">{error}</div> : null}
-        {!loading && !error && appointments.length === 0 ? (
-          <div className="empty muted">No unpaid appointments found.</div>
-        ) : null}
-        <div className="thread-list">
-          {appointments.map((appointment) => (
-            <article className="thread-card" key={appointment.id}>
-              <strong>{appointment.title ?? "Untitled appointment"}</strong>
-              <span className="muted">
-                {formatLocationName(appointment.locationName, appointment.ghlLocationId)}
-              </span>
-              <span className="muted">
-                Contact: {appointment.contactName} - Starts {formatDate(appointment.startTime)}
-              </span>
-              <div className="badge-row">
-                <span className="badge">Unpaid</span>
-                <span className="badge">{appointment.status ?? "status unknown"}</span>
-                <span className="badge">Created: {formatDate(appointment.appointmentCreatedAt)}</span>
-                <span className="badge">GHL: {appointment.ghlAppointmentId}</span>
-                <span className="badge">Updated: {formatDate(appointment.updatedAt)}</span>
+      <div className="appointments-workspace-grid">
+        <div className="panel appointments-list-panel">
+          {loading ? <div className="empty muted">Loading appointments...</div> : null}
+          {error ? <div className="empty">{error}</div> : null}
+          {!loading && !error && appointments.length === 0 ? (
+            <div className="empty muted">No unpaid appointments found.</div>
+          ) : null}
+
+          {!loading && !error && appointments.length > 0 ? (
+            <div aria-label="Unpaid appointments" className="appointments-scroll-list" role="list">
+              {appointments.map((appointment) => (
+                <button
+                  aria-current={appointment.id === selectedAppointmentId ? true : undefined}
+                  aria-label={`Appointment ${appointment.title ?? appointment.ghlAppointmentId}`}
+                  className={`appointments-row ${appointment.id === selectedAppointmentId ? "active" : ""}`}
+                  key={appointment.id}
+                  onClick={() => setSelectedAppointmentId(appointment.id)}
+                  role="listitem"
+                  type="button"
+                >
+                  <strong>{appointment.title ?? "Untitled appointment"}</strong>
+                  <span className="muted">
+                    {formatLocationName(appointment.locationName, appointment.ghlLocationId)}
+                  </span>
+                  <span className="muted">
+                    {appointment.contactName} · starts {formatDate(appointment.startTime)}
+                  </span>
+                  <div className="badge-row">
+                    <span className="badge">Unpaid</span>
+                    <span className="badge">{appointment.status ?? "status"}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="panel appointments-embed-panel">
+          {!selectedAppointment ? (
+            <div className="empty muted">Seleccioná una cita en la lista.</div>
+          ) : (
+            <>
+              <div className="appointments-embed-toolbar">
+                <p className="eyebrow" style={{ letterSpacing: "0.06em", margin: 0 }}>
+                  Contacto en GoHighLevel
+                </p>
+                {ghlEmbedUrl ? (
+                  <a className="button secondary" href={ghlEmbedUrl} rel="noreferrer noopener" target="_blank">
+                    Abrir en GHL
+                  </a>
+                ) : (
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    Sin ID de contacto en GHL
+                  </span>
+                )}
               </div>
-            </article>
-          ))}
+
+              {!selectedAppointment.ghlContactId ? (
+                <div className="empty muted">
+                  Esta cita no tiene contacto vinculado en la base local. Cuando llegue sincronizada desde GHL vas a
+                  poder abrirla acá.
+                </div>
+              ) : (
+                <>
+                  {/* GHL suele mandar headers que bloquean iframes; dejamos el intento más el fallback en nueva pestaña. */}
+                  <iframe className="appointments-ghl-iframe" src={ghlEmbedUrl ?? undefined} title="GoHighLevel contact" />
+                  <p className="muted iframe-hint">
+                    Si el iframe queda vacío o bloqueado, usá «Abrir en GHL». Es una restricción común del propio portal.
+                  </p>
+                </>
+              )}
+            </>
+          )}
         </div>
       </div>
     </section>

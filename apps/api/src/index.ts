@@ -611,6 +611,7 @@ app.get("/appointments", async (c) => {
       ghlLocationId: row.ghlLocationId,
       locationName: locationNameMap.get(row.locationId) ?? row.locationName,
       contactId: row.contactId ?? null,
+      ghlContactId: row.ghlContactId ?? null,
       contactName: formatContactName(row.firstName, row.lastName, row.email, row.phone),
       contactEmail: row.email,
       contactPhone: row.phone,
