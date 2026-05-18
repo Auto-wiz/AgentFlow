@@ -63,7 +63,7 @@ input {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
 }
@@ -170,63 +170,142 @@ input {
   gap: 12px 24px;
 }
 
-.appointments-topbar-stack {
+.app-topbar-unified.appointments-topbar-stack {
   align-items: stretch;
   flex-direction: column;
   gap: 10px;
   justify-content: flex-start;
 }
 
-.appointments-topbar-primary {
-  align-items: flex-start;
+.app-topbar-row {
+  align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: 12px 20px;
+  gap: 10px 14px;
   justify-content: space-between;
   width: 100%;
+}
+
+.app-topbar-nav {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.app-nav-pill {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: inherit;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 8px;
+  padding: 7px 14px;
+  text-decoration: none;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.app-nav-pill-icon {
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0.92;
+}
+
+.app-nav-pill:hover {
+  border-color: var(--accent);
+}
+
+.app-nav-pill.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.app-topbar-actions-rail {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.app-user-menu {
+  position: relative;
+}
+
+button.app-user-menu-trigger {
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  line-height: 0;
+  padding: 0;
+}
+
+.app-user-avatar {
+  align-items: center;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  box-sizing: border-box;
+  color: var(--accent);
+  display: flex;
+  font-size: 12px;
+  font-weight: 700;
+  height: 38px;
+  justify-content: center;
+  letter-spacing: 0.03em;
+  width: 38px;
+}
+
+.app-user-menu-popover {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 10px;
+  min-width: 220px;
+  padding: 12px 14px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 50;
+}
+
+.app-user-menu-name {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.app-user-menu-note {
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.app-user-menu-link {
+  border-top: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  margin: 4px -4px -4px;
+  padding-top: 10px;
 }
 
 .appointments-header-slot {
   width: 100%;
 }
 
-.appointments-topbar-compact .app-topbar-agency-compact .eyebrow {
-  font-size: 11px;
-}
-
-.appointments-topbar-compact .app-topbar-agency-compact h1 {
-  font-size: 18px;
-  margin: 4px 0 0;
-}
-
-.app-topbar-agency-compact {
-  flex: 0 1 260px;
-}
-
-.app-topbar-appointments-compact {
-  flex: 1;
-  margin-left: auto;
-  max-width: min(460px, 100%);
-  text-align: right;
-}
-
-.app-topbar-appointments-compact .eyebrow {
-  font-size: 11px;
-}
-
-.appointments-topbar-compact .app-topbar-appointments-compact h2 {
-  color: var(--foreground);
-}
-
 @media (max-width: 900px) {
-  .app-topbar-appointments-compact {
-    margin-left: 0;
-    max-width: none;
-    text-align: left;
+  .app-nav-pill {
+    font-size: 12px;
+    padding: 6px 12px;
   }
 }
-
-.appointments-module-page.module-shell {
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -1124,7 +1203,7 @@ button.appointments-row.active {
     height: auto;
     min-height: 100vh;
     overflow: visible;
-    padding: 14px 14px 90px;
+    padding: 14px;
   }
 
   .app-topbar {

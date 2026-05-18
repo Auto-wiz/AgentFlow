@@ -8,10 +8,10 @@ import {
   AppointmentsTopbarOutlet
 } from "./appointments-topbar-bridge";
 import { ThemeToggle } from "./theme-toggle";
+import { AppUserMenu } from "./app-user-menu";
 
 const navItems = [
   { href: "/appointments", label: "Appointments", icon: "⌚" },
-  { href: "/opportunities", label: "Opportunities", icon: "◈" },
   { href: "/settings", label: "Settings", icon: "⚙" }
 ];
 
@@ -22,66 +22,43 @@ export function AppChrome({ children }: { children: ReactNode }) {
   return (
     <AppointmentsTopbarBridgeProvider>
       <div className="app-shell">
-        <aside className="app-sidebar">
-          <div className="app-brand">A</div>
-          <nav className="app-sidebar-nav">
-            {navItems.map((item) => {
-              const isActive =
-                item.href === "/" ? pathname === "/" : pathname === item.href || pathname.startsWith(`${item.href}/`);
-              return (
-                <Link
-                  aria-label={item.label}
-                  className={`app-sidebar-link ${isActive ? "active" : ""}`}
-                  href={item.href}
-                  key={item.href}
-                  title={item.label}
-                >
-                  <span aria-hidden className="app-sidebar-icon">
-                    {item.icon}
-                  </span>
-                  <span className="app-sidebar-label">{item.label}</span>
-                </Link>
-              );
-            })}
-          </nav>
-          <div className="app-sidebar-footer">
-            <ThemeToggle compact />
-          </div>
-        </aside>
-
         <main className="app-main">
           <header
-            className={`app-topbar panel ${
-              appointmentsContext ? "appointments-topbar-stack appointments-topbar-compact" : ""
+            className={`app-topbar panel app-topbar-unified ${
+              appointmentsContext ? "appointments-topbar-stack" : ""
             }`}
           >
+            <div className="app-topbar-row">
+              <nav aria-label="Primary navigation" className="app-topbar-nav">
+                {navItems.map((item) => {
+                  const isActive =
+                    item.href === "/"
+                      ? pathname === "/"
+                      : pathname === item.href || pathname.startsWith(`${item.href}/`);
+                  return (
+                    <Link
+                      className={`app-nav-pill ${isActive ? "active" : ""}`}
+                      href={item.href}
+                      key={item.href}
+                    >
+                      <span aria-hidden className="app-nav-pill-icon">
+                        {item.icon}
+                      </span>
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </nav>
+              <div className="app-topbar-actions-rail">
+                <ThemeToggle compact />
+                <AppUserMenu />
+              </div>
+            </div>
             {appointmentsContext ? (
-              <>
-                <div className="appointments-topbar-primary">
-                  <div className="app-topbar-agency-compact">
-                    <p className="eyebrow">GHL Agency Hub</p>
-                    <h1>Agency workspace</h1>
-                  </div>
-                  <div className="app-topbar-appointments-compact">
-                    <p className="eyebrow">Calendar module</p>
-                    <h2 style={{ margin: "4px 0 2px", fontSize: "1.02rem", fontWeight: 700 }}>Appointments</h2>
-                    <p className="muted" style={{ fontSize: 11, lineHeight: 1.35, margin: 0 }}>
-                      Unpaid appointments between booking creation and scheduled start time.
-                    </p>
-                  </div>
-                </div>
-                <div className="appointments-header-slot">
-                  <AppointmentsTopbarOutlet />
-                </div>
-              </>
-            ) : (
-              <>
-                <div>
-                  <p className="eyebrow">GHL Agency Hub</p>
-                  <h1>Agency workspace</h1>
-                </div>
-              </>
-            )}
+              <div className="appointments-header-slot">
+                <AppointmentsTopbarOutlet />
+              </div>
+            ) : null}
           </header>
           <section className="app-page">{children}</section>
         </main>
