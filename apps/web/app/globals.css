@@ -206,18 +206,25 @@ input {
   }
 }
 
+.appointments-module-page.module-shell {
+  gap: 0;
+  margin: 0;
+  min-height: 0;
+}
+
 .appointments-workspace-grid {
   align-items: stretch;
   display: grid;
   gap: 14px;
-  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
-  min-height: min(760px, calc(100vh - 200px));
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  min-height: calc(100vh - 148px);
 }
 
 @media (max-width: 960px) {
   .appointments-workspace-grid {
+    gap: 12px;
     grid-template-columns: 1fr;
-    min-height: min(520px, 58vh);
+    min-height: min(calc(100vh - 140px), 900px);
   }
 
   .appointments-iframe-holder {
@@ -235,9 +242,9 @@ input {
 
 .appointments-scroll-list {
   display: grid;
+  flex: 1;
   gap: 8px;
-  max-height: min(720px, calc(100vh - 240px));
-  min-height: 200px;
+  min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
 }
@@ -265,12 +272,85 @@ button.appointments-row.active {
   border-color: var(--accent);
 }
 
-.appointments-embed-panel {
+.appointments-right-panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   min-height: 0;
-  padding: 16px;
+  padding: 10px 12px;
+}
+
+.appointments-filters-compact {
+  align-items: flex-end;
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  justify-content: flex-start;
+  padding-bottom: 2px;
+}
+
+.appointments-filter-field {
+  display: grid;
+  gap: 4px;
+}
+
+.appointments-filter-field.appointments-filter-times {
+  gap: 4px;
+}
+
+.appointments-filter-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.appointments-filter-select {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--foreground);
+  font-size: 13px;
+  max-width: 320px;
+  min-width: 180px;
+  padding: 6px 10px;
+}
+
+.appointments-time-buttons {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.appointments-time-buttons .button {
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  min-height: 32px;
+  padding: 6px 12px;
+}
+
+.appointments-embed-shell {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.appointments-embed-toolbar-title.eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  margin: 0;
+}
+
+.appointments-embed-ext-link.button.secondary {
+  font-size: 12px;
+  min-height: 32px;
+  padding: 6px 14px;
 }
 
 .appointments-iframe-holder {
@@ -292,7 +372,7 @@ button.appointments-row.active {
   justify-content: space-between;
 }
 
-.appointments-embed-panel .muted.iframe-hint {
+.appointments-embed-shell .muted.iframe-hint {
   font-size: 11px;
   line-height: 1.35;
   margin: 0;

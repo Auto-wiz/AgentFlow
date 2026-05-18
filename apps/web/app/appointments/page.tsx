@@ -140,58 +140,7 @@ export default function AppointmentsPage() {
   }, [selectedAppointment]);
 
   return (
-    <section className="module-shell">
-      <div className="panel" style={{ padding: 18 }}>
-        <p className="eyebrow">Appointments</p>
-        <h2 style={{ marginTop: 8 }}>Unpaid appointment filters</h2>
-        <div className="toolbar" style={{ marginBottom: 0 }}>
-          <div className="inbox-filter-block" style={{ minWidth: 280 }}>
-            <label className="inbox-field-label" htmlFor="appointment-subaccount-filter">
-              Subaccount
-            </label>
-            <select
-              id="appointment-subaccount-filter"
-              value={selectedLocationId}
-              onChange={(event) => setSelectedLocationId(event.target.value)}
-            >
-              <option value="">All tracked subaccounts ({totalAppointments})</option>
-              {subaccounts.map((subaccount) => (
-                <option key={subaccount.locationId} value={subaccount.locationId}>
-                  {formatLocationName(subaccount.locationName, subaccount.ghlLocationId)} ·{" "}
-                  {subaccount.appointmentCount} appointments
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="inbox-filter-block">
-            <span className="inbox-field-label">Date</span>
-            <div className="badge-row">
-              <button
-                className={`button ${timeFilter === "future" ? "" : "secondary"}`}
-                onClick={() => setTimeFilter("future")}
-                type="button"
-              >
-                Future
-              </button>
-              <button
-                className={`button ${timeFilter === "past" ? "" : "secondary"}`}
-                onClick={() => setTimeFilter("past")}
-                type="button"
-              >
-                Past
-              </button>
-              <button
-                className={`button ${timeFilter === "all" ? "" : "secondary"}`}
-                onClick={() => setTimeFilter("all")}
-                type="button"
-              >
-                All
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
+    <section className="module-shell appointments-module-page">
       <div className="appointments-workspace-grid">
         <div className="panel appointments-list-panel">
           {loading ? <div className="empty muted">Loading appointments...</div> : null}
@@ -229,45 +178,91 @@ export default function AppointmentsPage() {
           ) : null}
         </div>
 
-        <div className="panel appointments-embed-panel">
-          {!selectedAppointment ? (
-            <div className="empty muted">Seleccioná una cita en la lista.</div>
-          ) : (
-            <>
-              <div className="appointments-embed-toolbar">
-                <p className="eyebrow" style={{ letterSpacing: "0.06em", margin: 0 }}>
-                  Contacto en GoHighLevel
-                </p>
-                {ghlEmbedUrl ? (
-                  <a className="button secondary" href={ghlEmbedUrl} rel="noreferrer noopener" target="_blank">
-                    Abrir en GHL
-                  </a>
-                ) : (
-                  <span className="muted" style={{ fontSize: 12 }}>
-                    Sin ID de contacto en GHL
-                  </span>
-                )}
+        <div className="panel appointments-right-panel">
+          <div aria-label="Filtros de citas sin pago" className="appointments-filters-compact">
+            <div className="appointments-filter-field">
+              <label className="appointments-filter-label" htmlFor="appointment-subaccount-filter">
+                Subaccount
+              </label>
+              <select
+                className="appointments-filter-select"
+                id="appointment-subaccount-filter"
+                value={selectedLocationId}
+                onChange={(event) => setSelectedLocationId(event.target.value)}
+              >
+                <option value="">All ({totalAppointments})</option>
+                {subaccounts.map((subaccount) => (
+                  <option key={subaccount.locationId} value={subaccount.locationId}>
+                    {formatLocationName(subaccount.locationName, subaccount.ghlLocationId)} ({subaccount.appointmentCount})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="appointments-filter-field appointments-filter-times">
+              <span className="appointments-filter-label">Fecha</span>
+              <div className="appointments-time-buttons">
+                <button
+                  className={`button ${timeFilter === "future" ? "" : "secondary"}`}
+                  onClick={() => setTimeFilter("future")}
+                  type="button"
+                >
+                  Future
+                </button>
+                <button
+                  className={`button ${timeFilter === "past" ? "" : "secondary"}`}
+                  onClick={() => setTimeFilter("past")}
+                  type="button"
+                >
+                  Past
+                </button>
+                <button
+                  className={`button ${timeFilter === "all" ? "" : "secondary"}`}
+                  onClick={() => setTimeFilter("all")}
+                  type="button"
+                >
+                  All
+                </button>
               </div>
+            </div>
+          </div>
 
-              {!selectedAppointment.ghlContactId ? (
-                <div className="empty muted">
-                  Esta cita no tiene contacto vinculado en la base local. Cuando llegue sincronizada desde GHL vas a
-                  poder abrirla acá.
+          <div className="appointments-embed-shell">
+            {!selectedAppointment ? (
+              <div className="empty muted">Seleccioná una cita en la lista.</div>
+            ) : (
+              <>
+                <div className="appointments-embed-toolbar">
+                  <p className="eyebrow appointments-embed-toolbar-title">Contacto en GoHighLevel</p>
+                  {ghlEmbedUrl ? (
+                    <a className="button secondary appointments-embed-ext-link" href={ghlEmbedUrl} rel="noreferrer noopener" target="_blank">
+                      Abrir en GHL
+                    </a>
+                  ) : (
+                    <span className="muted" style={{ fontSize: 12 }}>
+                      Sin ID de contacto en GHL
+                    </span>
+                  )}
                 </div>
-              ) : (
-                <>
-                  {/* Viewport acotado: sin esto el iframe puede crecer con el contenido y no aparece scroll interno. */}
-                  <div className="appointments-iframe-holder">
-                    <iframe className="appointments-ghl-iframe" src={ghlEmbedUrl ?? undefined} title="GoHighLevel contact" />
+
+                {!selectedAppointment.ghlContactId ? (
+                  <div className="empty muted">
+                    Esta cita no tiene contacto vinculado en la base local. Cuando llegue sincronizada desde GHL vas a
+                    poder abrirla acá.
                   </div>
-                  <p className="muted iframe-hint">
-                    Hacé clic dentro del iframe y usá la rueda del mouse ahí si el login no muestra el botón. Si sigue igual,
-                    GHL puede tener la página sin scroll propio — usá «Abrir en GHL».
-                  </p>
-                </>
-              )}
-            </>
-          )}
+                ) : (
+                  <>
+                    <div className="appointments-iframe-holder">
+                      <iframe className="appointments-ghl-iframe" src={ghlEmbedUrl ?? undefined} title="GoHighLevel contact" />
+                    </div>
+                    <p className="muted iframe-hint">
+                      Hacé clic dentro del iframe y usá la rueda ahí si el login no muestra el botón. Si sigue igual, usá «Abrir
+                      en GHL».
+                    </p>
+                  </>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </section>
