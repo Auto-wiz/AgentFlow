@@ -265,66 +265,83 @@ input {
 }
 
 .appointments-scroll-list {
+  /* Fixed row footprint: tune height to fit ~how many rows you want visible in the list column */
+  --appointment-row-gap: 6px;
+  --appointment-row-height: 74px;
+
+  align-content: start;
   display: grid;
   flex: 1;
-  gap: 6px;
+  gap: var(--appointment-row-gap);
+  grid-auto-rows: var(--appointment-row-height);
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
 }
 
 button.appointments-row {
+  align-self: stretch;
   background: var(--panel-soft);
   border: 1px solid var(--border);
   border-radius: 9px;
+  box-sizing: border-box;
   color: inherit;
   cursor: pointer;
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: 7px 9px;
+  justify-content: flex-start;
+  min-height: 0;
+  overflow: hidden;
+  padding: 6px 8px;
   text-align: left;
   transition: border-color 0.12s ease, background 0.12s ease;
   width: 100%;
 }
 
 .appointments-row-main {
-  align-items: flex-start;
+  align-items: center;
   display: flex;
-  gap: 8px;
+  flex-shrink: 0;
+  gap: 6px;
   justify-content: space-between;
   min-height: 0;
   width: 100%;
 }
 
 .appointments-row-title {
+  display: -webkit-box;
   flex: 1;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   line-height: 1.2;
   margin: 0;
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
 }
 
 .appointments-badge-row.badge-row {
   flex-shrink: 0;
-  gap: 4px;
+  gap: 3px;
 }
 
 .appointments-badge-row .badge {
-  font-size: 9px;
+  font-size: 8px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  padding: 2px 5px;
+  padding: 2px 4px;
 }
 
 .appointments-row-sub {
-  font-size: 11px;
-  line-height: 1.25;
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1.2;
 }
 
 .appointments-row-contact {
+  flex-shrink: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
