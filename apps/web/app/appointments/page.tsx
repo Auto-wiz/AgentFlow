@@ -256,10 +256,13 @@ export default function AppointmentsPage() {
                 </div>
               ) : (
                 <>
-                  {/* GHL suele mandar headers que bloquean iframes; dejamos el intento más el fallback en nueva pestaña. */}
-                  <iframe className="appointments-ghl-iframe" src={ghlEmbedUrl ?? undefined} title="GoHighLevel contact" />
+                  {/* Viewport acotado: sin esto el iframe puede crecer con el contenido y no aparece scroll interno. */}
+                  <div className="appointments-iframe-holder">
+                    <iframe className="appointments-ghl-iframe" src={ghlEmbedUrl ?? undefined} title="GoHighLevel contact" />
+                  </div>
                   <p className="muted iframe-hint">
-                    Si el iframe queda vacío o bloqueado, usá «Abrir en GHL». Es una restricción común del propio portal.
+                    Hacé clic dentro del iframe y usá la rueda del mouse ahí si el login no muestra el botón. Si sigue igual,
+                    GHL puede tener la página sin scroll propio — usá «Abrir en GHL».
                   </p>
                 </>
               )}
