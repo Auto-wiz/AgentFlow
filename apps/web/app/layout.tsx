@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "AgentFlow",
-  description: "Centralized GoHighLevel pending replies inbox"
+  description: "Appointments and payment verification for GoHighLevel"
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -16,12 +16,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <header className="header">
             <Link href="/">
               <div className="eyebrow">AgentFlow</div>
-              <h1>Unified agency inbox</h1>
+              <h1>Appointments payment tracker</h1>
             </Link>
             <div className="badge-row">
-              <Link className="button secondary" href="/threads">
-                Pending replies
-              </Link>
               <Link className="button secondary" href="/appointments">
                 Appointments
               </Link>
