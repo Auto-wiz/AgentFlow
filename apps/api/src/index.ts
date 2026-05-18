@@ -47,7 +47,7 @@ import type {
   NormalizedGhlWebhookEvent,
   ThreadOpportunity
 } from "@agentflow/shared";
-import { and, desc, eq, inArray, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, exists, inArray, notExists, notInArray, or, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -538,7 +538,6 @@ app.get("/appointments", async (c) => {
   const viewerKey = getViewerKey(c);
   const hiddenLocationIds = await getHiddenLocationIdsForViewer(db, viewerKey);
   const filters = [];
-  const isPaidSql = appointmentHasFullPaymentSql();
 
   let query = db
     .select({
@@ -558,7 +557,7 @@ app.get("/appointments", async (c) => {
       startTime: appointments.startTime,
       endTime: appointments.endTime,
       appointmentCreatedAt: sql<Date>`COALESCE(${appointments.dateAdded}, ${appointments.createdAt})`,
-      isPaid: isPaidSql,
+      isPaid: exists(buildAppointmentPaidSubquery(db)),
       updatedAt: appointments.updatedAt
     })
     .from(appointments)
@@ -585,9 +584,9 @@ app.get("/appointments", async (c) => {
   }
 
   if (paymentStatus === "unpaid") {
-    filters.push(sql`NOT ${isPaidSql}`);
+    filters.push(notExists(buildAppointmentPaidSubquery(db)));
   } else if (paymentStatus === "paid") {
-    filters.push(isPaidSql);
+    filters.push(exists(buildAppointmentPaidSubquery(db)));
   }
 
   if (filters.length > 0) {
@@ -619,8 +618,8 @@ app.get("/appointments", async (c) => {
       status: row.status,
       startTime: row.startTime?.toISOString() ?? null,
       endTime: row.endTime?.toISOString() ?? null,
-      appointmentCreatedAt: row.appointmentCreatedAt?.toISOString() ?? null,
-      paymentStatus: row.isPaid ? "paid" : "unpaid",
+      appointmentCreatedAt: toMaybeIso(row.appointmentCreatedAt),
+      paymentStatus: coerceSqlBoolean(row.isPaid) ? "paid" : "unpaid",
       updatedAt: row.updatedAt.toISOString()
     }))
   });
@@ -656,32 +655,59 @@ app.get("/locations", async (c) => {
   });
 });
 
-function appointmentHasFullPaymentSql() {
-  return sql<boolean>`EXISTS (
-    SELECT 1
-    FROM ${invoices}
-    WHERE ${invoices.locationId} = ${appointments.locationId}
-      AND ${invoices.contactId} = ${appointments.contactId}
-      AND ${invoices.isDeleted} = false
-      AND ${appointments.contactId} IS NOT NULL
-      AND ${appointments.startTime} IS NOT NULL
-      AND COALESCE(
-        ${invoices.ghlUpdatedAt},
-        ${invoices.issueDate},
-        ${invoices.dueDate},
-        ${invoices.updatedAt},
-        ${invoices.createdAt}
-      ) BETWEEN COALESCE(${appointments.dateAdded}, ${appointments.createdAt}) AND ${appointments.startTime}
-      AND (
-        LOWER(COALESCE(${invoices.lastEventType}, '')) = 'invoicepaid'
-        OR LOWER(COALESCE(${invoices.status}, '')) = 'paid'
-        OR (
-          COALESCE(${invoices.amountPaid}, 0) > 0
-          AND COALESCE(${invoices.total}, ${invoices.amountPaid}, 0) > 0
-          AND ${invoices.amountPaid} >= COALESCE(${invoices.total}, ${invoices.amountPaid})
-        )
-      )
-  )`;
+function buildAppointmentPaidSubquery(db: ReturnType<typeof createDb>) {
+  const matchWhere = and(
+    eq(invoices.locationId, appointments.locationId),
+    eq(invoices.contactId, appointments.contactId),
+    eq(invoices.isDeleted, false),
+    sql`${appointments.contactId} is not null`,
+    sql`${appointments.startTime} is not null`,
+    sql`coalesce(${invoices.ghlUpdatedAt}, ${invoices.issueDate}, ${invoices.dueDate}, ${invoices.updatedAt}, ${invoices.createdAt})
+        between coalesce(${appointments.dateAdded}, ${appointments.createdAt})
+        and ${appointments.startTime}`,
+    or(
+      sql`lower(coalesce(${invoices.lastEventType}, '')) = 'invoicepaid'`,
+      sql`lower(coalesce(${invoices.status}, '')) = 'paid'`,
+      sql`(coalesce(${invoices.amountPaid}, 0) > 0 and coalesce(${invoices.total}, ${invoices.amountPaid}, 0) > 0 and ${invoices.amountPaid} >= coalesce(${invoices.total}, ${invoices.amountPaid}))`
+    )
+  );
+
+  return db.select({ one: sql`1`.as("one") }).from(invoices).where(matchWhere);
+}
+
+function toMaybeIso(value: unknown): string | null {
+  if (value == null) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isFinite(time) ? value.toISOString() : null;
+  }
+
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : value;
+  }
+
+  return null;
+}
+
+function coerceSqlBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true" || normalized === "t" || normalized === "1") {
+      return true;
+    }
+    return false;
+  }
+  return Boolean(value);
 }
 
 app.get("/subaccounts/overview", async (c) => {
