@@ -20,7 +20,7 @@ import type {
   NormalizedGhlMessageWebhookEvent,
   NormalizedGhlWebhookEvent
 } from "@agentflow/shared";
-import { and, desc, eq, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -78,8 +78,6 @@ app.get("/webhooks/gohighlevel", (c) =>
     method: "POST",
     events: [
       "INSTALL",
-      "InboundMessage",
-      "OutboundMessage",
       "AppointmentCreate",
       "AppointmentUpdate",
       "AppointmentDelete",
@@ -350,7 +348,9 @@ app.get("/threads", async (c) => {
 
 app.get("/appointments", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
-  const locationId = c.req.query("locationId");
+  const locationId = c.req.query("locationId")?.trim() ?? "";
+  const timeframe = c.req.query("timeframe") === "past" ? "past" : "future";
+  const now = new Date();
 
   let query = db
     .select({
@@ -369,6 +369,7 @@ app.get("/appointments", async (c) => {
       status: appointments.status,
       startTime: appointments.startTime,
       endTime: appointments.endTime,
+      dateAdded: appointments.dateAdded,
       updatedAt: appointments.updatedAt
     })
     .from(appointments)
@@ -384,7 +385,7 @@ app.get("/appointments", async (c) => {
     query = query.where(or(...locationFilters));
   }
 
-  const rows = await query.orderBy(desc(appointments.startTime), desc(appointments.updatedAt)).limit(200);
+  const rows = await query.orderBy(desc(appointments.startTime), desc(appointments.updatedAt)).limit(300);
   const locationNameMap = await hydrateMissingLocationNames(
     c.env,
     db,
@@ -394,8 +395,76 @@ app.get("/appointments", async (c) => {
       locationName: row.locationName
     }))
   );
+
+  const filteredByTimeframe = rows.filter((row) => {
+    const appointmentDate = row.startTime ?? row.endTime;
+    if (!appointmentDate) {
+      return timeframe === "future";
+    }
+    return timeframe === "future" ? appointmentDate >= now : appointmentDate < now;
+  });
+
+  const contactIds = Array.from(
+    new Set(
+      filteredByTimeframe
+        .map((row) => row.contactId)
+        .filter((value): value is string => Boolean(value))
+    )
+  );
+  const appointmentLocationIds = Array.from(
+    new Set(filteredByTimeframe.map((row) => row.locationId))
+  );
+
+  const relatedInvoices =
+    contactIds.length > 0 && appointmentLocationIds.length > 0
+      ? await db
+          .select({
+            locationId: invoices.locationId,
+            contactId: invoices.contactId,
+            status: invoices.status,
+            amountPaid: invoices.amountPaid,
+            total: invoices.total,
+            lastEventType: invoices.lastEventType,
+            ghlUpdatedAt: invoices.ghlUpdatedAt,
+            updatedAt: invoices.updatedAt,
+            isDeleted: invoices.isDeleted
+          })
+          .from(invoices)
+          .where(
+            and(
+              inArray(invoices.contactId, contactIds),
+              inArray(invoices.locationId, appointmentLocationIds),
+              eq(invoices.isDeleted, false)
+            )
+          )
+      : [];
+
+  const invoicesByAppointmentKey = new Map<string, typeof relatedInvoices>();
+  for (const invoice of relatedInvoices) {
+    if (!invoice.contactId) {
+      continue;
+    }
+    const key = `${invoice.locationId}:${invoice.contactId}`;
+    const bucket = invoicesByAppointmentKey.get(key) ?? [];
+    bucket.push(invoice);
+    invoicesByAppointmentKey.set(key, bucket);
+  }
+
+  const unpaidAppointments = filteredByTimeframe.filter((row) => {
+    if (!row.contactId) {
+      return true;
+    }
+    const key = `${row.locationId}:${row.contactId}`;
+    const candidateInvoices = invoicesByAppointmentKey.get(key) ?? [];
+    return !hasFullyPaidInvoiceInAppointmentWindow(row.dateAdded, row.startTime ?? row.endTime, candidateInvoices);
+  });
+
   return c.json({
-    appointments: rows.map((row) => ({
+    filters: {
+      locationId: locationId || null,
+      timeframe
+    },
+    appointments: unpaidAppointments.map((row) => ({
       id: row.appointmentId,
       ghlAppointmentId: row.ghlAppointmentId,
       locationId: row.locationId,
@@ -409,6 +478,9 @@ app.get("/appointments", async (c) => {
       status: row.status,
       startTime: row.startTime?.toISOString() ?? null,
       endTime: row.endTime?.toISOString() ?? null,
+      dateAdded: row.dateAdded?.toISOString() ?? null,
+      paymentStatus: "unpaid",
+      matchedPaymentDate: null,
       updatedAt: row.updatedAt.toISOString()
     }))
   });
@@ -713,7 +785,8 @@ function getNonEmptyQueryParam(url: URL, name: string): string | null {
 
 async function processWebhookEvent(env: Env, event: NormalizedGhlWebhookEvent) {
   if (event.kind === "message") {
-    await processMessageWebhookEvent(env, event);
+    // Inbox is paused for now: acknowledge message webhooks without persisting thread/message rows.
+    await markWebhookEventProcessed(env, event.idempotencyKey);
     return;
   }
 
@@ -728,6 +801,14 @@ async function processWebhookEvent(env: Env, event: NormalizedGhlWebhookEvent) {
   }
 
   await processInstallWebhookEvent(env, event);
+}
+
+async function markWebhookEventProcessed(env: Env, idempotencyKey: string) {
+  const db = createDb(env.DATABASE_URL);
+  await db
+    .update(webhookEvents)
+    .set({ status: "processed", processedAt: new Date(), error: null })
+    .where(eq(webhookEvents.idempotencyKey, idempotencyKey));
 }
 
 async function processMessageWebhookEvent(env: Env, event: NormalizedGhlMessageWebhookEvent) {
@@ -1062,31 +1143,68 @@ async function processInvoiceWebhookEvent(env: Env, event: NormalizedGhlInvoiceW
   }
 
   let contactId: string | null = null;
-  if (event.contact.ghlContactId) {
-    const nameParts = splitContactName(event.contact.name);
+  let resolvedGhlContactId = event.contact.ghlContactId;
+
+  if (!resolvedGhlContactId) {
+    const identityFilters = [];
+    if (event.contact.email) {
+      identityFilters.push(eq(contacts.email, event.contact.email));
+    }
+    if (event.contact.phone) {
+      identityFilters.push(eq(contacts.phone, event.contact.phone));
+    }
+    if (identityFilters.length > 0) {
+      const [existingContact] = await db
+        .select({
+          id: contacts.id,
+          ghlContactId: contacts.ghlContactId
+        })
+        .from(contacts)
+        .where(
+          and(
+            eq(contacts.locationId, location.id),
+            identityFilters.length === 1 ? identityFilters[0] : or(...identityFilters)
+          )
+        )
+        .limit(1);
+      if (existingContact) {
+        contactId = existingContact.id;
+        resolvedGhlContactId = existingContact.ghlContactId;
+      }
+    }
+  }
+
+  if (resolvedGhlContactId) {
+    const profile = await fetchContactProfileOnDemand(
+      env,
+      db,
+      event.location.ghlLocationId,
+      resolvedGhlContactId
+    );
+    const fallbackNameParts = splitContactName(event.contact.name);
     const [contact] = await db
       .insert(contacts)
       .values({
         locationId: location.id,
-        ghlContactId: event.contact.ghlContactId,
-        firstName: nameParts.firstName,
-        lastName: nameParts.lastName,
-        email: event.contact.email,
-        phone: event.contact.phone,
+        ghlContactId: resolvedGhlContactId,
+        firstName: profile?.firstName ?? fallbackNameParts.firstName,
+        lastName: profile?.lastName ?? fallbackNameParts.lastName,
+        email: profile?.email ?? event.contact.email,
+        phone: profile?.phone ?? event.contact.phone,
         updatedAt: now
       })
       .onConflictDoUpdate({
         target: [contacts.locationId, contacts.ghlContactId],
         set: {
-          firstName: nameParts.firstName,
-          lastName: nameParts.lastName,
-          email: event.contact.email,
-          phone: event.contact.phone,
+          firstName: sql`COALESCE(EXCLUDED.first_name, ${contacts.firstName})`,
+          lastName: sql`COALESCE(EXCLUDED.last_name, ${contacts.lastName})`,
+          email: sql`COALESCE(EXCLUDED.email, ${contacts.email})`,
+          phone: sql`COALESCE(EXCLUDED.phone, ${contacts.phone})`,
           updatedAt: now
         }
       })
       .returning({ id: contacts.id });
-    contactId = contact?.id ?? null;
+    contactId = contact?.id ?? contactId;
   }
 
   await db
@@ -1661,7 +1779,8 @@ async function normalizeGhlWebhook(
     return normalizeInvoiceWebhook(root, headers, rawBody, eventType);
   }
 
-  return normalizeMessageWebhook(root, headers, rawBody, eventType);
+  // Message/conversation webhooks are intentionally paused to reduce DB interaction.
+  return null;
 }
 
 async function normalizeMessageWebhook(
@@ -2039,6 +2158,64 @@ function normalizeInvoiceEventAction(eventType: string) {
     return "update";
   }
   return "create";
+}
+
+function hasFullyPaidInvoiceInAppointmentWindow(
+  dateAdded: Date | null,
+  appointmentDate: Date | null,
+  candidateInvoices: Array<{
+    status: string | null;
+    amountPaid: number | null;
+    total: number | null;
+    lastEventType: string;
+    ghlUpdatedAt: Date | null;
+    updatedAt: Date;
+    isDeleted: boolean;
+  }>
+) {
+  if (candidateInvoices.length === 0 || !appointmentDate) {
+    return false;
+  }
+
+  const windowStart = dateAdded ?? appointmentDate;
+  const windowEnd = appointmentDate;
+  const startMs = Math.min(windowStart.getTime(), windowEnd.getTime());
+  const endMs = Math.max(windowStart.getTime(), windowEnd.getTime());
+
+  return candidateInvoices.some((invoice) => {
+    if (invoice.isDeleted || !isInvoiceFullyPaid(invoice)) {
+      return false;
+    }
+    const paymentDate = invoice.ghlUpdatedAt ?? invoice.updatedAt;
+    const paidAtMs = paymentDate.getTime();
+    return paidAtMs >= startMs && paidAtMs <= endMs;
+  });
+}
+
+function isInvoiceFullyPaid(invoice: {
+  status: string | null;
+  amountPaid: number | null;
+  total: number | null;
+  lastEventType: string;
+}) {
+  const eventType = invoice.lastEventType.toLowerCase();
+  const status = (invoice.status ?? "").toLowerCase();
+  if (eventType.includes("partial") || status.includes("partial")) {
+    return false;
+  }
+  if (eventType.includes("invoicepaid")) {
+    return true;
+  }
+  if (!status.includes("paid")) {
+    return false;
+  }
+  if (invoice.amountPaid == null) {
+    return false;
+  }
+  if (invoice.total == null || invoice.total <= 0) {
+    return invoice.amountPaid > 0;
+  }
+  return invoice.amountPaid >= invoice.total;
 }
 
 function splitContactName(name: string | null) {

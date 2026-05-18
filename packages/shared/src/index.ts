@@ -183,9 +183,16 @@ export type AppointmentSummary = {
   status: string | null;
   startTime: string | null;
   endTime: string | null;
+  dateAdded: string | null;
+  paymentStatus: "paid" | "unpaid";
+  matchedPaymentDate: string | null;
   updatedAt: string;
 };
 
 export type AppointmentsResponse = {
+  filters: {
+    locationId: string | null;
+    timeframe: "future" | "past";
+  };
   appointments: AppointmentSummary[];
 };

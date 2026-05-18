@@ -17,21 +17,20 @@ export default function HomePage() {
   return (
     <section className="panel" style={{ padding: 32 }}>
       <p className="eyebrow">MVP foundation</p>
-      <h2>One pending-replies queue for every GoHighLevel subaccount.</h2>
+      <h2>Track future appointments that are still unpaid.</h2>
       <p className="muted">
-        AgentFlow mirrors SMS and email webhooks into channel-agnostic contact
-        threads. Any outbound reply clears the pending state, so an SMS can
-        resolve a pending email and an email can resolve a pending SMS.
+        AgentFlow now prioritizes payment follow-up: filter appointments by
+        subaccount and timeframe, and only show those without a full payment
+        between appointment creation and scheduled date.
       </p>
       <div className="badge-row" style={{ margin: "20px 0" }}>
-        <span className="badge">SMS</span>
-        <span className="badge">Email</span>
-        <span className="badge">Calls excluded</span>
-        <span className="badge">No stored tags/custom fields</span>
+        <span className="badge">Unpaid appointments only</span>
+        <span className="badge">Future/Past filter</span>
+        <span className="badge">Subaccount filter</span>
       </div>
       <div className="badge-row">
-        <Link className="button" href="/threads">
-          Open pending replies
+        <Link className="button" href="/appointments">
+          Open appointments
         </Link>
         <a className="button secondary" href={goHighLevelConnectUrl}>
           Connect GoHighLevel
