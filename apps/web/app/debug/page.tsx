@@ -48,7 +48,7 @@ export default function DebugPage() {
       <div className="panel" style={{ padding: 18 }}>
         <p className="eyebrow">Tools module</p>
         <h2 style={{ marginTop: 8 }}>Debug workspace</h2>
-        <p className="muted">Módulo técnico dentro de la misma estructura visual del front.</p>
+        <p className="muted">Technical tooling that shares the same front-end shell as operational modules.</p>
       </div>
 
       <div className="panel" style={{ padding: 20, marginBottom: 16 }}>

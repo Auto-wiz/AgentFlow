@@ -113,7 +113,10 @@ export default function ThreadMessagesPage({ params }: { params: { id: string } 
             <div className="badge-row" style={{ marginBottom: 8 }}>
               <span className="badge">{message.channel}</span>
               <span className="badge">{message.direction}</span>
-              <span className="badge">{new Date(message.sentAt).toLocaleString()}</span>
+              <span className="badge">{new Date(message.sentAt).toLocaleString("en-US", {
+                      dateStyle: "medium",
+                      timeStyle: "short"
+                    })}</span>
             </div>
             {message.subject ? <strong>{message.subject}</strong> : null}
             <p>{message.body ?? "(No body)"}</p>

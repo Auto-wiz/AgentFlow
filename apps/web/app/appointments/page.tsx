@@ -3,6 +3,7 @@
 import type { AppointmentSummary, SubaccountOverview } from "@agentflow/shared";
 import { getApiBaseUrl } from "../../lib/api-base-url";
 import { useEffect, useMemo, useState } from "react";
+import { useAppointmentsTopbarSlot } from "../components/appointments-topbar-bridge";
 
 const viewerKey = "default";
 type AppointmentTimeFilter = "future" | "past" | "all";
@@ -15,7 +16,10 @@ function formatDate(value: string | null) {
   if (!value) {
     return "Not scheduled";
   }
-  return new Date(value).toLocaleString();
+  return new Date(value).toLocaleString("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short"
+  });
 }
 
 function buildGhlContactEmbedUrl(locationId: string, contactId: string | null) {
@@ -26,6 +30,7 @@ function buildGhlContactEmbedUrl(locationId: string, contactId: string | null) {
 }
 
 export default function AppointmentsPage() {
+  const setTopbarFilters = useAppointmentsTopbarSlot();
   const apiBaseUrl = getApiBaseUrl();
   const [appointments, setAppointments] = useState<AppointmentSummary[]>([]);
   const [subaccounts, setSubaccounts] = useState<SubaccountOverview[]>([]);
@@ -139,6 +144,50 @@ export default function AppointmentsPage() {
     return buildGhlContactEmbedUrl(selectedAppointment.ghlLocationId, selectedAppointment.ghlContactId);
   }, [selectedAppointment]);
 
+  useEffect(() => {
+    setTopbarFilters(
+      <div aria-label="Unpaid appointments filters" className="appointments-header-filters">
+        <div className="appointments-filter-field appointments-filter-inline">
+          <label className="appointments-filter-label" htmlFor="appointment-subaccount-filter">
+            Subaccount
+          </label>
+          <select
+            className="appointments-filter-select appointments-filter-select-inline"
+            id="appointment-subaccount-filter"
+            value={selectedLocationId}
+            onChange={(event) => setSelectedLocationId(event.target.value)}
+          >
+            <option value="">All ({totalAppointments})</option>
+            {subaccounts.map((subaccount) => (
+              <option key={subaccount.locationId} value={subaccount.locationId}>
+                {formatLocationName(subaccount.locationName, subaccount.ghlLocationId)} ({subaccount.appointmentCount})
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="appointments-filter-field appointments-filter-times appointments-filter-inline">
+          <span className="appointments-filter-label">Date</span>
+          <div className="appointments-time-buttons">
+            <button
+              className={`button ${timeFilter === "future" ? "" : "secondary"}`}
+              onClick={() => setTimeFilter("future")}
+              type="button"
+            >
+              Future
+            </button>
+            <button className={`button ${timeFilter === "past" ? "" : "secondary"}`} onClick={() => setTimeFilter("past")} type="button">
+              Past
+            </button>
+            <button className={`button ${timeFilter === "all" ? "" : "secondary"}`} onClick={() => setTimeFilter("all")} type="button">
+              All
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+    return () => setTopbarFilters(null);
+  }, [setTopbarFilters, selectedLocationId, subaccounts, timeFilter, totalAppointments]);
+
   return (
     <section className="module-shell appointments-module-page">
       <div className="appointments-workspace-grid">
@@ -161,16 +210,16 @@ export default function AppointmentsPage() {
                   role="listitem"
                   type="button"
                 >
-                  <strong>{appointment.title ?? "Untitled appointment"}</strong>
-                  <span className="muted">
-                    {formatLocationName(appointment.locationName, appointment.ghlLocationId)}
-                  </span>
-                  <span className="muted">
-                    {appointment.contactName} · starts {formatDate(appointment.startTime)}
-                  </span>
-                  <div className="badge-row">
-                    <span className="badge">Unpaid</span>
-                    <span className="badge">{appointment.status ?? "status"}</span>
+                  <div className="appointments-row-main">
+                    <strong className="appointments-row-title">{appointment.title ?? "Untitled appointment"}</strong>
+                    <div className="badge-row appointments-badge-row">
+                      <span className="badge">Unpaid</span>
+                      <span className="badge">{appointment.status ?? "status"}</span>
+                    </div>
+                  </div>
+                  <div className="appointments-row-sub muted">{formatLocationName(appointment.locationName, appointment.ghlLocationId)}</div>
+                  <div className="appointments-row-sub muted appointments-row-contact">
+                    {appointment.contactName} · {formatDate(appointment.startTime)}
                   </div>
                 </button>
               ))}
@@ -178,91 +227,31 @@ export default function AppointmentsPage() {
           ) : null}
         </div>
 
-        <div className="panel appointments-right-panel">
-          <div aria-label="Filtros de citas sin pago" className="appointments-filters-compact">
-            <div className="appointments-filter-field">
-              <label className="appointments-filter-label" htmlFor="appointment-subaccount-filter">
-                Subaccount
-              </label>
-              <select
-                className="appointments-filter-select"
-                id="appointment-subaccount-filter"
-                value={selectedLocationId}
-                onChange={(event) => setSelectedLocationId(event.target.value)}
-              >
-                <option value="">All ({totalAppointments})</option>
-                {subaccounts.map((subaccount) => (
-                  <option key={subaccount.locationId} value={subaccount.locationId}>
-                    {formatLocationName(subaccount.locationName, subaccount.ghlLocationId)} ({subaccount.appointmentCount})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="appointments-filter-field appointments-filter-times">
-              <span className="appointments-filter-label">Fecha</span>
-              <div className="appointments-time-buttons">
-                <button
-                  className={`button ${timeFilter === "future" ? "" : "secondary"}`}
-                  onClick={() => setTimeFilter("future")}
-                  type="button"
-                >
-                  Future
-                </button>
-                <button
-                  className={`button ${timeFilter === "past" ? "" : "secondary"}`}
-                  onClick={() => setTimeFilter("past")}
-                  type="button"
-                >
-                  Past
-                </button>
-                <button
-                  className={`button ${timeFilter === "all" ? "" : "secondary"}`}
-                  onClick={() => setTimeFilter("all")}
-                  type="button"
-                >
-                  All
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="appointments-embed-shell">
-            {!selectedAppointment ? (
-              <div className="empty muted">Seleccioná una cita en la lista.</div>
-            ) : (
-              <>
-                <div className="appointments-embed-toolbar">
-                  <p className="eyebrow appointments-embed-toolbar-title">Contacto en GoHighLevel</p>
-                  {ghlEmbedUrl ? (
-                    <a className="button secondary appointments-embed-ext-link" href={ghlEmbedUrl} rel="noreferrer noopener" target="_blank">
-                      Abrir en GHL
-                    </a>
-                  ) : (
-                    <span className="muted" style={{ fontSize: 12 }}>
-                      Sin ID de contacto en GHL
-                    </span>
-                  )}
+        <div className="panel appointments-right-panel appointments-iframe-panel">
+          {!selectedAppointment ? (
+            <div className="empty muted appointments-iframe-empty">Select an appointment from the list.</div>
+          ) : (
+            <>
+              {!selectedAppointment.ghlContactId ? (
+                <div className="empty muted appointments-iframe-empty">
+                  This appointment has no linked contact in local data yet. Once it syncs from GoHighLevel you can view it here.
                 </div>
-
-                {!selectedAppointment.ghlContactId ? (
-                  <div className="empty muted">
-                    Esta cita no tiene contacto vinculado en la base local. Cuando llegue sincronizada desde GHL vas a
-                    poder abrirla acá.
-                  </div>
-                ) : (
-                  <>
-                    <div className="appointments-iframe-holder">
-                      <iframe className="appointments-ghl-iframe" src={ghlEmbedUrl ?? undefined} title="GoHighLevel contact" />
+              ) : ghlEmbedUrl ? (
+                <>
+                  <div className="appointments-iframe-holder appointments-iframe-only">
+                    <iframe className="appointments-ghl-iframe" src={ghlEmbedUrl ?? undefined} title="GoHighLevel contact" />
+                    <div aria-label="Open contact in GoHighLevel" className="appointments-gframe-chip">
+                      <a className="button secondary appointments-embed-ext-link" href={ghlEmbedUrl} rel="noreferrer noopener" target="_blank">
+                        Open in GHL
+                      </a>
                     </div>
-                    <p className="muted iframe-hint">
-                      Hacé clic dentro del iframe y usá la rueda ahí si el login no muestra el botón. Si sigue igual, usá «Abrir
-                      en GHL».
-                    </p>
-                  </>
-                )}
-              </>
-            )}
-          </div>
+                  </div>
+                </>
+              ) : (
+                <div className="empty muted appointments-iframe-empty">Missing GoHighLevel contact URL.</div>
+              )}
+            </>
+          )}
         </div>
       </div>
     </section>

@@ -103,7 +103,9 @@ export default function SubaccountsPage() {
       <div className="panel" style={{ padding: 18 }}>
         <p className="eyebrow">Management module</p>
         <h2 style={{ marginTop: 8 }}>Subaccounts tracking</h2>
-        <p className="muted">Configuración visual integrada al shell general del dashboard.</p>
+        <p className="muted">
+          Tracks visibility using the shared dashboard chrome for a consistent workspace experience.
+        </p>
       </div>
 
       <div className="panel" style={{ padding: 18, marginBottom: 12 }}>

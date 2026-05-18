@@ -505,7 +505,10 @@ export default function ThreadsPage() {
                 <article className={`inbox-message-bubble ${message.direction}`} key={message.id}>
                   {message.subject ? <strong>{message.subject}</strong> : null}
                   <p>{message.body ?? "(No body)"}</p>
-                  <span className="muted">{new Date(message.sentAt).toLocaleString()}</span>
+                  <span className="muted">{new Date(message.sentAt).toLocaleString("en-US", {
+                    dateStyle: "medium",
+                    timeStyle: "short"
+                  })}</span>
                 </article>
               ))}
             </div>
