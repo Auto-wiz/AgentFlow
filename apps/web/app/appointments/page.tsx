@@ -5,6 +5,7 @@ import { getApiBaseUrl } from "../../lib/api-base-url";
 import { useEffect, useState } from "react";
 
 const viewerKey = "default";
+type AppointmentTimeFilter = "future" | "past" | "all";
 
 function formatLocationName(locationName: string | null, ghlLocationId: string) {
   return locationName ? `${locationName} (${ghlLocationId})` : ghlLocationId;
@@ -22,6 +23,7 @@ export default function AppointmentsPage() {
   const [appointments, setAppointments] = useState<AppointmentSummary[]>([]);
   const [subaccounts, setSubaccounts] = useState<SubaccountOverview[]>([]);
   const [selectedLocationId, setSelectedLocationId] = useState("");
+  const [timeFilter, setTimeFilter] = useState<AppointmentTimeFilter>("future");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,6 +68,10 @@ export default function AppointmentsPage() {
         if (nextSelectedLocationId) {
           params.set("locationId", nextSelectedLocationId);
         }
+        if (timeFilter !== "all") {
+          params.set("time", timeFilter);
+        }
+        params.set("paymentStatus", "unpaid");
 
         const url = params.toString()
           ? `${apiBaseUrl}/appointments?${params.toString()}`
@@ -94,7 +100,7 @@ export default function AppointmentsPage() {
 
     loadAppointments();
     return () => controller.abort();
-  }, [selectedLocationId]);
+  }, [apiBaseUrl, selectedLocationId, timeFilter]);
 
   const totalAppointments = subaccounts.reduce(
     (sum, subaccount) => sum + subaccount.appointmentCount,
@@ -106,62 +112,87 @@ export default function AppointmentsPage() {
       <div className="panel" style={{ padding: 18 }}>
         <p className="eyebrow">Calendar module</p>
         <h2 style={{ marginTop: 8 }}>Appointments</h2>
-        <p className="muted">Vista en formato módulo, siguiendo el shell general del workspace.</p>
+        <p className="muted">
+          Citas sin pago completo detectado entre la creación del appointment y la fecha de la cita.
+        </p>
       </div>
 
-      <div className="split-layout">
-        <aside className="panel subaccount-sidebar">
-          <p className="eyebrow">Subaccounts</p>
-          <h3 style={{ marginTop: 8 }}>Appointments</h3>
-          <div className="subaccount-list">
-            <button
-              className={`subaccount-item ${selectedLocationId ? "" : "active"}`}
-              onClick={() => setSelectedLocationId("")}
-              type="button"
+      <div className="panel" style={{ padding: 18 }}>
+        <p className="eyebrow">Filters</p>
+        <h3 style={{ marginTop: 8 }}>Unpaid appointment filters</h3>
+        <div className="toolbar" style={{ marginBottom: 0 }}>
+          <div className="inbox-filter-block" style={{ minWidth: 280 }}>
+            <label className="inbox-field-label" htmlFor="appointment-subaccount-filter">
+              Subaccount
+            </label>
+            <select
+              id="appointment-subaccount-filter"
+              value={selectedLocationId}
+              onChange={(event) => setSelectedLocationId(event.target.value)}
             >
-              <strong>All tracked subaccounts</strong>
-              <span className="muted">{totalAppointments} appointments</span>
-            </button>
-            {subaccounts.map((subaccount) => (
+              <option value="">All tracked subaccounts ({totalAppointments})</option>
+              {subaccounts.map((subaccount) => (
+                <option key={subaccount.locationId} value={subaccount.locationId}>
+                  {formatLocationName(subaccount.locationName, subaccount.ghlLocationId)} ·{" "}
+                  {subaccount.appointmentCount} appointments
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="inbox-filter-block">
+            <span className="inbox-field-label">Date</span>
+            <div className="badge-row">
               <button
-                className={`subaccount-item ${
-                  selectedLocationId === subaccount.locationId ? "active" : ""
-                }`}
-                key={subaccount.locationId}
-                onClick={() => setSelectedLocationId(subaccount.locationId)}
+                className={`button ${timeFilter === "future" ? "" : "secondary"}`}
+                onClick={() => setTimeFilter("future")}
                 type="button"
               >
-                <strong>{formatLocationName(subaccount.locationName, subaccount.ghlLocationId)}</strong>
-                <span className="muted">{subaccount.appointmentCount} appointments</span>
+                Future
               </button>
-            ))}
+              <button
+                className={`button ${timeFilter === "past" ? "" : "secondary"}`}
+                onClick={() => setTimeFilter("past")}
+                type="button"
+              >
+                Past
+              </button>
+              <button
+                className={`button ${timeFilter === "all" ? "" : "secondary"}`}
+                onClick={() => setTimeFilter("all")}
+                type="button"
+              >
+                All
+              </button>
+            </div>
           </div>
-        </aside>
+        </div>
+      </div>
 
-        <div className="panel" style={{ padding: 18 }}>
-          {loading ? <div className="empty muted">Loading appointments...</div> : null}
-          {error ? <div className="empty">{error}</div> : null}
-          {!loading && !error && appointments.length === 0 ? (
-            <div className="empty muted">No appointments found.</div>
-          ) : null}
-          <div className="thread-list">
-            {appointments.map((appointment) => (
-              <article className="thread-card" key={appointment.id}>
-                <strong>{appointment.title ?? "Untitled appointment"}</strong>
-                <span className="muted">
-                  {formatLocationName(appointment.locationName, appointment.ghlLocationId)}
-                </span>
-                <span className="muted">
-                  Contact: {appointment.contactName} - Starts {formatDate(appointment.startTime)}
-                </span>
-                <div className="badge-row">
-                  <span className="badge">{appointment.status ?? "status unknown"}</span>
-                  <span className="badge">GHL: {appointment.ghlAppointmentId}</span>
-                  <span className="badge">Updated: {formatDate(appointment.updatedAt)}</span>
-                </div>
-              </article>
-            ))}
-          </div>
+      <div className="panel" style={{ padding: 18 }}>
+        {loading ? <div className="empty muted">Loading appointments...</div> : null}
+        {error ? <div className="empty">{error}</div> : null}
+        {!loading && !error && appointments.length === 0 ? (
+          <div className="empty muted">No unpaid appointments found.</div>
+        ) : null}
+        <div className="thread-list">
+          {appointments.map((appointment) => (
+            <article className="thread-card" key={appointment.id}>
+              <strong>{appointment.title ?? "Untitled appointment"}</strong>
+              <span className="muted">
+                {formatLocationName(appointment.locationName, appointment.ghlLocationId)}
+              </span>
+              <span className="muted">
+                Contact: {appointment.contactName} - Starts {formatDate(appointment.startTime)}
+              </span>
+              <div className="badge-row">
+                <span className="badge">Unpaid</span>
+                <span className="badge">{appointment.status ?? "status unknown"}</span>
+                <span className="badge">Created: {formatDate(appointment.appointmentCreatedAt)}</span>
+                <span className="badge">GHL: {appointment.ghlAppointmentId}</span>
+                <span className="badge">Updated: {formatDate(appointment.updatedAt)}</span>
+              </div>
+            </article>
+          ))}
         </div>
       </div>
     </section>

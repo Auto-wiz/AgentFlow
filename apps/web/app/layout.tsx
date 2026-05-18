@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "AgentFlow",
-  description: "Centralized GoHighLevel pending replies inbox"
+  description: "GoHighLevel appointments and payment tracking"
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

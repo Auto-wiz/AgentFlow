@@ -6,7 +6,6 @@ import type { ReactNode } from "react";
 import { ThemeToggle } from "./theme-toggle";
 
 const navItems = [
-  { href: "/threads", label: "Inbox", icon: "✉" },
   { href: "/appointments", label: "Appointments", icon: "⌚" },
   { href: "/opportunities", label: "Opportunities", icon: "◈" },
   { href: "/settings", label: "Settings", icon: "⚙" }

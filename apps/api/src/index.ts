@@ -126,16 +126,10 @@ const supportedWebhookEvents = [
   "ContactDelete",
   "ContactDndUpdate",
   "ContactTagUpdate",
-  "ConversationUnreadWebhook",
-  "ConversationUpdate",
   "ExternalAuthConnected",
-  "InboundMessage",
-  "OutboundMessage",
-  "ProviderOutboundMessage",
   "InvoiceCreate",
   "InvoiceDelete",
   "InvoicePaid",
-  "InvoicePartiallyPaid",
   "InvoiceSent",
   "InvoiceUpdate",
   "InvoiceVoid",
@@ -539,9 +533,12 @@ app.get("/threads", async (c) => {
 app.get("/appointments", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   const locationId = c.req.query("locationId");
+  const time = c.req.query("time") ?? "future";
+  const paymentStatus = c.req.query("paymentStatus") ?? "unpaid";
   const viewerKey = getViewerKey(c);
   const hiddenLocationIds = await getHiddenLocationIdsForViewer(db, viewerKey);
   const filters = [];
+  const isPaidSql = appointmentHasFullPaymentSql();
 
   let query = db
     .select({
@@ -560,6 +557,8 @@ app.get("/appointments", async (c) => {
       status: appointments.status,
       startTime: appointments.startTime,
       endTime: appointments.endTime,
+      appointmentCreatedAt: sql<Date>`COALESCE(${appointments.dateAdded}, ${appointments.createdAt})`,
+      isPaid: isPaidSql,
       updatedAt: appointments.updatedAt
     })
     .from(appointments)
@@ -577,6 +576,18 @@ app.get("/appointments", async (c) => {
 
   if (hiddenLocationIds.length > 0) {
     filters.push(notInArray(appointments.locationId, hiddenLocationIds));
+  }
+
+  if (time === "future") {
+    filters.push(sql`${appointments.startTime} >= NOW()`);
+  } else if (time === "past") {
+    filters.push(sql`${appointments.startTime} < NOW()`);
+  }
+
+  if (paymentStatus === "unpaid") {
+    filters.push(sql`NOT ${isPaidSql}`);
+  } else if (paymentStatus === "paid") {
+    filters.push(isPaidSql);
   }
 
   if (filters.length > 0) {
@@ -608,6 +619,8 @@ app.get("/appointments", async (c) => {
       status: row.status,
       startTime: row.startTime?.toISOString() ?? null,
       endTime: row.endTime?.toISOString() ?? null,
+      appointmentCreatedAt: row.appointmentCreatedAt?.toISOString() ?? null,
+      paymentStatus: row.isPaid ? "paid" : "unpaid",
       updatedAt: row.updatedAt.toISOString()
     }))
   });
@@ -643,10 +656,39 @@ app.get("/locations", async (c) => {
   });
 });
 
+function appointmentHasFullPaymentSql() {
+  return sql<boolean>`EXISTS (
+    SELECT 1
+    FROM ${invoices}
+    WHERE ${invoices.locationId} = ${appointments.locationId}
+      AND ${invoices.contactId} = ${appointments.contactId}
+      AND ${invoices.isDeleted} = false
+      AND ${appointments.contactId} IS NOT NULL
+      AND ${appointments.startTime} IS NOT NULL
+      AND COALESCE(
+        ${invoices.ghlUpdatedAt},
+        ${invoices.issueDate},
+        ${invoices.dueDate},
+        ${invoices.updatedAt},
+        ${invoices.createdAt}
+      ) BETWEEN COALESCE(${appointments.dateAdded}, ${appointments.createdAt}) AND ${appointments.startTime}
+      AND (
+        LOWER(COALESCE(${invoices.lastEventType}, '')) = 'invoicepaid'
+        OR LOWER(COALESCE(${invoices.status}, '')) = 'paid'
+        OR (
+          COALESCE(${invoices.amountPaid}, 0) > 0
+          AND COALESCE(${invoices.total}, ${invoices.amountPaid}, 0) > 0
+          AND ${invoices.amountPaid} >= COALESCE(${invoices.total}, ${invoices.amountPaid})
+        )
+      )
+  )`;
+}
+
 app.get("/subaccounts/overview", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   const viewerKey = getViewerKey(c);
   const surface = c.req.query("surface") ?? "all";
+  const includeConversationCounts = surface !== "appointments";
 
   const [locationRows, conversationRows, pendingRows, appointmentRows, visibilityRows] = await Promise.all([
     db
@@ -660,21 +702,25 @@ app.get("/subaccounts/overview", async (c) => {
       .from(locations)
       .leftJoin(agencies, eq(locations.agencyId, agencies.id))
       .orderBy(locations.ghlLocationId),
-    db
-      .select({
-        locationId: threads.locationId,
-        count: sql<number>`count(*)::int`
-      })
-      .from(threads)
-      .groupBy(threads.locationId),
-    db
-      .select({
-        locationId: threads.locationId,
-        count: sql<number>`count(*)::int`
-      })
-      .from(threads)
-      .where(eq(threads.pendingReply, true))
-      .groupBy(threads.locationId),
+    includeConversationCounts
+      ? db
+          .select({
+            locationId: threads.locationId,
+            count: sql<number>`count(*)::int`
+          })
+          .from(threads)
+          .groupBy(threads.locationId)
+      : Promise.resolve([]),
+    includeConversationCounts
+      ? db
+          .select({
+            locationId: threads.locationId,
+            count: sql<number>`count(*)::int`
+          })
+          .from(threads)
+          .where(eq(threads.pendingReply, true))
+          .groupBy(threads.locationId)
+      : Promise.resolve([]),
     db
       .select({
         locationId: appointments.locationId,
@@ -1586,7 +1632,7 @@ function mapWebhookTypeToMirrorCategory(webhookType: string): WebhookMirrorCateg
 
 async function processWebhookEvent(env: Env, event: NormalizedGhlWebhookEvent) {
   if (event.kind === "message") {
-    await processMessageWebhookEvent(env, event);
+    await markWebhookEventProcessed(env, event.idempotencyKey);
     return;
   }
 
@@ -1601,6 +1647,14 @@ async function processWebhookEvent(env: Env, event: NormalizedGhlWebhookEvent) {
   }
 
   await processInstallWebhookEvent(env, event);
+}
+
+async function markWebhookEventProcessed(env: Env, idempotencyKey: string) {
+  const db = createDb(env.DATABASE_URL);
+  await db
+    .update(webhookEvents)
+    .set({ status: "processed", processedAt: new Date(), error: null })
+    .where(eq(webhookEvents.idempotencyKey, idempotencyKey));
 }
 
 type ContactIdentitySnapshot = {
@@ -1668,6 +1722,37 @@ function hasAnyContactIdentity(
     return false;
   }
   return Boolean(identity.firstName || identity.lastName || identity.email || identity.phone);
+}
+
+async function findStoredContactForInvoice(
+  db: ReturnType<typeof createDb>,
+  locationId: string,
+  email: string | null,
+  phone: string | null
+) {
+  const identityFilters = [];
+  if (email) {
+    identityFilters.push(sql`LOWER(${contacts.email}) = ${email.toLowerCase()}`);
+  }
+  if (phone) {
+    identityFilters.push(eq(contacts.phone, phone));
+  }
+
+  if (identityFilters.length === 0) {
+    return null;
+  }
+
+  const identityFilter = identityFilters.length === 1 ? identityFilters[0] : or(...identityFilters);
+  const [storedContact] = await db
+    .select({
+      id: contacts.id,
+      ghlContactId: contacts.ghlContactId
+    })
+    .from(contacts)
+    .where(and(eq(contacts.locationId, locationId), identityFilter))
+    .limit(1);
+
+  return storedContact ?? null;
 }
 
 function normalizeStoredContactTags(value: unknown): string[] | null {
@@ -2057,26 +2142,63 @@ async function processInvoiceWebhookEvent(env: Env, event: NormalizedGhlInvoiceW
   }
 
   let contactId: string | null = null;
-  if (event.contact.ghlContactId) {
+  let ghlContactId = event.contact.ghlContactId;
+  let contactProfile: ContactProfileOnDemand | null = null;
+
+  if (!ghlContactId) {
+    const storedContact = await findStoredContactForInvoice(
+      db,
+      location.id,
+      event.contact.email,
+      event.contact.phone
+    );
+    if (storedContact) {
+      contactId = storedContact.id;
+      ghlContactId = storedContact.ghlContactId;
+    }
+  }
+
+  if (!ghlContactId) {
+    contactProfile = await fetchContactProfileByIdentityOnDemand(
+      env,
+      db,
+      event.location.ghlLocationId,
+      event.contact.email,
+      event.contact.phone
+    );
+    ghlContactId = contactProfile?.id ?? null;
+  }
+
+  if (ghlContactId) {
     const nameParts = splitContactName(event.contact.name);
+    contactProfile =
+      contactProfile ??
+      (await fetchContactProfileForWebhookIfNeeded(env, db, location.id, event.location.ghlLocationId, ghlContactId, {
+        firstName: nameParts.firstName,
+        lastName: nameParts.lastName,
+        email: event.contact.email,
+        phone: event.contact.phone
+      }));
     const [contact] = await db
       .insert(contacts)
       .values({
         locationId: location.id,
-        ghlContactId: event.contact.ghlContactId,
-        firstName: nameParts.firstName,
-        lastName: nameParts.lastName,
-        email: event.contact.email,
-        phone: event.contact.phone,
+        ghlContactId,
+        firstName: nameParts.firstName ?? contactProfile?.firstName ?? null,
+        lastName: nameParts.lastName ?? contactProfile?.lastName ?? null,
+        email: event.contact.email ?? contactProfile?.email ?? null,
+        phone: event.contact.phone ?? contactProfile?.phone ?? null,
+        tags: contactProfile?.tags ?? null,
         updatedAt: now
       })
       .onConflictDoUpdate({
         target: [contacts.locationId, contacts.ghlContactId],
         set: {
-          firstName: nameParts.firstName,
-          lastName: nameParts.lastName,
-          email: event.contact.email,
-          phone: event.contact.phone,
+          firstName: sql`COALESCE(EXCLUDED.first_name, ${contacts.firstName})`,
+          lastName: sql`COALESCE(EXCLUDED.last_name, ${contacts.lastName})`,
+          email: sql`COALESCE(EXCLUDED.email, ${contacts.email})`,
+          phone: sql`COALESCE(EXCLUDED.phone, ${contacts.phone})`,
+          tags: sql`COALESCE(EXCLUDED.tags, ${contacts.tags})`,
           updatedAt: now
         }
       })
@@ -2241,6 +2363,151 @@ async function fetchContactProfileOnDemand(
 
   const retriedAttempt = await tryWithCurrentTokens();
   return retriedAttempt.profile;
+}
+
+async function fetchContactProfileByIdentityOnDemand(
+  env: Env,
+  db: ReturnType<typeof createDb>,
+  ghlLocationId: string,
+  email: string | null,
+  phone: string | null
+): Promise<ContactProfileOnDemand | null> {
+  if (!email && !phone) {
+    return null;
+  }
+
+  const tryWithCurrentTokens = async (): Promise<ContactProfileFetchResult> => {
+    const accessTokens = await getAccessTokensForLocation(env, db, ghlLocationId);
+    let lastError: string | null = null;
+    let shouldRefreshToken = false;
+
+    for (const accessToken of accessTokens) {
+      const result = await fetchContactProfileByIdentityWithToken(env, ghlLocationId, email, phone, accessToken);
+      if (result.profile) {
+        return result;
+      }
+      if (result.error) {
+        lastError = result.error;
+      }
+      shouldRefreshToken = shouldRefreshToken || result.shouldRefreshToken;
+    }
+
+    return {
+      profile: null,
+      error: lastError,
+      shouldRefreshToken
+    };
+  };
+
+  const initialAttempt = await tryWithCurrentTokens();
+  if (initialAttempt.profile) {
+    return initialAttempt.profile;
+  }
+
+  if (!initialAttempt.shouldRefreshToken) {
+    return null;
+  }
+
+  const refreshedCount = await refreshOAuthAccessTokensForLocation(env, db, ghlLocationId);
+  if (refreshedCount <= 0) {
+    return null;
+  }
+
+  const retriedAttempt = await tryWithCurrentTokens();
+  return retriedAttempt.profile;
+}
+
+async function fetchContactProfileByIdentityWithToken(
+  env: Env,
+  ghlLocationId: string,
+  email: string | null,
+  phone: string | null,
+  accessToken: string
+): Promise<ContactProfileFetchResult> {
+  try {
+    const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
+    const requestUrl = new URL("/contacts/search/duplicate", baseUrl);
+    requestUrl.searchParams.set("locationId", ghlLocationId);
+    if (email) {
+      requestUrl.searchParams.set("email", email);
+    }
+    if (phone) {
+      requestUrl.searchParams.set("phone", phone);
+    }
+
+    const response = await fetch(requestUrl.toString(), {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+        Version: "2021-07-28",
+        "Location-Id": ghlLocationId,
+        locationId: ghlLocationId
+      }
+    });
+
+    if (!response.ok) {
+      const parsedError = asRecord(await response.json().catch(() => ({})));
+      const responseError =
+        stringOrNull(parsedError.message ?? parsedError.error ?? parsedError.error_description) ??
+        response.statusText;
+      return {
+        profile: null,
+        error: responseError,
+        shouldRefreshToken: isTokenError(responseError) || response.status === 401 || response.status === 403
+      };
+    }
+
+    const data = asRecord(await response.json());
+    const contact = asRecord(data.contact ?? data.contacts?.[0] ?? data);
+    const ghlContactId = stringOrNull(contact.id ?? contact.contactId);
+    if (!ghlContactId) {
+      return { profile: null, error: null, shouldRefreshToken: false };
+    }
+
+    const firstName = stringOrNull(contact.firstName);
+    const lastName = stringOrNull(contact.lastName);
+    const contactEmail = stringOrNull(contact.email) ?? email;
+    const contactPhone = stringOrNull(contact.phone) ?? phone;
+    return {
+      profile: {
+        id: ghlContactId,
+        firstName,
+        lastName,
+        fullName: firstNonEmptyString(
+          stringOrNull(contact.name),
+          stringOrNull(contact.contactName),
+          formatContactName(firstName, lastName, contactEmail, contactPhone)
+        ),
+        email: contactEmail,
+        phone: contactPhone,
+        companyName: stringOrNull(contact.companyName ?? contact.company),
+        address1: stringOrNull(contact.address1 ?? contact.address),
+        city: stringOrNull(contact.city),
+        state: stringOrNull(contact.state),
+        country: stringOrNull(contact.country),
+        postalCode: stringOrNull(contact.postalCode ?? contact.zip),
+        website: stringOrNull(contact.website),
+        source: stringOrNull(contact.source),
+        type: stringOrNull(contact.type),
+        dnd: normalizeBoolean(contact.dnd),
+        dateAdded: stringOrNull(contact.dateAdded ?? contact.createdAt),
+        dateUpdated: stringOrNull(contact.dateUpdated ?? contact.updatedAt),
+        lastActivityDate: stringOrNull(contact.lastActivityDate ?? contact.lastActivityAt),
+        tags: toStringArray(contact.tags),
+        customFields: toCustomFields(contact.customFields ?? contact.customField)
+      },
+      error: null,
+      shouldRefreshToken: false
+    };
+  } catch (error) {
+    console.warn("Failed to search GoHighLevel contact by payment identity", error);
+    const message = error instanceof Error ? error.message : "request_failed";
+    return {
+      profile: null,
+      error: message,
+      shouldRefreshToken: isTokenError(message)
+    };
+  }
 }
 
 async function fetchContactProfileWithToken(
@@ -3716,7 +3983,7 @@ async function normalizeGhlWebhook(
     return normalizeInvoiceWebhook(root, headers, rawBody, eventType);
   }
 
-  return normalizeMessageWebhook(root, headers, rawBody, eventType);
+  return null;
 }
 
 async function normalizeMessageWebhook(

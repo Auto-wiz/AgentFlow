@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { getGhlInstallUrl } from "../lib/ghl-install-url";
 
 export default function HomePage() {
@@ -11,10 +10,9 @@ export default function HomePage() {
         <h2 style={{ marginTop: 8 }}>Agency workspace shell</h2>
         <p className="muted">
           Esta vista replica la estructura general del dashboard (filtros + módulos). El módulo
-          principal activo hoy es Inbox.
+          principal activo hoy es Appointments.
         </p>
         <div className="badge-row" style={{ marginTop: 14 }}>
-          <span className="badge">Inbox listo</span>
           <span className="badge">Appointments listo</span>
           <span className="badge">Subaccounts listo</span>
           <span className="badge">Módulos extra en progreso</span>
@@ -23,12 +21,9 @@ export default function HomePage() {
 
       <div className="placeholder-grid">
         <article className="placeholder-card">
-          <p className="eyebrow">Conversations</p>
-          <strong>Inbox module</strong>
-          <p className="muted">Vista principal estilo GHL con filtros, lista, chat y contacto.</p>
-          <Link className="button secondary" href="/threads">
-            Open inbox
-          </Link>
+          <p className="eyebrow">Calendar</p>
+          <strong>Appointments module</strong>
+          <p className="muted">Vista principal para detectar citas sin pago completo.</p>
         </article>
         <article className="placeholder-card">
           <p className="eyebrow">Revenue</p>

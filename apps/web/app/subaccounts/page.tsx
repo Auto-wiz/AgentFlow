@@ -131,9 +131,7 @@ export default function SubaccountsPage() {
               <div>
                 <strong>{formatLocationName(subaccount.locationName, subaccount.ghlLocationId)}</strong>
                 <div className="muted">Location ID: {subaccount.ghlLocationId}</div>
-                <div className="muted">
-                  {subaccount.pendingCount} pending replies · {subaccount.appointmentCount} appointments
-                </div>
+                <div className="muted">{subaccount.appointmentCount} appointments</div>
               </div>
               <input
                 aria-label={`Track subaccount ${subaccount.ghlLocationId}`}

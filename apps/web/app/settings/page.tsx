@@ -28,7 +28,7 @@ export default function SettingsPage() {
           </article>
           <article className="placeholder-card">
             <strong>Subaccount visibility</strong>
-            <span className="muted">Choose which subaccounts are shown in Inbox and Appointments</span>
+            <span className="muted">Choose which subaccounts are shown in Appointments</span>
             <Link className="button secondary" href="/subaccounts">
               Manage subaccounts
             </Link>

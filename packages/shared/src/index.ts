@@ -230,6 +230,8 @@ export type AppointmentSummary = {
   status: string | null;
   startTime: string | null;
   endTime: string | null;
+  appointmentCreatedAt: string | null;
+  paymentStatus: "paid" | "unpaid";
   updatedAt: string;
 };
 
