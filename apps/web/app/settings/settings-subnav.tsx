@@ -1,0 +1,31 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+
+export function SettingsSubnav() {
+  const pathname = usePathname();
+  const links = [
+    { href: "/settings", active: pathname === "/settings", label: "General" },
+    {
+      href: "/settings/admin",
+      active: pathname === "/settings/admin" || pathname.startsWith("/settings/admin/"),
+      label: "Workspace admin"
+    }
+  ];
+
+  return (
+    <div className="toolbar" style={{ marginBottom: 16, gap: 8, flexWrap: "wrap" }}>
+      {links.map((item) => (
+        <Link
+          className={`app-nav-pill ${item.active ? "active" : ""}`}
+          href={item.href}
+          key={item.href}
+          style={{ padding: "8px 14px" }}
+        >
+          {item.label}
+        </Link>
+      ))}
+    </div>
+  );
+}

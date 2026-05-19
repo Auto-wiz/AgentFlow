@@ -24,6 +24,26 @@ export const webhookEventStatusEnum = pgEnum("webhook_event_status", [
 ]);
 export const ghlUserTypeEnum = pgEnum("ghl_user_type", ["Company", "Location"]);
 
+export const workspaceRoleEnum = pgEnum("workspace_role", ["admin", "user"]);
+
+export const workspaceUsers = pgTable(
+  "workspace_users",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    email: text("email").notNull().unique(),
+    passwordHash: text("password_hash").notNull(),
+    displayName: text("display_name"),
+    role: workspaceRoleEnum("role").notNull().default("user"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    roleIdx: index("workspace_users_role_idx").on(table.role)
+  })
+);
+
 export const agencies = pgTable("agencies", {
   id: uuid("id")
     .primaryKey()

@@ -2,9 +2,9 @@
 
 import type { SubaccountOverview } from "@agentflow/shared";
 import { getApiBaseUrl } from "../../lib/api-base-url";
+import { mergeWorkspaceHeaders } from "../../lib/workspace-api-headers";
+import { useWorkspaceAuth } from "../components/workspace-auth-provider";
 import { useEffect, useMemo, useState } from "react";
-
-const viewerKey = "default";
 
 function formatLocationName(locationName: string | null, ghlLocationId: string) {
   return locationName ? `${locationName} (${ghlLocationId})` : ghlLocationId;
@@ -12,6 +12,7 @@ function formatLocationName(locationName: string | null, ghlLocationId: string) 
 
 export default function SubaccountsPage() {
   const apiBaseUrl = getApiBaseUrl();
+  const { sessionKey } = useWorkspaceAuth();
   const [subaccounts, setSubaccounts] = useState<SubaccountOverview[]>([]);
   const [searchLocationId, setSearchLocationId] = useState("");
   const [savingIds, setSavingIds] = useState<Record<string, boolean>>({});
@@ -27,9 +28,7 @@ export default function SubaccountsPage() {
       try {
         const response = await fetch(`${apiBaseUrl}/subaccounts/overview?surface=all`, {
           signal: controller.signal,
-          headers: {
-            "x-viewer-key": viewerKey
-          }
+          headers: mergeWorkspaceHeaders()
         });
         if (!response.ok) {
           throw new Error("Failed to load subaccounts");
@@ -49,7 +48,7 @@ export default function SubaccountsPage() {
 
     loadSubaccounts();
     return () => controller.abort();
-  }, []);
+  }, [apiBaseUrl, sessionKey]);
 
   const filteredSubaccounts = useMemo(() => {
     const normalizedSearch = searchLocationId.trim().toLowerCase();
@@ -74,16 +73,19 @@ export default function SubaccountsPage() {
     try {
       const response = await fetch(`${apiBaseUrl}/subaccounts/visibility`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-viewer-key": viewerKey
-        },
+        headers: mergeWorkspaceHeaders({
+          "Content-Type": "application/json"
+        }),
         body: JSON.stringify({
           locationId,
           visible: nextVisible
         })
       });
       if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        if (payload.error === "forbidden_use_admin_portal") {
+          throw new Error("Workspace users cannot change visibility here. Ask an admin.");
+        }
         throw new Error("Failed to update subaccount visibility");
       }
     } catch (caught) {

@@ -9,9 +9,9 @@ import type {
   ThreadSummary
 } from "@agentflow/shared";
 import { getApiBaseUrl } from "../../lib/api-base-url";
+import { mergeWorkspaceHeaders } from "../../lib/workspace-api-headers";
+import { useWorkspaceAuth } from "../components/workspace-auth-provider";
 import { useEffect, useState } from "react";
-
-const viewerKey = "default";
 
 function formatLocationName(locationName: string | null, ghlLocationId: string) {
   return locationName ? `${locationName} (${ghlLocationId})` : ghlLocationId;
@@ -19,6 +19,7 @@ function formatLocationName(locationName: string | null, ghlLocationId: string) 
 
 export default function ThreadsPage() {
   const apiBaseUrl = getApiBaseUrl();
+  const { sessionKey } = useWorkspaceAuth();
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [subaccounts, setSubaccounts] = useState<SubaccountOverview[]>([]);
   const [subaccountSearch, setSubaccountSearch] = useState("");
@@ -54,9 +55,7 @@ export default function ThreadsPage() {
       try {
         const subaccountsResponse = await fetch(`${apiBaseUrl}/subaccounts/overview?surface=threads`, {
           signal: controller.signal,
-          headers: {
-            "x-viewer-key": viewerKey
-          }
+          headers: mergeWorkspaceHeaders()
         });
         if (!subaccountsResponse.ok) {
           throw new Error("Failed to load subaccounts");
@@ -88,9 +87,7 @@ export default function ThreadsPage() {
         const listUrl = params.toString() ? `${apiBaseUrl}/threads?${params.toString()}` : `${apiBaseUrl}/threads`;
         const response = await fetch(listUrl, {
           signal: controller.signal,
-          headers: {
-            "x-viewer-key": viewerKey
-          }
+          headers: mergeWorkspaceHeaders()
         });
         if (!response.ok) {
           throw new Error("Failed to load threads");
@@ -116,7 +113,7 @@ export default function ThreadsPage() {
 
     loadThreads();
     return () => controller.abort();
-  }, [apiBaseUrl, selectedLocationId, conversationFilter, reloadKey]);
+  }, [apiBaseUrl, selectedLocationId, conversationFilter, reloadKey, sessionKey]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -132,7 +129,8 @@ export default function ThreadsPage() {
       setDetailError(null);
       try {
         const response = await fetch(`${apiBaseUrl}/threads/${selectedThreadId}/messages`, {
-          signal: controller.signal
+          signal: controller.signal,
+          headers: mergeWorkspaceHeaders()
         });
         if (!response.ok) {
           throw new Error("Failed to load selected conversation");
@@ -154,7 +152,7 @@ export default function ThreadsPage() {
 
     loadThreadDetails();
     return () => controller.abort();
-  }, [apiBaseUrl, selectedThreadId, reloadKey]);
+  }, [apiBaseUrl, selectedThreadId, reloadKey, sessionKey]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -172,7 +170,8 @@ export default function ThreadsPage() {
       setOpportunitiesError(null);
       try {
         const response = await fetch(`${apiBaseUrl}/threads/${selectedThreadId}/opportunities`, {
-          signal: controller.signal
+          signal: controller.signal,
+          headers: mergeWorkspaceHeaders()
         });
         if (!response.ok) {
           const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -198,7 +197,7 @@ export default function ThreadsPage() {
 
     loadOpportunities();
     return () => controller.abort();
-  }, [apiBaseUrl, selectedThreadId, reloadKey]);
+  }, [apiBaseUrl, selectedThreadId, reloadKey, sessionKey]);
 
   const totalPending = subaccounts.reduce((sum, subaccount) => sum + subaccount.pendingCount, 0);
   const totalConversations = subaccounts.reduce(
@@ -245,7 +244,8 @@ export default function ThreadsPage() {
       return;
     }
     const response = await fetch(`${apiBaseUrl}/threads/${selectedThreadId}/read`, {
-      method: "POST"
+      method: "POST",
+      headers: mergeWorkspaceHeaders()
     });
     if (!response.ok) {
       return;
@@ -280,9 +280,9 @@ export default function ThreadsPage() {
     try {
       const response = await fetch(`${apiBaseUrl}/threads/${selectedThreadId}/reply`, {
         method: "POST",
-        headers: {
+        headers: mergeWorkspaceHeaders({
           "Content-Type": "application/json"
-        },
+        }),
         body: JSON.stringify({
           channel: "sms",
           message
@@ -335,9 +335,9 @@ export default function ThreadsPage() {
     try {
       const response = await fetch(`${apiBaseUrl}/threads/${selectedThreadId}/opportunities/${opportunityId}`, {
         method: "PATCH",
-        headers: {
+        headers: mergeWorkspaceHeaders({
           "Content-Type": "application/json"
-        },
+        }),
         body: JSON.stringify({
           stageId: draft.stageId || null,
           status: draft.status || null

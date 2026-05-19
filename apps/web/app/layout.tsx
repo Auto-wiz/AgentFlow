@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
-import { AppChrome } from "./components/app-chrome";
 
 import "./globals.css";
+
+import { AppChrome } from "./components/app-chrome";
+import { WorkspaceAuthGate } from "./components/workspace-auth-gate";
+import { WorkspaceAuthProvider } from "./components/workspace-auth-provider";
 
 export const metadata: Metadata = {
   title: "AgentFlow",
@@ -12,7 +15,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
-        <AppChrome>{children}</AppChrome>
+        <WorkspaceAuthProvider>
+          <WorkspaceAuthGate />
+          <AppChrome>{children}</AppChrome>
+        </WorkspaceAuthProvider>
       </body>
     </html>
   );

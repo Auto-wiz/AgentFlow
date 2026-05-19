@@ -5,7 +5,7 @@ export default function SettingsPage() {
   const goHighLevelConnectUrl = getGhlInstallUrl();
 
   return (
-    <section className="module-shell">
+    <>
       <div className="panel" style={{ padding: 18 }}>
         <p className="eyebrow">Configuration module</p>
         <h2 style={{ marginTop: 8 }}>Settings</h2>
@@ -34,11 +34,14 @@ export default function SettingsPage() {
             </Link>
           </article>
           <article className="placeholder-card">
-            <strong>Internal usage</strong>
-            <span className="muted">Reserved for internal rules, access controls, and defaults</span>
+            <strong>Workspace admin</strong>
+            <span className="muted">Create users and choose which locations each role=user can filter</span>
+            <Link className="button secondary" href="/settings/admin">
+              Open workspace admin
+            </Link>
           </article>
         </div>
       </div>
-    </section>
+    </>
   );
 }

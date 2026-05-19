@@ -2,6 +2,7 @@
 
 import type { ThreadMessagesResponse } from "@agentflow/shared";
 import { getApiBaseUrl } from "../../../lib/api-base-url";
+import { mergeWorkspaceHeaders } from "../../../lib/workspace-api-headers";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -25,7 +26,8 @@ export default function ThreadMessagesPage({ params }: { params: { id: string } 
       setError(null);
       try {
         const response = await fetch(`${apiBaseUrl}/threads/${params.id}/messages`, {
-          signal: controller.signal
+          signal: controller.signal,
+          headers: mergeWorkspaceHeaders()
         });
         if (!response.ok) {
           throw new Error("Failed to load thread");
@@ -48,7 +50,8 @@ export default function ThreadMessagesPage({ params }: { params: { id: string } 
 
   async function markRead() {
     const response = await fetch(`${apiBaseUrl}/threads/${params.id}/read`, {
-      method: "POST"
+      method: "POST",
+      headers: mergeWorkspaceHeaders()
     });
     if (response.ok && data) {
       setData({

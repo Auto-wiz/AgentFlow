@@ -1,7 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+
+import { isForceWorkspaceLogin } from "../../lib/workspace-auth-env";
+import { useWorkspaceAuth } from "./workspace-auth-provider";
 
 function initialsFromLabel(label: string) {
   const parts = label.trim().split(/\s+/).filter(Boolean);
@@ -15,6 +19,8 @@ function initialsFromLabel(label: string) {
 }
 
 export function AppUserMenu() {
+  const router = useRouter();
+  const { user, hydrated, signOut } = useWorkspaceAuth();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -28,9 +34,25 @@ export function AppUserMenu() {
     return () => document.removeEventListener("click", onDoc);
   }, []);
 
-  const raw = process.env.NEXT_PUBLIC_APP_USER_DISPLAY_NAME;
+  const envLabel = process.env.NEXT_PUBLIC_APP_USER_DISPLAY_NAME;
+  const fallbackName =
+    typeof envLabel === "string" && envLabel.trim().length > 0 ? envLabel.trim() : null;
+
   const displayName =
-    typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : "Agency";
+    user?.displayName?.trim() ||
+    user?.email?.trim() ||
+    fallbackName ||
+    (hydrated ? "Guest" : "…");
+
+  const showSignOut = hydrated && Boolean(user);
+
+  function handleSignOut() {
+    signOut();
+    setOpen(false);
+    if (isForceWorkspaceLogin()) {
+      router.replace("/login");
+    }
+  }
 
   return (
     <div className="app-user-menu" ref={rootRef}>
@@ -49,11 +71,30 @@ export function AppUserMenu() {
         <div className="app-user-menu-popover" role="dialog" aria-label="Account">
           <p className="app-user-menu-name">{displayName}</p>
           <p className="muted app-user-menu-note">
-            SSO or token-based identity will appear here once auth is wired to the UI.
+            {user
+              ? `Signed in${user.role === "admin" ? " · admin" : ""}`
+              : isForceWorkspaceLogin()
+                ? "You are browsing without a workspace login."
+                : "Legacy viewer key mode is enabled for this deployment."}
           </p>
+          {hydrated && isForceWorkspaceLogin() && !user ? (
+            <Link className="app-user-menu-link" href="/login" onClick={() => setOpen(false)}>
+              Sign in
+            </Link>
+          ) : null}
           <Link className="app-user-menu-link" href="/settings" onClick={() => setOpen(false)}>
             Settings
           </Link>
+          {showSignOut ? (
+            <button
+              className="app-user-menu-link"
+              onClick={handleSignOut}
+              style={{ border: "none", background: "none", cursor: "pointer", padding: 0, font: "inherit" }}
+              type="button"
+            >
+              Sign out
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>

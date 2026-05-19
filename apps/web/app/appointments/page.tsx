@@ -2,10 +2,11 @@
 
 import type { AppointmentSummary, SubaccountOverview } from "@agentflow/shared";
 import { getApiBaseUrl } from "../../lib/api-base-url";
-import { useEffect, useMemo, useState } from "react";
+import { mergeWorkspaceHeaders } from "../../lib/workspace-api-headers";
 import { useAppointmentsTopbarSlot } from "../components/appointments-topbar-bridge";
+import { useWorkspaceAuth } from "../components/workspace-auth-provider";
+import { useEffect, useMemo, useState } from "react";
 
-const viewerKey = "default";
 type AppointmentTimeFilter = "future" | "past" | "all";
 
 function formatLocationName(locationName: string | null, ghlLocationId: string) {
@@ -31,6 +32,7 @@ function buildGhlContactEmbedUrl(locationId: string, contactId: string | null) {
 
 export default function AppointmentsPage() {
   const setTopbarFilters = useAppointmentsTopbarSlot();
+  const { sessionKey } = useWorkspaceAuth();
   const apiBaseUrl = getApiBaseUrl();
   const [appointments, setAppointments] = useState<AppointmentSummary[]>([]);
   const [subaccounts, setSubaccounts] = useState<SubaccountOverview[]>([]);
@@ -53,9 +55,7 @@ export default function AppointmentsPage() {
           `${apiBaseUrl}/subaccounts/overview?surface=appointments`,
           {
             signal: controller.signal,
-            headers: {
-              "x-viewer-key": viewerKey
-            }
+            headers: mergeWorkspaceHeaders()
           }
         );
         if (!subaccountsResponse.ok) {
@@ -91,9 +91,7 @@ export default function AppointmentsPage() {
           : `${apiBaseUrl}/appointments`;
         const response = await fetch(url, {
           signal: controller.signal,
-          headers: {
-            "x-viewer-key": viewerKey
-          }
+          headers: mergeWorkspaceHeaders()
         });
         if (!response.ok) {
           throw new Error("Failed to load appointments");
@@ -113,7 +111,7 @@ export default function AppointmentsPage() {
 
     loadAppointments();
     return () => controller.abort();
-  }, [apiBaseUrl, selectedLocationId, timeFilter]);
+  }, [apiBaseUrl, selectedLocationId, timeFilter, sessionKey]);
 
   useEffect(() => {
     setSelectedAppointmentId((current) => {

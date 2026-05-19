@@ -52,6 +52,21 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
+import {
+  adminCreateUser,
+  adminGetUserSubaccounts,
+  adminListLocations,
+  adminListUsers,
+  adminPutUserSubaccounts
+} from "./workspace-admin.js";
+import {
+  bootstrapHandler,
+  getHiddenLocationIdsForPolicy,
+  loginHandler,
+  meHandler,
+  resolveAccessPolicy
+} from "./workspace-access.js";
+
 type Env = {
   DATABASE_URL: string;
   GHL_WEBHOOK_SECRET?: string;
@@ -65,6 +80,8 @@ type Env = {
   GHL_OAUTH_USER_TYPE?: string;
   FRONTEND_BASE_URL?: string;
   MESSAGE_QUEUE: Queue<NormalizedGhlWebhookEvent>;
+  JWT_SECRET?: string;
+  BOOTSTRAP_SECRET?: string;
 };
 
 type HonoBindings = {
@@ -204,12 +221,21 @@ app.use(
   "*",
   cors({
     origin: "*",
-    allowMethods: ["GET", "POST", "PATCH", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PUT", "PATCH", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization", "x-ghl-access-token", "x-viewer-key"]
   })
 );
 
 app.get("/health", (c) => c.json({ ok: true }));
+
+app.post("/auth/login", loginHandler);
+app.post("/auth/bootstrap", bootstrapHandler);
+app.get("/auth/me", meHandler);
+app.get("/admin/workspace-users", adminListUsers);
+app.post("/admin/workspace-users", adminCreateUser);
+app.get("/admin/workspace-locations", adminListLocations);
+app.get("/admin/workspace-users/:id/subaccounts", adminGetUserSubaccounts);
+app.put("/admin/workspace-users/:id/subaccounts", adminPutUserSubaccounts);
 
 app.get("/webhooks/gohighlevel", (c) =>
   c.json({
@@ -439,11 +465,27 @@ app.post("/webhooks/gohighlevel", async (c) => {
 
 app.get("/threads", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
+  const policy = await resolveAccessPolicy(c, c.env);
+  if (!policy) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  if (policy.kind === "user_session" && policy.allowedLocationIds.length === 0) {
+    return c.json({ threads: [] });
+  }
+
   const pendingReply = c.req.query("pendingReply");
   const locationId = c.req.query("locationId");
-  const viewerKey = getViewerKey(c);
-  const hiddenLocationIds = await getHiddenLocationIdsForViewer(db, viewerKey);
   const filters = [];
+
+  if (policy.kind === "user_session") {
+    filters.push(inArray(threads.locationId, policy.allowedLocationIds));
+  } else {
+    const hiddenLocationIds = await getHiddenLocationIdsForPolicy(db, policy);
+    if (hiddenLocationIds.length > 0) {
+      filters.push(notInArray(threads.locationId, hiddenLocationIds));
+    }
+  }
 
   if (pendingReply === "true") {
     filters.push(eq(threads.pendingReply, true));
@@ -455,10 +497,6 @@ app.get("/threads", async (c) => {
       locationFilters.push(eq(threads.locationId, locationId));
     }
     filters.push(or(...locationFilters));
-  }
-
-  if (hiddenLocationIds.length > 0) {
-    filters.push(notInArray(threads.locationId, hiddenLocationIds));
   }
 
   let query = db
@@ -532,12 +570,28 @@ app.get("/threads", async (c) => {
 
 app.get("/appointments", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
+  const policy = await resolveAccessPolicy(c, c.env);
+  if (!policy) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  if (policy.kind === "user_session" && policy.allowedLocationIds.length === 0) {
+    return c.json({ appointments: [] });
+  }
+
   const locationId = c.req.query("locationId");
   const time = c.req.query("time") ?? "future";
   const paymentStatus = c.req.query("paymentStatus") ?? "unpaid";
-  const viewerKey = getViewerKey(c);
-  const hiddenLocationIds = await getHiddenLocationIdsForViewer(db, viewerKey);
   const filters = [];
+
+  if (policy.kind === "user_session") {
+    filters.push(inArray(appointments.locationId, policy.allowedLocationIds));
+  } else {
+    const hiddenLocationIds = await getHiddenLocationIdsForPolicy(db, policy);
+    if (hiddenLocationIds.length > 0) {
+      filters.push(notInArray(appointments.locationId, hiddenLocationIds));
+    }
+  }
 
   let query = db
     .select({
@@ -571,10 +625,6 @@ app.get("/appointments", async (c) => {
       locationFilters.push(eq(appointments.locationId, locationId));
     }
     filters.push(or(...locationFilters));
-  }
-
-  if (hiddenLocationIds.length > 0) {
-    filters.push(notInArray(appointments.locationId, hiddenLocationIds));
   }
 
   if (time === "future") {
@@ -628,9 +678,29 @@ app.get("/appointments", async (c) => {
 
 app.get("/locations", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
+  const policy = await resolveAccessPolicy(c, c.env);
+  if (!policy) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  if (policy.kind === "user_session" && policy.allowedLocationIds.length === 0) {
+    return c.json({ locations: [] });
+  }
+
   const limit = Math.min(Number(c.req.query("limit") ?? 200) || 200, 500);
 
-  const rows = await db
+  const hiddenLocationIds =
+    policy.kind !== "user_session" ? await getHiddenLocationIdsForPolicy(db, policy) : [];
+
+  const filters = [];
+
+  if (policy.kind === "user_session") {
+    filters.push(inArray(locations.id, policy.allowedLocationIds));
+  } else if (hiddenLocationIds.length > 0) {
+    filters.push(notInArray(locations.id, hiddenLocationIds));
+  }
+
+  let query = db
     .select({
       id: locations.id,
       ghlLocationId: locations.ghlLocationId,
@@ -641,8 +711,13 @@ app.get("/locations", async (c) => {
     })
     .from(locations)
     .leftJoin(agencies, eq(locations.agencyId, agencies.id))
-    .orderBy(desc(locations.updatedAt))
-    .limit(limit);
+    .$dynamic();
+
+  if (filters.length > 0) {
+    query = query.where(and(...filters));
+  }
+
+  const rows = await query.orderBy(desc(locations.updatedAt)).limit(limit);
 
   return c.json({
     locations: rows.map((row) => ({
@@ -713,56 +788,88 @@ function coerceSqlBoolean(value: unknown): boolean {
 
 app.get("/subaccounts/overview", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
-  const viewerKey = getViewerKey(c);
+  const policy = await resolveAccessPolicy(c, c.env);
+  if (!policy) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  const viewerKey = policy.viewerKey;
   const surface = c.req.query("surface") ?? "all";
+
+  if (policy.kind === "user_session" && policy.allowedLocationIds.length === 0) {
+    return c.json({ viewerKey, subaccounts: [] });
+  }
+
   const includeConversationCounts = surface !== "appointments";
 
-  const [locationRows, conversationRows, pendingRows, appointmentRows, visibilityRows] = await Promise.all([
-    db
-      .select({
-        locationId: locations.id,
-        ghlLocationId: locations.ghlLocationId,
-        locationName: locations.name,
-        agencyId: locations.agencyId,
-        agencyName: agencies.name
-      })
-      .from(locations)
-      .leftJoin(agencies, eq(locations.agencyId, agencies.id))
-      .orderBy(locations.ghlLocationId),
-    includeConversationCounts
+  const locationsQuery =
+    policy.kind === "user_session"
       ? db
           .select({
-            locationId: threads.locationId,
-            count: sql<number>`count(*)::int`
+            locationId: locations.id,
+            ghlLocationId: locations.ghlLocationId,
+            locationName: locations.name,
+            agencyId: locations.agencyId,
+            agencyName: agencies.name
           })
-          .from(threads)
-          .groupBy(threads.locationId)
-      : Promise.resolve([]),
-    includeConversationCounts
-      ? db
+          .from(locations)
+          .leftJoin(agencies, eq(locations.agencyId, agencies.id))
+          .where(inArray(locations.id, policy.allowedLocationIds))
+          .orderBy(locations.ghlLocationId)
+      : db
           .select({
-            locationId: threads.locationId,
-            count: sql<number>`count(*)::int`
+            locationId: locations.id,
+            ghlLocationId: locations.ghlLocationId,
+            locationName: locations.name,
+            agencyId: locations.agencyId,
+            agencyName: agencies.name
           })
-          .from(threads)
-          .where(eq(threads.pendingReply, true))
-          .groupBy(threads.locationId)
-      : Promise.resolve([]),
-    db
-      .select({
-        locationId: appointments.locationId,
-        count: sql<number>`count(*)::int`
-      })
-      .from(appointments)
-      .groupBy(appointments.locationId),
-    db
-      .select({
-        locationId: userSubaccountVisibilities.locationId,
-        isVisible: userSubaccountVisibilities.isVisible
-      })
-      .from(userSubaccountVisibilities)
-      .where(eq(userSubaccountVisibilities.userKey, viewerKey))
-  ]);
+          .from(locations)
+          .leftJoin(agencies, eq(locations.agencyId, agencies.id))
+          .orderBy(locations.ghlLocationId);
+
+  const visibilityQuery =
+    policy.kind === "user_session"
+      ? Promise.resolve<{ locationId: string; isVisible: boolean }[]>([])
+      : db
+          .select({
+            locationId: userSubaccountVisibilities.locationId,
+            isVisible: userSubaccountVisibilities.isVisible
+          })
+          .from(userSubaccountVisibilities)
+          .where(eq(userSubaccountVisibilities.userKey, viewerKey));
+
+  const [locationRows, conversationRows, pendingRows, appointmentRows, visibilityRows] =
+    await Promise.all([
+      locationsQuery,
+      includeConversationCounts
+        ? db
+            .select({
+              locationId: threads.locationId,
+              count: sql<number>`count(*)::int`
+            })
+            .from(threads)
+            .groupBy(threads.locationId)
+        : Promise.resolve([]),
+      includeConversationCounts
+        ? db
+            .select({
+              locationId: threads.locationId,
+              count: sql<number>`count(*)::int`
+            })
+            .from(threads)
+            .where(eq(threads.pendingReply, true))
+            .groupBy(threads.locationId)
+        : Promise.resolve([]),
+      db
+        .select({
+          locationId: appointments.locationId,
+          count: sql<number>`count(*)::int`
+        })
+        .from(appointments)
+        .groupBy(appointments.locationId),
+      visibilityQuery
+    ]);
 
   const conversationsByLocation = new Map(
     conversationRows.map((row) => [row.locationId, Number(row.count)])
@@ -783,7 +890,10 @@ app.get("/subaccounts/overview", async (c) => {
       conversationCount: conversationsByLocation.get(row.locationId) ?? 0,
       pendingCount: pendingByLocation.get(row.locationId) ?? 0,
       appointmentCount: appointmentsByLocation.get(row.locationId) ?? 0,
-      visible: visibilityByLocation.get(row.locationId) ?? true
+      visible:
+        policy.kind === "user_session"
+          ? true
+          : (visibilityByLocation.get(row.locationId) ?? true)
     }))
     .filter((row) => {
       if (surface === "threads") {
@@ -803,7 +913,16 @@ app.get("/subaccounts/overview", async (c) => {
 
 app.post("/subaccounts/visibility", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
-  const viewerKey = getViewerKey(c);
+  const policy = await resolveAccessPolicy(c, c.env);
+  if (!policy) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  if (policy.kind === "user_session") {
+    return c.json({ error: "forbidden_use_admin_portal" }, 403);
+  }
+
+  const viewerKey = policy.viewerKey;
   const body = asRecord(await c.req.json().catch(() => ({})));
   const locationId = stringValue(body.locationId).trim();
   const visible =
@@ -4520,29 +4639,6 @@ function inferEmailAddress(...values: Array<string | null>) {
   return null;
 }
 
-function getViewerKey(c: Context<HonoBindings>) {
-  const viewerHeader = c.req.header("x-viewer-key");
-  const viewerQuery = c.req.query("viewerKey");
-  return (viewerHeader ?? viewerQuery ?? "default").trim() || "default";
-}
-
-async function getHiddenLocationIdsForViewer(
-  db: ReturnType<typeof createDb>,
-  viewerKey: string
-) {
-  const hiddenRows = await db
-    .select({
-      locationId: userSubaccountVisibilities.locationId
-    })
-    .from(userSubaccountVisibilities)
-    .where(
-      and(
-        eq(userSubaccountVisibilities.userKey, viewerKey),
-        eq(userSubaccountVisibilities.isVisible, false)
-      )
-    );
-  return hiddenRows.map((row) => row.locationId);
-}
 
 function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
