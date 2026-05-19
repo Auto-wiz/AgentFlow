@@ -35,7 +35,9 @@ NEXT_PUBLIC_FORCE_WORKSPACE_LOGIN=true|false
 NEXT_PUBLIC_LEGACY_VIEWER_KEY=default
 ```
 
-Set `JWT_SECRET`, `BOOTSTRAP_SECRET`, and run `POST /auth/bootstrap` once to create the first admin when the table is empty. Afterward use **Settings → Workspace admin** or the admin endpoints to create additional users manually.
+With `JWT_SECRET` set on the Worker, users sign in via the GoHighLevel OAuth install flow (`/connect` in the app). After OAuth, the Worker provisions a workspace user from the Agency `userId`, issues a short-lived JWT, and redirects back to **`/connect#session=<jwt>`**, which the web app stores locally. Roles default to `user`; set `role=admin` directly in Postgres when you want full admin tooling.
+
+Configure **Settings → Workspace admin** to choose default picked locations (`role=user`), and **Settings → Team selections** read-only overview of selections across everyone.
 
 Production secrets are configured through Wrangler:
 
@@ -46,7 +48,6 @@ wrangler secret put GHL_API_TOKEN
 wrangler secret put GHL_CLIENT_ID
 wrangler secret put GHL_CLIENT_SECRET
 wrangler secret put JWT_SECRET
-wrangler secret put BOOTSTRAP_SECRET
 ```
 
 Set these Worker variables in the Cloudflare dashboard or as `[vars]` in

@@ -19,7 +19,7 @@ export function AppChrome({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const appointmentsContext = pathname === "/appointments" || pathname.startsWith("/appointments/");
 
-  if (pathname === "/login") {
+  if (pathname === "/connect") {
     return (
       <AppointmentsTopbarBridgeProvider>
         <div className="app-shell app-shell-plain">

@@ -1,14 +1,15 @@
 "use client";
 
 import { getApiBaseUrl } from "../../lib/api-base-url";
-import { readStoredToken, writeStoredToken } from "../../lib/auth-storage";
+import { readStoredToken, writeStoredToken, writeStoredGhlUserId } from "../../lib/auth-storage";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 export type WorkspaceUser = {
   id: string;
-  email: string;
+  email: string | null;
   role: string;
   displayName: string | null;
+  ghlUserId?: string | null;
 };
 
 type WorkspaceAuthContextValue = {
@@ -62,6 +63,7 @@ export function WorkspaceAuthProvider({ children }: { children: React.ReactNode 
         if (!res.ok) {
           if (res.status === 401) {
             writeStoredToken(null);
+            writeStoredGhlUserId(null);
             setToken(null);
           }
           setUser(null);
@@ -70,6 +72,10 @@ export function WorkspaceAuthProvider({ children }: { children: React.ReactNode 
         const payload = (await res.json()) as { user: WorkspaceUser };
         if (!cancelled) {
           setUser(payload.user);
+          const gid = payload.user.ghlUserId?.trim();
+          if (gid) {
+            writeStoredGhlUserId(gid);
+          }
         }
       } catch {
         if (!cancelled) {
@@ -90,6 +96,7 @@ export function WorkspaceAuthProvider({ children }: { children: React.ReactNode 
 
   const signOut = useCallback(() => {
     writeStoredToken(null);
+    writeStoredGhlUserId(null);
     setToken(null);
     setUser(null);
     bumpSession();

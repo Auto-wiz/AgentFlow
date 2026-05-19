@@ -3,26 +3,17 @@ import { userSubaccountVisibilities, workspaceUsers } from "@agentflow/db";
 import { and, eq } from "drizzle-orm";
 import type { Context } from "hono";
 
-import {
-  hashPassword,
-  normalizeEmail,
-  parseBearerHeader,
-  signWorkspaceJwt,
-  verifyWorkspaceJwt,
-  verifyPassword
-} from "./auth-lib.js";
+import { parseBearerHeader, signWorkspaceJwt, verifyWorkspaceJwt } from "./auth-lib.js";
 import { getViewerKey } from "./viewer-key.js";
 
 export type WorkspaceJwtEnv = {
   DATABASE_URL: string;
   JWT_SECRET?: string;
-  BOOTSTRAP_SECRET?: string;
 };
 
 export type AccessPolicy =
   | { kind: "legacy"; viewerKey: string }
-  | { kind: "admin_session"; viewerKey: string }
-  | { kind: "user_session"; viewerKey: string; allowedLocationIds: string[] };
+  | { kind: "jwt_workspace"; workspaceUserId: string; role: "admin" | "user" };
 
 function jwtConfigured(env: WorkspaceJwtEnv) {
   return Boolean(env.JWT_SECRET?.trim());
@@ -46,7 +37,6 @@ export async function resolveAccessPolicy(c: Context, env: WorkspaceJwtEnv): Pro
     const [user] = await db
       .select({
         id: workspaceUsers.id,
-        email: workspaceUsers.email,
         role: workspaceUsers.role
       })
       .from(workspaceUsers)
@@ -57,31 +47,14 @@ export async function resolveAccessPolicy(c: Context, env: WorkspaceJwtEnv): Pro
       return null;
     }
 
-    if (user.role === "admin") {
-      return { kind: "admin_session", viewerKey: user.id };
-    }
-
-    const allowedRows = await db
-      .select({
-        locationId: userSubaccountVisibilities.locationId
-      })
-      .from(userSubaccountVisibilities)
-      .where(
-        and(eq(userSubaccountVisibilities.userKey, user.id), eq(userSubaccountVisibilities.isVisible, true))
-      );
-
-    const allowedLocationIds = allowedRows.map((row) => row.locationId);
-    return {
-      kind: "user_session",
-      viewerKey: user.id,
-      allowedLocationIds
-    };
+    const role = user.role === "admin" ? ("admin" as const) : ("user" as const);
+    return { kind: "jwt_workspace", workspaceUserId: user.id, role };
   } catch {
     return null;
   }
 }
 
-/** User session used by /auth/me and admin routes. Null if only legacy / invalid. */
+/** User session used by /auth/me and admin routes. Null if legacy / invalid. */
 export async function resolveSessionUser(c: Context, env: WorkspaceJwtEnv) {
   if (!jwtConfigured(env)) {
     return null;
@@ -98,7 +71,8 @@ export async function resolveSessionUser(c: Context, env: WorkspaceJwtEnv) {
         id: workspaceUsers.id,
         email: workspaceUsers.email,
         displayName: workspaceUsers.displayName,
-        role: workspaceUsers.role
+        role: workspaceUsers.role,
+        ghlUserId: workspaceUsers.ghlUserId
       })
       .from(workspaceUsers)
       .where(eq(workspaceUsers.id, claims.sub))
@@ -109,10 +83,10 @@ export async function resolveSessionUser(c: Context, env: WorkspaceJwtEnv) {
   }
 }
 
-
+/** Legacy viewer-key denies (is_visible = false rows). JWT workspace users bypass this entirely. */
 export async function getHiddenLocationIdsForPolicy(
   db: ReturnType<typeof createDb>,
-  policy: AccessPolicy & { kind: "legacy" | "admin_session" }
+  policy: { kind: "legacy"; viewerKey: string }
 ) {
   const hiddenRows = await db
     .select({
@@ -128,62 +102,79 @@ export async function getHiddenLocationIdsForPolicy(
   return hiddenRows.map((row) => row.locationId);
 }
 
-async function authenticateEmailPassword(db: ReturnType<typeof createDb>, emailRaw: string, password: string) {
-  const email = normalizeEmail(emailRaw);
-  const [user] = await db
+// --- GoHighLevel -> workspace user provisioning (OAuth callback only) ---
+export async function provisionWorkspaceUserFromGhlAccount(
+  db: ReturnType<typeof createDb>,
+  ghlUserId: string
+) {
+  const trimmed = ghlUserId.trim();
+  if (!trimmed) {
+    return null as null;
+  }
+  const now = new Date();
+  const existing = await db
     .select({
       id: workspaceUsers.id,
-      email: workspaceUsers.email,
-      passwordHash: workspaceUsers.passwordHash,
       role: workspaceUsers.role,
-      displayName: workspaceUsers.displayName
+      email: workspaceUsers.email,
+      displayName: workspaceUsers.displayName,
+      ghlUserId: workspaceUsers.ghlUserId
     })
     .from(workspaceUsers)
-    .where(eq(workspaceUsers.email, email))
+    .where(eq(workspaceUsers.ghlUserId, trimmed))
     .limit(1);
 
-  if (!user) {
-    return null;
+  const row = existing[0];
+  if (row) {
+    await db
+      .update(workspaceUsers)
+      .set({ updatedAt: now })
+      .where(eq(workspaceUsers.id, row.id));
+    return row;
   }
-  const ok = await verifyPassword(password, user.passwordHash);
-  if (!ok) {
-    return null;
-  }
-  return user;
+
+  const role = ("user" as const);
+  const [inserted] = await db
+    .insert(workspaceUsers)
+    .values({
+      ghlUserId: trimmed,
+      email: null,
+      passwordHash: null,
+      displayName: null,
+      role,
+      updatedAt: now,
+      createdAt: now
+    })
+    .returning({
+      id: workspaceUsers.id,
+      role: workspaceUsers.role,
+      email: workspaceUsers.email,
+      displayName: workspaceUsers.displayName,
+      ghlUserId: workspaceUsers.ghlUserId
+    });
+
+  return inserted ?? null;
 }
 
-export async function loginHandler(c: Context<{ Bindings: WorkspaceJwtEnv }>) {
-  const env = c.env;
-  const body = asRecord(await c.req.json().catch(() => ({})));
-  const email = stringFrom(body.email);
-  const password = stringFrom(body.password);
-  if (!email || !password) {
-    return c.json({ error: "missing_credentials" }, 400);
+export async function signSessionForProvisionedUser(
+  env: WorkspaceJwtEnv,
+  user: { id: string; role: "admin" | "user"; email: string | null; ghlUserId: string | null }
+) {
+  if (!jwtConfigured(env) || !env.JWT_SECRET) {
+    throw new Error("jwt_not_configured");
   }
-  if (!jwtConfigured(env)) {
-    return c.json({ error: "jwt_not_configured" }, 501);
-  }
-  const db = createDb(env.DATABASE_URL);
-  const user = await authenticateEmailPassword(db, email, password);
-  if (!user) {
-    return c.json({ error: "invalid_credentials" }, 401);
-  }
+
+  const role = user.role === "admin" ? ("admin" as const) : ("user" as const);
+
   const token = await signWorkspaceJwt({
-    secret: env.JWT_SECRET!,
+    secret: env.JWT_SECRET,
     sub: user.id,
-    role: user.role,
-    email: user.email
+    role,
+    email: user.email ?? undefined,
+    ghlUserId: user.ghlUserId ?? undefined
   });
 
-  return c.json({
-    token,
-    user: {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      displayName: user.displayName
-    }
-  });
+  return token;
 }
 
 export async function meHandler(c: Context<{ Bindings: WorkspaceJwtEnv }>) {
@@ -191,69 +182,13 @@ export async function meHandler(c: Context<{ Bindings: WorkspaceJwtEnv }>) {
   if (!user) {
     return c.json({ error: "unauthorized" }, 401);
   }
-  return c.json({ user });
-}
-
-export async function bootstrapHandler(c: Context<{ Bindings: WorkspaceJwtEnv }>) {
-  const env = c.env;
-  const body = asRecord(await c.req.json().catch(() => ({})));
-  const secret = stringFrom(body.bootstrapSecret ?? body.secret);
-  const emailRaw = stringFrom(body.email);
-  const password = stringFrom(body.password);
-  const displayNameRaw = typeof body.displayName === "string" ? body.displayName.trim() || null : null;
-
-  if (!secret || secret !== env.BOOTSTRAP_SECRET?.trim()) {
-    return c.json({ error: "forbidden" }, 403);
-  }
-  if (!emailRaw || !password || password.length < 8) {
-    return c.json({ error: "invalid_payload" }, 400);
-  }
-  const db = createDb(env.DATABASE_URL);
-
-  const [existing] = await db.select({ c: workspaceUsers.id }).from(workspaceUsers).limit(1);
-  if (existing) {
-    return c.json({ error: "already_bootstrapped" }, 409);
-  }
-
-  const email = normalizeEmail(emailRaw);
-  const passwordHash = await hashPassword(password);
-  const now = new Date();
-
-  const [inserted] = await db
-    .insert(workspaceUsers)
-    .values({
-      email,
-      passwordHash,
-      role: "admin",
-      displayName: displayNameRaw,
-      updatedAt: now,
-      createdAt: now
-    })
-    .returning({
-      id: workspaceUsers.id,
-      email: workspaceUsers.email,
-      role: workspaceUsers.role,
-      displayName: workspaceUsers.displayName
-    });
-
-  if (!jwtConfigured(env)) {
-    return c.json({ user: inserted, warning: "Set JWT_SECRET to enable login tokens." }, 201);
-  }
-
-  const token = await signWorkspaceJwt({
-    secret: env.JWT_SECRET!,
-    sub: inserted!.id,
-    role: inserted!.role,
-    email: inserted!.email
+  return c.json({
+    user: {
+      id: user.id,
+      email: user.email ?? null,
+      displayName: user.displayName,
+      role: user.role,
+      ghlUserId: user.ghlUserId
+    }
   });
-
-  return c.json({ token, user: inserted }, 201);
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
-
-function stringFrom(value: unknown) {
-  return typeof value === "string" ? value.trim() : "";
 }

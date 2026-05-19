@@ -6,6 +6,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -32,15 +33,19 @@ export const workspaceUsers = pgTable(
     id: uuid("id")
       .primaryKey()
       .default(sql`gen_random_uuid()`),
-    email: text("email").notNull().unique(),
-    passwordHash: text("password_hash").notNull(),
+    email: text("email"),
+    passwordHash: text("password_hash"),
+    /** GoHighLevel user id returned by Marketplace / oauth token responses. */
+    ghlUserId: text("ghl_user_id"),
     displayName: text("display_name"),
     role: workspaceRoleEnum("role").notNull().default("user"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
   },
   (table) => ({
-    roleIdx: index("workspace_users_role_idx").on(table.role)
+    roleIdx: index("workspace_users_role_idx").on(table.role),
+    ghlIdx: uniqueIndex("workspace_users_ghl_user_id_unique").on(table.ghlUserId),
+    emailPartialIdx: uniqueIndex("workspace_users_email_unique_partial").on(table.email)
   })
 );
 
@@ -375,6 +380,24 @@ export const userSubaccountVisibilities = pgTable(
   })
 );
 
+/** Per-workspace-user subaccount picker state (admins seed defaults via admin API). */
+export const workspaceUserLocationSelection = pgTable(
+  "workspace_user_location_selection",
+  {
+    workspaceUserId: uuid("workspace_user_id")
+      .notNull()
+      .references(() => workspaceUsers.id, { onDelete: "cascade" }),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => locations.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.workspaceUserId, table.locationId] }),
+    locIdx: index("workspace_user_location_sel_loc_idx").on(table.locationId)
+  })
+);
+
 export const appointments = pgTable(
   "appointments",
   {
@@ -468,6 +491,7 @@ export const locationsRelations = relations(locations, ({ one, many }) => ({
     references: [agencies.id]
   }),
   subaccountVisibilities: many(userSubaccountVisibilities),
+  workspaceUserSelections: many(workspaceUserLocationSelection),
   contacts: many(contacts),
   threads: many(threads),
   messages: many(messages),
@@ -484,6 +508,24 @@ export const userSubaccountVisibilitiesRelations = relations(
     })
   })
 );
+
+export const workspaceUserLocationSelectionRelations = relations(
+  workspaceUserLocationSelection,
+  ({ one }) => ({
+    workspaceUser: one(workspaceUsers, {
+      fields: [workspaceUserLocationSelection.workspaceUserId],
+      references: [workspaceUsers.id]
+    }),
+    location: one(locations, {
+      fields: [workspaceUserLocationSelection.locationId],
+      references: [locations.id]
+    })
+  })
+);
+
+export const workspaceUsersRelations = relations(workspaceUsers, ({ many }) => ({
+  workspaceSelections: many(workspaceUserLocationSelection)
+}));
 
 export const contactsRelations = relations(contacts, ({ one, many }) => ({
   location: one(locations, {

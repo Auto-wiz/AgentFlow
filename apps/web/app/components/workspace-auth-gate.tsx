@@ -14,11 +14,11 @@ export function WorkspaceAuthGate() {
     if (!hydrated || !isForceWorkspaceLogin()) {
       return;
     }
-    if (pathname === "/login") {
+    if (pathname === "/connect") {
       return;
     }
     if (!token) {
-      router.replace(`/login?next=${encodeURIComponent(pathname || "/appointments")}`);
+      router.replace(`/connect?next=${encodeURIComponent(pathname || "/appointments")}`);
     }
   }, [hydrated, pathname, router, token]);
 
@@ -26,7 +26,7 @@ export function WorkspaceAuthGate() {
     if (!hydrated || !isForceWorkspaceLogin()) {
       return;
     }
-    if (pathname !== "/login") {
+    if (pathname !== "/connect") {
       return;
     }
     if (token) {

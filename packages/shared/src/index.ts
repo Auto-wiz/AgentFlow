@@ -250,6 +250,10 @@ export type SubaccountOverview = {
   pendingCount: number;
   appointmentCount: number;
   visible: boolean;
+  /**
+   * JWT workspace UX: cuando true, el usuario aún no fijó filas explícitas en DB y ve todas las locations hasta el primer PUT.
+   */
+  implicitAllSelections?: boolean;
 };
 
 export type SubaccountsOverviewResponse = {

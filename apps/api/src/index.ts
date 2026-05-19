@@ -53,19 +53,27 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 
 import {
-  adminCreateUser,
   adminGetUserSubaccounts,
   adminListLocations,
   adminListUsers,
   adminPutUserSubaccounts
 } from "./workspace-admin.js";
 import {
-  bootstrapHandler,
   getHiddenLocationIdsForPolicy,
-  loginHandler,
   meHandler,
-  resolveAccessPolicy
+  provisionWorkspaceUserFromGhlAccount,
+  resolveAccessPolicy,
+  signSessionForProvisionedUser
 } from "./workspace-access.js";
+import {
+  mePutLocationSelectionsHandler,
+  workspaceSelectionMatrixHandler
+} from "./workspace-selection-handlers.js";
+import { fetchSelectionLocationRows, rowsToNullableSelectionSet } from "./workspace-selection-db.js";
+
+function jwtConfiguredForWorkspace(env: Env) {
+  return Boolean(env.JWT_SECRET?.trim());
+}
 
 type Env = {
   DATABASE_URL: string;
@@ -81,7 +89,6 @@ type Env = {
   FRONTEND_BASE_URL?: string;
   MESSAGE_QUEUE: Queue<NormalizedGhlWebhookEvent>;
   JWT_SECRET?: string;
-  BOOTSTRAP_SECRET?: string;
 };
 
 type HonoBindings = {
@@ -228,11 +235,10 @@ app.use(
 
 app.get("/health", (c) => c.json({ ok: true }));
 
-app.post("/auth/login", loginHandler);
-app.post("/auth/bootstrap", bootstrapHandler);
 app.get("/auth/me", meHandler);
+app.put("/workspace/me/location-selections", mePutLocationSelectionsHandler);
+app.get("/workspace/selection-matrix", workspaceSelectionMatrixHandler);
 app.get("/admin/workspace-users", adminListUsers);
-app.post("/admin/workspace-users", adminCreateUser);
 app.get("/admin/workspace-locations", adminListLocations);
 app.get("/admin/workspace-users/:id/subaccounts", adminGetUserSubaccounts);
 app.put("/admin/workspace-users/:id/subaccounts", adminPutUserSubaccounts);
@@ -367,7 +373,31 @@ app.get("/oauth/gohighlevel/callback", async (c) => {
         }
       });
 
-    return redirectToFrontend(c, "/settings/integrations?ghl=connected");
+    const ghlUserId = tokenResponse.userId?.trim() ?? "";
+
+    let nextPath = "/settings/integrations?ghl=connected";
+    if (jwtConfiguredForWorkspace(c.env)) {
+      if (!ghlUserId) {
+        nextPath = "/connect?ghl=error&reason=no_ghl_user_id";
+      } else {
+        const provisioned = await provisionWorkspaceUserFromGhlAccount(db, ghlUserId);
+        if (!provisioned) {
+          nextPath = "/connect?ghl=error&reason=provision_failed";
+        } else {
+          try {
+            const sessionToken = await signSessionForProvisionedUser(c.env, {
+              ...provisioned,
+              role: provisioned.role === "admin" ? "admin" : "user"
+            });
+            nextPath = `/connect#session=${encodeURIComponent(sessionToken)}`;
+          } catch {
+            nextPath = "/connect?ghl=error&reason=jwt_issue_failed";
+          }
+        }
+      }
+    }
+
+    return redirectToFrontend(c, nextPath);
   } catch (error) {
     console.error("Failed to complete GoHighLevel OAuth callback", error);
     const reason = error instanceof Error ? error.message : "oauth_callback_failed";
@@ -470,17 +500,11 @@ app.get("/threads", async (c) => {
     return c.json({ error: "unauthorized" }, 401);
   }
 
-  if (policy.kind === "user_session" && policy.allowedLocationIds.length === 0) {
-    return c.json({ threads: [] });
-  }
-
   const pendingReply = c.req.query("pendingReply");
   const locationId = c.req.query("locationId");
   const filters = [];
 
-  if (policy.kind === "user_session") {
-    filters.push(inArray(threads.locationId, policy.allowedLocationIds));
-  } else {
+  if (policy.kind === "legacy") {
     const hiddenLocationIds = await getHiddenLocationIdsForPolicy(db, policy);
     if (hiddenLocationIds.length > 0) {
       filters.push(notInArray(threads.locationId, hiddenLocationIds));
@@ -575,18 +599,12 @@ app.get("/appointments", async (c) => {
     return c.json({ error: "unauthorized" }, 401);
   }
 
-  if (policy.kind === "user_session" && policy.allowedLocationIds.length === 0) {
-    return c.json({ appointments: [] });
-  }
-
   const locationId = c.req.query("locationId");
   const time = c.req.query("time") ?? "future";
   const paymentStatus = c.req.query("paymentStatus") ?? "unpaid";
   const filters = [];
 
-  if (policy.kind === "user_session") {
-    filters.push(inArray(appointments.locationId, policy.allowedLocationIds));
-  } else {
+  if (policy.kind === "legacy") {
     const hiddenLocationIds = await getHiddenLocationIdsForPolicy(db, policy);
     if (hiddenLocationIds.length > 0) {
       filters.push(notInArray(appointments.locationId, hiddenLocationIds));
@@ -683,21 +701,15 @@ app.get("/locations", async (c) => {
     return c.json({ error: "unauthorized" }, 401);
   }
 
-  if (policy.kind === "user_session" && policy.allowedLocationIds.length === 0) {
-    return c.json({ locations: [] });
-  }
-
   const limit = Math.min(Number(c.req.query("limit") ?? 200) || 200, 500);
-
-  const hiddenLocationIds =
-    policy.kind !== "user_session" ? await getHiddenLocationIdsForPolicy(db, policy) : [];
 
   const filters = [];
 
-  if (policy.kind === "user_session") {
-    filters.push(inArray(locations.id, policy.allowedLocationIds));
-  } else if (hiddenLocationIds.length > 0) {
-    filters.push(notInArray(locations.id, hiddenLocationIds));
+  if (policy.kind === "legacy") {
+    const hiddenLocationIds = await getHiddenLocationIdsForPolicy(db, policy);
+    if (hiddenLocationIds.length > 0) {
+      filters.push(notInArray(locations.id, hiddenLocationIds));
+    }
   }
 
   let query = db
@@ -793,83 +805,75 @@ app.get("/subaccounts/overview", async (c) => {
     return c.json({ error: "unauthorized" }, 401);
   }
 
-  const viewerKey = policy.viewerKey;
+  const viewerKey = policy.kind === "legacy" ? policy.viewerKey : policy.workspaceUserId;
   const surface = c.req.query("surface") ?? "all";
 
-  if (policy.kind === "user_session" && policy.allowedLocationIds.length === 0) {
-    return c.json({ viewerKey, subaccounts: [] });
-  }
+  const locationsQuery = db
+    .select({
+      locationId: locations.id,
+      ghlLocationId: locations.ghlLocationId,
+      locationName: locations.name,
+      agencyId: locations.agencyId,
+      agencyName: agencies.name
+    })
+    .from(locations)
+    .leftJoin(agencies, eq(locations.agencyId, agencies.id))
+    .orderBy(locations.ghlLocationId);
 
-  const includeConversationCounts = surface !== "appointments";
-
-  const locationsQuery =
-    policy.kind === "user_session"
+  const visibilityLegacyPromise =
+    policy.kind === "legacy"
       ? db
-          .select({
-            locationId: locations.id,
-            ghlLocationId: locations.ghlLocationId,
-            locationName: locations.name,
-            agencyId: locations.agencyId,
-            agencyName: agencies.name
-          })
-          .from(locations)
-          .leftJoin(agencies, eq(locations.agencyId, agencies.id))
-          .where(inArray(locations.id, policy.allowedLocationIds))
-          .orderBy(locations.ghlLocationId)
-      : db
-          .select({
-            locationId: locations.id,
-            ghlLocationId: locations.ghlLocationId,
-            locationName: locations.name,
-            agencyId: locations.agencyId,
-            agencyName: agencies.name
-          })
-          .from(locations)
-          .leftJoin(agencies, eq(locations.agencyId, agencies.id))
-          .orderBy(locations.ghlLocationId);
-
-  const visibilityQuery =
-    policy.kind === "user_session"
-      ? Promise.resolve<{ locationId: string; isVisible: boolean }[]>([])
-      : db
           .select({
             locationId: userSubaccountVisibilities.locationId,
             isVisible: userSubaccountVisibilities.isVisible
           })
           .from(userSubaccountVisibilities)
-          .where(eq(userSubaccountVisibilities.userKey, viewerKey));
+          .where(eq(userSubaccountVisibilities.userKey, policy.viewerKey))
+      : Promise.resolve<{ locationId: string; isVisible: boolean }[]>([]);
 
-  const [locationRows, conversationRows, pendingRows, appointmentRows, visibilityRows] =
-    await Promise.all([
-      locationsQuery,
-      includeConversationCounts
-        ? db
-            .select({
-              locationId: threads.locationId,
-              count: sql<number>`count(*)::int`
-            })
-            .from(threads)
-            .groupBy(threads.locationId)
-        : Promise.resolve([]),
-      includeConversationCounts
-        ? db
-            .select({
-              locationId: threads.locationId,
-              count: sql<number>`count(*)::int`
-            })
-            .from(threads)
-            .where(eq(threads.pendingReply, true))
-            .groupBy(threads.locationId)
-        : Promise.resolve([]),
-      db
-        .select({
-          locationId: appointments.locationId,
-          count: sql<number>`count(*)::int`
-        })
-        .from(appointments)
-        .groupBy(appointments.locationId),
-      visibilityQuery
-    ]);
+  const jwtSelectionPromise =
+    policy.kind === "jwt_workspace" ? fetchSelectionLocationRows(db, policy.workspaceUserId) : Promise.resolve([]);
+
+  const includeConversationCounts = surface !== "appointments";
+
+  const [
+    locationRows,
+    conversationRows,
+    pendingRows,
+    appointmentRows,
+    visibilityRows,
+    workspaceSelectionRows
+  ] = await Promise.all([
+    locationsQuery,
+    includeConversationCounts
+      ? db
+          .select({
+            locationId: threads.locationId,
+            count: sql<number>`count(*)::int`
+          })
+          .from(threads)
+          .groupBy(threads.locationId)
+      : Promise.resolve([]),
+    includeConversationCounts
+      ? db
+          .select({
+            locationId: threads.locationId,
+            count: sql<number>`count(*)::int`
+          })
+          .from(threads)
+          .where(eq(threads.pendingReply, true))
+          .groupBy(threads.locationId)
+      : Promise.resolve([]),
+    db
+      .select({
+        locationId: appointments.locationId,
+        count: sql<number>`count(*)::int`
+      })
+      .from(appointments)
+      .groupBy(appointments.locationId),
+    visibilityLegacyPromise,
+    jwtSelectionPromise
+  ]);
 
   const conversationsByLocation = new Map(
     conversationRows.map((row) => [row.locationId, Number(row.count)])
@@ -879,6 +883,7 @@ app.get("/subaccounts/overview", async (c) => {
     appointmentRows.map((row) => [row.locationId, Number(row.count)])
   );
   const visibilityByLocation = new Map(visibilityRows.map((row) => [row.locationId, row.isVisible]));
+  const jwtSelectionNullable = rowsToNullableSelectionSet(workspaceSelectionRows);
 
   const subaccounts = locationRows
     .map((row) => ({
@@ -891,9 +896,12 @@ app.get("/subaccounts/overview", async (c) => {
       pendingCount: pendingByLocation.get(row.locationId) ?? 0,
       appointmentCount: appointmentsByLocation.get(row.locationId) ?? 0,
       visible:
-        policy.kind === "user_session"
-          ? true
-          : (visibilityByLocation.get(row.locationId) ?? true)
+        policy.kind === "legacy"
+          ? (visibilityByLocation.get(row.locationId) ?? true)
+          : jwtSelectionNullable === null
+            ? true
+            : jwtSelectionNullable.has(row.locationId),
+      implicitAllSelections: policy.kind === "jwt_workspace" && jwtSelectionNullable === null
     }))
     .filter((row) => {
       if (surface === "threads") {
@@ -918,8 +926,14 @@ app.post("/subaccounts/visibility", async (c) => {
     return c.json({ error: "unauthorized" }, 401);
   }
 
-  if (policy.kind === "user_session") {
-    return c.json({ error: "forbidden_use_admin_portal" }, 403);
+  if (policy.kind !== "legacy") {
+    return c.json(
+      {
+        error: "forbidden_legacy_only",
+        hint: "JWT workspace callers should PUT /workspace/me/location-selections with a replacement locationIds list."
+      },
+      403
+    );
   }
 
   const viewerKey = policy.viewerKey;

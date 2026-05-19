@@ -17,10 +17,18 @@ export async function signWorkspaceJwt(args: {
   secret: string;
   sub: string;
   role: "admin" | "user";
-  email: string;
+  email?: string | null;
+  ghlUserId?: string | null;
 }) {
   const key = new TextEncoder().encode(args.secret);
-  return new jose.SignJWT({ role: args.role, email: args.email })
+  const body: Record<string, unknown> = { role: args.role };
+  if (typeof args.email === "string" && args.email.length > 0) {
+    body.email = args.email;
+  }
+  if (typeof args.ghlUserId === "string" && args.ghlUserId.length > 0) {
+    body.ghlUserId = args.ghlUserId;
+  }
+  return new jose.SignJWT(body as jose.JWTPayload)
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(args.sub)
     .setIssuedAt()
@@ -33,11 +41,12 @@ export async function verifyWorkspaceJwt(secret: string, token: string) {
   const { payload } = await jose.jwtVerify(token, key, { algorithms: ["HS256"] });
   const sub = typeof payload.sub === "string" ? payload.sub : null;
   const role = payload.role === "admin" || payload.role === "user" ? payload.role : null;
-  const email = typeof payload.email === "string" ? payload.email : "";
   if (!sub || !role) {
     throw new Error("invalid_claims");
   }
-  return { sub, role, email };
+  const email = typeof payload.email === "string" ? payload.email : "";
+  const ghlUserId = typeof payload.ghlUserId === "string" ? payload.ghlUserId : null;
+  return { sub, role, email, ghlUserId };
 }
 
 export function parseBearerHeader(headerValue: string | undefined) {

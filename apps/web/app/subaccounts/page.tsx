@@ -60,18 +60,43 @@ export default function SubaccountsPage() {
     );
   }, [searchLocationId, subaccounts]);
 
-  async function toggleSubaccount(locationId: string, nextVisible: boolean) {
-    const previous = subaccounts;
-    setSubaccounts((current) =>
-      current.map((subaccount) =>
-        subaccount.locationId === locationId ? { ...subaccount, visible: nextVisible } : subaccount
-      )
+  async function toggleSubaccount(locationId: string, nextVisible: boolean, current: SubaccountOverview[]) {
+    const previous = current;
+    const optimistic = current.map((subaccount) =>
+      subaccount.locationId === locationId ? { ...subaccount, visible: nextVisible } : subaccount
     );
-    setSavingIds((current) => ({ ...current, [locationId]: true }));
+    const locationIds = optimistic.filter((s) => s.visible).map((s) => s.locationId);
+
+    setSubaccounts(optimistic);
+    setSavingIds((s) => ({ ...s, [locationId]: true }));
     setError(null);
 
     try {
-      const response = await fetch(`${apiBaseUrl}/subaccounts/visibility`, {
+      const jwtResponse = await fetch(`${apiBaseUrl}/workspace/me/location-selections`, {
+        method: "PUT",
+        headers: mergeWorkspaceHeaders({
+          "Content-Type": "application/json"
+        }),
+        body: JSON.stringify({ locationIds })
+      });
+
+      if (jwtResponse.ok) {
+        const response = await fetch(`${apiBaseUrl}/subaccounts/overview?surface=all`, {
+          headers: mergeWorkspaceHeaders()
+        });
+        if (response.ok) {
+          const data = (await response.json()) as { subaccounts: SubaccountOverview[] };
+          setSubaccounts(data.subaccounts);
+        }
+        return;
+      }
+
+      if (jwtResponse.status !== 401) {
+        const payload = (await jwtResponse.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? "Failed to update selections");
+      }
+
+      const legacyResponse = await fetch(`${apiBaseUrl}/subaccounts/visibility`, {
         method: "POST",
         headers: mergeWorkspaceHeaders({
           "Content-Type": "application/json"
@@ -81,19 +106,22 @@ export default function SubaccountsPage() {
           visible: nextVisible
         })
       });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { error?: string };
-        if (payload.error === "forbidden_use_admin_portal") {
-          throw new Error("Workspace users cannot change visibility here. Ask an admin.");
+
+      if (!legacyResponse.ok) {
+        const payload = (await legacyResponse.json().catch(() => ({}))) as { error?: string };
+        if (payload.error === "forbidden_legacy_only") {
+          throw new Error("Iniciá sesión con GoHighLevel para guardar selecciones.");
         }
         throw new Error("Failed to update subaccount visibility");
       }
+
+      setSubaccounts(optimistic);
     } catch (caught) {
       setSubaccounts(previous);
       setError(caught instanceof Error ? caught.message : "Failed to update subaccount visibility");
     } finally {
-      setSavingIds((current) => {
-        const copy = { ...current };
+      setSavingIds((s) => {
+        const copy = { ...s };
         delete copy[locationId];
         return copy;
       });
@@ -106,7 +134,8 @@ export default function SubaccountsPage() {
         <p className="eyebrow">Management module</p>
         <h2 style={{ marginTop: 8 }}>Subaccounts tracking</h2>
         <p className="muted">
-          Tracks visibility using the shared dashboard chrome for a consistent workspace experience.
+          Con sesión GoHighLevel, cada cambio reemplaza la lista de cuentas que querés destacar en los filtros. Modo legacy
+          sigue usando el endpoint viewer-key.
         </p>
       </div>
 
@@ -141,7 +170,7 @@ export default function SubaccountsPage() {
                 aria-label={`Track subaccount ${subaccount.ghlLocationId}`}
                 checked={subaccount.visible}
                 disabled={Boolean(savingIds[subaccount.locationId])}
-                onChange={(event) => toggleSubaccount(subaccount.locationId, event.target.checked)}
+                onChange={(event) => toggleSubaccount(subaccount.locationId, event.target.checked, subaccounts)}
                 type="checkbox"
               />
             </label>

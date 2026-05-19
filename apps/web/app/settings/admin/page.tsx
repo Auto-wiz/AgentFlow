@@ -7,9 +7,10 @@ import { useEffect, useMemo, useState } from "react";
 
 type AdminUserRow = {
   id: string;
-  email: string;
+  email: string | null;
   displayName: string | null;
   role: string;
+  ghlUserId?: string | null;
   createdAt?: string;
 };
 
@@ -18,6 +19,7 @@ type LocationOption = {
   ghlLocationId: string;
   name: string | null;
   selected: boolean;
+  implicitAll?: boolean;
 };
 
 export default function WorkspaceAdminSettingsPage() {
@@ -37,13 +39,13 @@ export default function WorkspaceAdminSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const [newEmail, setNewEmail] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [newDisplayName, setNewDisplayName] = useState("");
-  const [newRole, setNewRole] = useState<"user" | "admin">("user");
-  const [createSubmitting, setCreateSubmitting] = useState(false);
-  const [createMessage, setCreateMessage] = useState<string | null>(null);
-  const [createError, setCreateError] = useState<string | null>(null);
+  const sortedUsers = useMemo(() => {
+    return [...users].sort((a, b) => {
+      const ka = (a.email ?? a.displayName ?? a.ghlUserId ?? a.id).toLowerCase();
+      const kb = (b.email ?? b.displayName ?? b.ghlUserId ?? b.id).toLowerCase();
+      return ka.localeCompare(kb);
+    });
+  }, [users]);
 
   const selectedUserRole = users.find((u) => u.id === selectedUserId)?.role ?? null;
 
@@ -108,6 +110,7 @@ export default function WorkspaceAdminSettingsPage() {
             ghlLocationId: string;
             name: string | null;
             selected: boolean;
+            implicitAll?: boolean;
           }>;
           error?: string;
         };
@@ -176,47 +179,6 @@ export default function WorkspaceAdminSettingsPage() {
     }
   }
 
-  async function createUser(ev: React.FormEvent) {
-    ev.preventDefault();
-    setCreateSubmitting(true);
-    setCreateError(null);
-    setCreateMessage(null);
-    try {
-      const res = await fetch(`${apiBaseUrl}/admin/workspace-users`, {
-        method: "POST",
-        headers: mergeWorkspaceHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({
-          email: newEmail.trim(),
-          password: newPassword,
-          displayName: newDisplayName.trim() || undefined,
-          role: newRole
-        })
-      });
-      const payload = (await res.json().catch(() => ({}))) as { error?: string; user?: AdminUserRow };
-      if (!res.ok) {
-        throw new Error(
-          payload.error === "email_taken_or_invalid" ? "Email already in use." : payload.error ?? "Unable to create"
-        );
-      }
-      if (payload.user) {
-        const row: AdminUserRow = {
-          ...payload.user,
-          createdAt: new Date().toISOString()
-        };
-        setUsers((curr) => [...curr, row].sort((a, b) => a.email.localeCompare(b.email)));
-      }
-      setCreateMessage(`Created ${payload.user?.email ?? "user"}.`);
-      setNewEmail("");
-      setNewPassword("");
-      setNewDisplayName("");
-      setNewRole("user");
-    } catch (caught) {
-      setCreateError(caught instanceof Error ? caught.message : "Unable to create");
-    } finally {
-      setCreateSubmitting(false);
-    }
-  }
-
   const headerNote = useMemo(() => {
     if (!hydrated) {
       return "Loading workspace session…";
@@ -233,36 +195,11 @@ export default function WorkspaceAdminSettingsPage() {
         <p className="eyebrow">Workspace</p>
         <h2 style={{ marginTop: 8 }}>User access</h2>
         <p className="muted">
-          Create accounts manually (no signup). Workspace users see only locations you allow below. Workspace admins retain
-          access to legacy visibility controls keyed on their viewer id unless you migrate them explicitly.
+          Los usuarios se crean cuando se autentican con GoHighLevel (provisionado desde OAuth). Acá sólo configurás cuáles subcuentas
+          están habilitadas por defecto por usuario (<code className="muted">role=user</code>). El rol administrador sólo puede
+          marcarse manualmente en la base de datos.
         </p>
         {headerNote ? <p className="muted" style={{ marginTop: 10 }}>{headerNote}</p> : null}
-      </div>
-
-      <div className="panel" style={{ padding: 18, marginTop: 12 }}>
-        <h3 style={{ marginTop: 0 }}>Invite user</h3>
-        <p className="muted">Minimum password length: 8 characters.</p>
-        <form onSubmit={(e) => void createUser(e)} style={{ marginTop: 12 }}>
-          <div className="toolbar" style={{ flexWrap: "wrap", gap: 10 }}>
-            <input placeholder="Email" type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} />
-            <input placeholder="Password" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
-            <input
-              placeholder="Display name"
-              type="text"
-              value={newDisplayName}
-              onChange={(e) => setNewDisplayName(e.target.value)}
-            />
-            <select value={newRole} onChange={(e) => setNewRole(e.target.value as "user" | "admin")}>
-              <option value="user">Role: user</option>
-              <option value="admin">Role: admin</option>
-            </select>
-          </div>
-          <button className="button" disabled={createSubmitting || user?.role !== "admin"} style={{ marginTop: 14 }} type="submit">
-            {createSubmitting ? "Creating…" : "Create workspace user"}
-          </button>
-        </form>
-        {createError ? <p className="inbox-reply-error" style={{ marginTop: 10 }}>{createError}</p> : null}
-        {createMessage ? <p className="muted" style={{ marginTop: 10 }}>{createMessage}</p> : null}
       </div>
 
       <div className="panel" style={{ padding: 18, marginTop: 12 }}>
@@ -286,9 +223,9 @@ export default function WorkspaceAdminSettingsPage() {
               onChange={(event) => setSelectedUserId(event.target.value)}
             >
               <option value="">Select a workspace user…</option>
-              {users.map((u) => (
+              {sortedUsers.map((u) => (
                 <option key={u.id} value={u.id}>
-                  {u.email} ({u.role})
+                  {u.email ?? u.displayName ?? u.ghlUserId ?? `${u.id.slice(0, 8)}…`} ({u.role})
                 </option>
               ))}
             </select>
@@ -334,7 +271,10 @@ export default function WorkspaceAdminSettingsPage() {
                   <div>
                     <strong>{loc.name ?? loc.ghlLocationId}</strong>
                     <div className="muted">GHL: {loc.ghlLocationId}</div>
-                    <div className="muted">uuid: {loc.locationId}</div>
+                    <div className="muted">
+                      uuid: {loc.locationId}
+                      {loc.implicitAll ? " · modo implícito: todas hasta guardar primera lista" : null}
+                    </div>
                   </div>
                   <input
                     aria-label={`Allow ${loc.ghlLocationId}`}

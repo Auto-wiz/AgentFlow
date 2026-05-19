@@ -50,7 +50,7 @@ export function AppUserMenu() {
     signOut();
     setOpen(false);
     if (isForceWorkspaceLogin()) {
-      router.replace("/login");
+      router.replace("/connect");
     }
   }
 
@@ -78,7 +78,7 @@ export function AppUserMenu() {
                 : "Legacy viewer key mode is enabled for this deployment."}
           </p>
           {hydrated && isForceWorkspaceLogin() && !user ? (
-            <Link className="app-user-menu-link" href="/login" onClick={() => setOpen(false)}>
+            <Link className="app-user-menu-link" href="/connect" onClick={() => setOpen(false)}>
               Sign in
             </Link>
           ) : null}
