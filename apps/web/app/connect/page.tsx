@@ -3,29 +3,47 @@
 import { getApiBaseUrl } from "../../lib/api-base-url";
 import { writeStoredGhlUserId, writeStoredToken } from "../../lib/auth-storage";
 import { useWorkspaceAuth } from "../components/workspace-auth-provider";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+
+function describeOAuthReason(raw: string | null): string {
+  if (!raw) {
+    return "OAuth sign-in failed.";
+  }
+  const messages: Record<string, string> = {
+    wrong_agency:
+      "This AgentFlow workspace is already linked to a different HighLevel agency. Sign in with that same agency.",
+    no_ghl_user_id: "HighLevel did not return a user id for this installation.",
+    provision_failed: "Could not finish creating your workspace user.",
+    jwt_issue_failed: "Could not create your session token.",
+    oauth_error: "OAuth sign-in failed."
+  };
+  if (messages[raw]) {
+    return messages[raw]!;
+  }
+  if (/[\s]/.test(raw)) {
+    return raw;
+  }
+  return raw.replace(/_/g, " ");
+}
 
 /** OAuth entry + session hash from Marketplace callback (provisioned via API Worker). */
 export default function ConnectGhlPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const apiBaseUrl = getApiBaseUrl();
   const ghlOAuthStartUrl = `${apiBaseUrl}/oauth/gohighlevel/start`;
 
-  const { hydrated, reloadFromStorage, token } = useWorkspaceAuth();
+  const { hydrated, reloadFromStorage, token, user } = useWorkspaceAuth();
   const [hashError, setHashError] = useState<string | null>(null);
 
   const oauthQueryError = useMemo(() => {
-    if (typeof window === "undefined") {
+    if (searchParams.get("ghl") !== "error") {
       return null;
     }
-    const qs = new URLSearchParams(window.location.search);
-    if (qs.get("ghl") === "error") {
-      const reason = qs.get("reason");
-      return reason ? decodeURIComponent(reason) : "oauth_error";
-    }
-    return null;
-  }, []);
+    const raw = searchParams.get("reason");
+    return describeOAuthReason(raw ? decodeURIComponent(raw) : null);
+  }, [searchParams]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -61,6 +79,7 @@ export default function ConnectGhlPage() {
     reloadFromStorage();
 
     void (async () => {
+      let canEnterApp = false;
       try {
         const res = await fetch(`${apiBaseUrl}/auth/me`, {
           headers: { Authorization: `Bearer ${sessionJwt}` }
@@ -70,12 +89,15 @@ export default function ConnectGhlPage() {
           const gid = body.user?.ghlUserId?.trim();
           if (gid) {
             writeStoredGhlUserId(gid);
+            canEnterApp = true;
           }
         }
       } finally {
         const sp = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
         const next = sp?.get("next");
-        router.replace(next && next.startsWith("/") ? next : "/appointments");
+        if (canEnterApp) {
+          router.replace(next && next.startsWith("/") ? next : "/appointments");
+        }
       }
     })();
   }, [apiBaseUrl, reloadFromStorage, router]);
@@ -84,19 +106,25 @@ export default function ConnectGhlPage() {
     if (!hydrated || !token) {
       return;
     }
+    if (!user) {
+      return;
+    }
+    if (!user.ghlUserId?.trim()) {
+      return;
+    }
     const sp = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
     const next = sp?.get("next");
     router.replace(next && next.startsWith("/") ? next : "/appointments");
-  }, [hydrated, router, token]);
+  }, [hydrated, router, token, user]);
 
   return (
     <section className="module-shell" style={{ maxWidth: 620, margin: "0 auto" }}>
       <div className="panel" style={{ padding: 22 }}>
         <p className="eyebrow">GoHighLevel</p>
-        <h1 style={{ marginTop: 8 }}>Conectar workspace</h1>
+        <h1 style={{ marginTop: 8 }}>Connect workspace</h1>
         <p className="muted" style={{ marginTop: 8 }}>
-          Iniciá OAuth en el Marketplace. Al volver creamos tu usuario AgentFlow usando el HL user id y guardamos sesión en
-          este navegador.
+          Start OAuth from the Marketplace. When you return, we provision your AgentFlow user from the HighLevel user id and
+          keep the session in this browser.
         </p>
 
         {(hashError || oauthQueryError) ? (
@@ -107,7 +135,7 @@ export default function ConnectGhlPage() {
 
         <div className="toolbar" style={{ marginTop: 18, flexWrap: "wrap", gap: 10 }}>
           <a className="button" href={ghlOAuthStartUrl} target="_blank" rel="noopener noreferrer">
-            Abrir OAuth en nueva pestaña
+            Open OAuth in a new tab
           </a>
           <button
             className="button secondary"
@@ -116,7 +144,7 @@ export default function ConnectGhlPage() {
             }}
             type="button"
           >
-            Ir al Marketplace (misma ventana)
+            Go to Marketplace (this window)
           </button>
         </div>
 
@@ -130,7 +158,7 @@ export default function ConnectGhlPage() {
         </div>
 
         <p className="muted" style={{ marginTop: 10 }}>
-          Si el iframe queda vacío por políticas HL, usá los botones de arriba.
+          If the iframe stays blank because of HighLevel policies, use the buttons above.
         </p>
       </div>
     </section>

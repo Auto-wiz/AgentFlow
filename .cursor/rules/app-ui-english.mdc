@@ -1,0 +1,17 @@
+---
+description: User-visible app copy must be English (web UI, API messages shown to users)
+globs: apps/web/**/*
+alwaysApply: false
+---
+
+# English-only user-facing copy
+
+All **user-visible** strings in the web app must be **English**:
+
+- Page titles, headings, body text, labels, placeholders, buttons, links, badges
+- Errors, empty states, loading hints, tooltips
+- `aria-*` and other accessibility strings shown to users or assistive tech
+
+**OK elsewhere:** repo docs (`README`, notes), migration SQL, internal comments if needed for the team (prefer English in code comments when shared).
+
+When adding or editing UI, write copy directly in English; do not ship Spanish or mixed-language product strings in `apps/web`.

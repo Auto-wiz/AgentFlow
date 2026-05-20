@@ -1,0 +1,11 @@
+---
+description: User-visible API JSON messages (errors) must be English
+globs: apps/api/**/*.ts
+alwaysApply: false
+---
+
+# English API messages for clients
+
+Human-readable strings returned in JSON that end users or the web app displays (`error`, `message`, etc.) must be **English**, consistent with the English-only UI rule in `apps/web`.
+
+Internal logs and developer-only responses are excluded.

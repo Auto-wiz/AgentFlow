@@ -38,6 +38,8 @@ NEXT_PUBLIC_API_BASE_URL=…
 
 With `JWT_SECRET` set on the Worker, users sign in via the GoHighLevel OAuth install flow (`/connect` in the app). After OAuth, the Worker provisions a workspace user from the Agency `userId`, issues a short-lived JWT, and redirects back to **`/connect#session=<jwt>`**, which the web app stores locally. Roles default to `user`; set `role=admin` directly in Postgres when you want full admin tooling.
 
+OAuth runs only for the **same HighLevel agency** already represented in your database: `agencies.ghl_agency_id` and/or `ghl_oauth_installations.company_id`. If both are empty, the **first** successful OAuth defines the tenant; later logins must use that same agency company id (otherwise the callback returns `wrong_agency` on `/connect`).
+
 Configure **Settings → Workspace admin** to choose default picked locations (`role=user`), and **Settings → Team selections** read-only overview of selections across everyone.
 
 Production secrets are configured through Wrangler:

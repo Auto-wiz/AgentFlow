@@ -84,6 +84,8 @@ type Env = {
   GHL_CLIENT_SECRET?: string;
   GHL_APP_ID?: string;
   GHL_INSTALL_URL?: string;
+  /** Marketplace app version id (same as dashboard / NEXT_PUBLIC_GHL_VERSION_ID); used if absent from GHL_INSTALL_URL query. */
+  GHL_VERSION_ID?: string;
   GHL_OAUTH_REDIRECT_URI?: string;
   GHL_OAUTH_USER_TYPE?: string;
   FRONTEND_BASE_URL?: string;
@@ -260,28 +262,34 @@ app.get("/oauth/gohighlevel/start", (c) => {
 
   const state = crypto.randomUUID();
   const installUrl = new URL(c.env.GHL_INSTALL_URL);
-  const versionId =
+  normalizeGhlMarketplaceInstallUrl(installUrl);
+
+  let versionId =
     getNonEmptyQueryParam(installUrl, "versionId") ?? getNonEmptyQueryParam(installUrl, "version_id");
+  if (!versionId && c.env.GHL_VERSION_ID?.trim()) {
+    versionId = c.env.GHL_VERSION_ID.trim();
+  }
 
   const clientId =
-    getNonEmptyQueryParam(installUrl, "client_id") ??
-    getNonEmptyQueryParam(installUrl, "appId") ??
-    c.env.GHL_CLIENT_ID?.trim() ??
-    null;
-  const appId =
-    getNonEmptyQueryParam(installUrl, "appId") ?? c.env.GHL_APP_ID?.trim() ?? versionId ?? clientId;
-  if (!appId) {
+    getNonEmptyQueryParam(installUrl, "client_id") ?? c.env.GHL_CLIENT_ID?.trim() ?? null;
+
+  /** OAuth / Marketplace "application id" — only when explicitly set; never reuse version_id here. */
+  const marketplaceAppId = getNonEmptyQueryParam(installUrl, "appId") ?? c.env.GHL_APP_ID?.trim() ?? null;
+
+  if (!clientId) {
     return c.json(
-      { error: "Missing GoHighLevel app identifier", hint: "Set appId/version_id in GHL_INSTALL_URL" },
+      {
+        error: "Missing GoHighLevel OAuth client_id",
+        hint: "Set client_id on GHL_INSTALL_URL or set GHL_CLIENT_ID"
+      },
       500
     );
   }
 
-  // Keep install URLs valid even if dashboard vars omit one of these keys.
-  if (clientId) {
-    installUrl.searchParams.set("client_id", clientId);
+  installUrl.searchParams.set("client_id", clientId);
+  if (marketplaceAppId) {
+    installUrl.searchParams.set("appId", marketplaceAppId);
   }
-  installUrl.searchParams.set("appId", appId);
   installUrl.searchParams.set("response_type", "code");
 
   if (versionId) {
@@ -335,6 +343,16 @@ app.get("/oauth/gohighlevel/callback", async (c) => {
   try {
     const tokenResponse = await exchangeGhlOAuthCode(c.env, code);
     const db = createDb(c.env.DATABASE_URL);
+
+    const establishedCompanyIds = await loadEstablishedGhlCompanyIds(db);
+    const incomingCompanyId = tokenResponse.companyId.trim();
+    if (establishedCompanyIds.size > 0 && !establishedCompanyIds.has(incomingCompanyId)) {
+      return redirectToFrontend(
+        c,
+        `/connect?ghl=error&reason=${encodeURIComponent("wrong_agency")}`
+      );
+    }
+
     const now = new Date();
     const expiresAt = new Date(now.getTime() + tokenResponse.expiresIn * 1000);
 
@@ -1521,6 +1539,36 @@ function getNonEmptyQueryParam(url: URL, name: string): string | null {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+/** Legacy marketplace path; v2 uses version_id + client_id and must not set appId from version_id (breaks HL UI). */
+function normalizeGhlMarketplaceInstallUrl(url: URL) {
+  const hosts = new Set(["marketplace.gohighlevel.com", "marketplace.leadconnectorhq.com"]);
+  if (!hosts.has(url.hostname)) {
+    return;
+  }
+  if (url.pathname === "/oauth/chooselocation") {
+    url.pathname = "/v2/oauth/chooselocation";
+  }
+}
+
+async function loadEstablishedGhlCompanyIds(db: ReturnType<typeof createDb>): Promise<Set<string>> {
+  const ids = new Set<string>();
+  const agencyRows = await db.select({ ghlAgencyId: agencies.ghlAgencyId }).from(agencies);
+  for (const row of agencyRows) {
+    const v = row.ghlAgencyId?.trim();
+    if (v) {
+      ids.add(v);
+    }
+  }
+  const oauthRows = await db.select({ companyId: ghlOAuthInstallations.companyId }).from(ghlOAuthInstallations);
+  for (const row of oauthRows) {
+    const v = row.companyId?.trim();
+    if (v) {
+      ids.add(v);
+    }
+  }
+  return ids;
 }
 
 type WebhookMirrorRecord = {
