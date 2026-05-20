@@ -21,7 +21,7 @@ export function AppChrome({ children }: { children: ReactNode }) {
   const { hydrated, token } = useWorkspaceAuth();
   const appointmentsContext = pathname === "/appointments" || pathname.startsWith("/appointments/");
 
-  if (pathname === "/connect") {
+  if (pathname === "/login") {
     return (
       <AppointmentsTopbarBridgeProvider>
         <div className="app-shell app-shell-plain">
@@ -31,7 +31,7 @@ export function AppChrome({ children }: { children: ReactNode }) {
     );
   }
 
-  if (pathname !== "/connect" && (!hydrated || !token)) {
+  if (pathname !== "/login" && (!hydrated || !token)) {
     return (
       <AppointmentsTopbarBridgeProvider>
         <div className="app-shell app-shell-plain">

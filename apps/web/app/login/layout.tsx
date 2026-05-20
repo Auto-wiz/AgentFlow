@@ -1,6 +1,6 @@
 import { Suspense, type ReactNode } from "react";
 
-export default function ConnectLayout({ children }: { children: ReactNode }) {
+export default function LoginLayout({ children }: { children: ReactNode }) {
   return (
     <Suspense
       fallback={

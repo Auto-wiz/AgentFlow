@@ -53,6 +53,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
+import { authLoginHandler } from "./auth-password-handlers.js";
 import {
   adminGetUserSubaccounts,
   adminListLocations,
@@ -245,6 +246,7 @@ app.use(
 
 app.get("/health", (c) => c.json({ ok: true }));
 
+app.post("/auth/login", authLoginHandler);
 app.get("/auth/me", meHandler);
 app.put("/workspace/me/location-selections", mePutLocationSelectionsHandler);
 app.get("/workspace/selection-matrix", workspaceSelectionMatrixHandler);
@@ -329,7 +331,7 @@ app.get("/oauth/gohighlevel/callback", async (c) => {
     if (establishedCompanyIds.size > 0 && !establishedCompanyIds.has(incomingCompanyId)) {
       return redirectToFrontend(
         c,
-        `/connect?ghl=error&reason=${encodeURIComponent("wrong_agency")}`
+        `/login?ghl=error&reason=${encodeURIComponent("wrong_agency")}`
       );
     }
 
@@ -376,20 +378,20 @@ app.get("/oauth/gohighlevel/callback", async (c) => {
     let nextPath = "/settings/integrations?ghl=connected";
     if (jwtConfiguredForWorkspace(c.env)) {
       if (!ghlUserId) {
-        nextPath = "/connect?ghl=error&reason=no_ghl_user_id";
+        nextPath = "/login?ghl=error&reason=no_ghl_user_id";
       } else {
         const provisioned = await provisionWorkspaceUserFromGhlAccount(db, ghlUserId);
         if (!provisioned) {
-          nextPath = "/connect?ghl=error&reason=provision_failed";
+          nextPath = "/login?ghl=error&reason=provision_failed";
         } else {
           try {
             const sessionToken = await signSessionForProvisionedUser(c.env, {
               ...provisioned,
               role: provisioned.role === "admin" ? "admin" : "user"
             });
-            nextPath = `/connect#session=${encodeURIComponent(sessionToken)}`;
+            nextPath = `/login#session=${encodeURIComponent(sessionToken)}`;
           } catch {
-            nextPath = "/connect?ghl=error&reason=jwt_issue_failed";
+            nextPath = "/login?ghl=error&reason=jwt_issue_failed";
           }
         }
       }

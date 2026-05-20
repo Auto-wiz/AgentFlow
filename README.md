@@ -26,7 +26,7 @@ Copy `.env.example` for local development. Do not commit real secrets.
 
 ### Workspace UI authentication
 
-The **web app** always requires a stored workspace JWT: unauthenticated users are sent to `/connect` and the UI never falls back to anonymous “guest” or `x-viewer-key` from the browser.
+The **web app** always requires a stored workspace JWT: unauthenticated users are sent to `/login` and the UI never falls back to anonymous “guest” or `x-viewer-key` from the browser.
 
 The **API** can still accept `x-viewer-key` when `JWT_SECRET` is **not** set (for other clients or tools). Configure `JWT_SECRET` for normal production use.
 
@@ -36,11 +36,13 @@ Frontend variables:
 NEXT_PUBLIC_API_BASE_URL=…
 ```
 
-With `JWT_SECRET` set on the Worker, users sign in via GoHighLevel OAuth (`/connect` in the app). Configure the Worker with **`GHL_OAUTH_START_URL`**: paste the full **Installation URL** from Developer Portal → your app → **Advanced Settings → Auth** → show install link. That is the account-connect / consent screen (iframe-friendly) — not the public Marketplace browse experience. If you omit it, **`GHL_INSTALL_URL`** is built from pieces as a fallback.
+With `JWT_SECRET` set on the Worker, users **sign in at `/login`** with **email and password** (`POST /auth/login`). Create `workspace_users` rows in Postgres (email, bcrypt `password_hash`, role, etc.); the API uses the same bcrypt cost as `apps/api/src/auth-lib.ts` (`hashPassword`).
 
-After OAuth, the Worker provisions a workspace user from the Agency `userId`, issues a session JWT, and redirects back to **`/connect#session=<jwt>`**, which the web app stores locally. Roles default to `user`; set `role=admin` directly in Postgres when you want full admin tooling.
+**GoHighLevel OAuth** on the Worker is still used to store installation tokens and (optionally) provision a user tied to a GHL `userId` — for example from **Settings → Integrations** or when you wire Marketplace install flows. It is **not** the primary app login. Configure **`GHL_OAUTH_START_URL`** (Installation URL from Developer Portal → your app → Advanced Settings → Auth) or **`GHL_INSTALL_URL`** as a fallback.
 
-OAuth runs only for the **same HighLevel agency** already represented in your database: `agencies.ghl_agency_id` and/or `ghl_oauth_installations.company_id`. If both are empty, the **first** successful OAuth defines the tenant; later logins must use that same agency company id (otherwise the callback returns `wrong_agency` on `/connect`).
+When OAuth completes successfully, the Worker issues a session JWT and redirects to **`/login#session=<jwt>`** (hash consumed by the web app). GHL-only provisioned users default to role `user`; set `role=admin` in Postgres when needed.
+
+OAuth remains scoped to the **same HighLevel agency** already in your database: `agencies.ghl_agency_id` and/or `ghl_oauth_installations.company_id`. If both are empty, the **first** successful OAuth defines the tenant; later flows must use that same agency company id (otherwise the callback returns `wrong_agency`).
 
 Configure **Settings → Workspace admin** to choose default picked locations (`role=user`), and **Settings → Team selections** read-only overview of selections across everyone.
 

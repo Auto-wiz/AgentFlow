@@ -48,7 +48,7 @@ export function AppUserMenu() {
   function handleSignOut() {
     signOut();
     setOpen(false);
-    router.replace("/connect");
+    router.replace("/login");
   }
 
   return (
