@@ -11,7 +11,10 @@
     "check": "tsc --noEmit",
     "build": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "db:migrate:apply": "node ./scripts/run-migrate.mjs",
+    "db:migrate:baseline-log": "node ./scripts/baseline-migration-log.mjs",
+    "db:migrate:baseline-log:dry": "node ./scripts/baseline-migration-log.mjs --dry-run"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
@@ -19,7 +22,9 @@
   },
   "devDependencies": {
     "@types/node": "^25.7.0",
+    "@types/pg": "^8.20.0",
     "drizzle-kit": "^0.31.10",
+    "pg": "^8.21.0",
     "typescript": "^5.9.3"
   }
 }

@@ -632,6 +632,139 @@ button.appointments-row.active {
   color: var(--accent);
 }
 
+/* Auth /login — card + fields */
+.auth-login-page.module-shell {
+  align-content: start;
+  justify-items: center;
+  min-height: min(76vh, 640px);
+  padding: clamp(24px, 5vw, 48px) 18px;
+}
+
+.auth-login-shell.panel {
+  max-width: 420px;
+  padding: clamp(26px, 4vw, 34px);
+  width: min(420px, 100%);
+}
+
+.auth-login-mark {
+  align-items: center;
+  align-self: flex-start;
+  background: var(--accent);
+  border-radius: 12px;
+  color: white;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 0;
+  letter-spacing: 0.14em;
+  line-height: 1;
+  margin-bottom: 4px;
+  padding: 8px 12px;
+}
+
+.auth-login-heading {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.auth-login-heading h1 {
+  font-size: clamp(1.5rem, 4vw, 1.75rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  margin: 0;
+}
+
+.auth-login-heading .auth-login-sub {
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.auth-login-alerts {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.auth-login-alert {
+  background: color-mix(in srgb, #ef4444 12%, var(--panel));
+  border: 1px solid color-mix(in srgb, #ef4444 35%, var(--border));
+  border-radius: 12px;
+  color: #cf304a;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+  padding: 12px 14px;
+}
+
+:root[data-theme="dark"] .auth-login-alert {
+  background: color-mix(in srgb, #f87171 14%, var(--panel));
+  border-color: color-mix(in srgb, #f87171 32%, var(--border));
+  color: #fda4af;
+}
+
+.auth-login-form {
+  display: grid;
+  gap: 20px;
+  margin-top: 24px;
+}
+
+.auth-login-field {
+  display: grid;
+  gap: 8px;
+}
+
+.auth-login-label {
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.auth-login-input {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--foreground);
+  min-height: 48px;
+  padding: 0 14px;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+  width: 100%;
+}
+
+.auth-login-input::placeholder {
+  color: var(--muted);
+  opacity: 0.75;
+}
+
+.auth-login-input:hover {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+}
+
+.auth-login-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  outline: none;
+}
+
+.auth-login-submit.button {
+  font-size: 0.9375rem;
+  margin-top: 4px;
+  min-height: 48px;
+  width: 100%;
+}
+
+.auth-login-footnote {
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 20px 0 0;
+  text-align: center;
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;

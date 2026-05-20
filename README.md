@@ -36,6 +36,20 @@ Frontend variables:
 NEXT_PUBLIC_API_BASE_URL=…
 ```
 
+### Database migrations (Drizzle)
+
+Apply schema with **`npm run db:migrate --workspace @agentflow/db`** after **`$env:DATABASE_URL`** (PowerShell). The repo ships **`packages/db/migrations/meta/_journal.json`** so `drizzle-kit migrate` knows the ordered `*.sql` files.
+
+If `drizzle-kit migrate` exits with **code 1** but you don’t see a SQL error, run **`npm run db:migrate:apply --workspace @agentflow/db`** (same `DATABASE_URL`). It applies the same files via **`pg`** and prints the full Postgres error message.
+
+When the schema **already matches** the repo but **`drizzle.__drizzle_migrations`** is missing rows (you keep hitting **`already exists`**), run **`npm run db:migrate:baseline-log --workspace @agentflow/db`** once to register every journal entry that isn’t there yet. Preview with **`db:migrate:baseline-log:dry`**. **Only use this if the DB really has all migration DDL**—otherwise Drizzle will skip missing SQL and the app will break. Then run **`db:migrate:apply`** again.
+
+PostgreSQL **`pg`/Node** may warn that `sslmode=require` will change meaning in future `pg` majors; Neon suggests moving to **`sslmode=verify-full`** (see warning text) when you rotate URLs.
+
+Executed migrations are tracked in **`drizzle.__drizzle_migrations`** (default Drizzle Kit schema/table).
+
+If Postgres was only **partially** migrated manually, fix objects in Neon’s SQL Editor or reconcile rows by hand; **`baseline-log`** is not for empty DBs.
+
 With `JWT_SECRET` set on the Worker, users **sign in at `/login`** with **email and password** (`POST /auth/login`). Create `workspace_users` rows in Postgres (email, bcrypt `password_hash`, role, etc.); the API uses the same bcrypt cost as `apps/api/src/auth-lib.ts` (`hashPassword`).
 
 **GoHighLevel OAuth** on the Worker is still used to store installation tokens and (optionally) provision a user tied to a GHL `userId` — for example from **Settings → Integrations** or when you wire Marketplace install flows. It is **not** the primary app login. Configure **`GHL_OAUTH_START_URL`** (Installation URL from Developer Portal → your app → Advanced Settings → Auth) or **`GHL_INSTALL_URL`** as a fallback.

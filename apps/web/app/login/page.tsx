@@ -62,6 +62,13 @@ export default function LoginPage() {
     return describeOAuthReason(raw ? decodeURIComponent(raw) : null);
   }, [searchParams]);
 
+  const alerts = useMemo(() => {
+    const list = [hashError, oauthQueryError, apiBaseMisconfigurationHint, formError].filter(
+      Boolean
+    ) as string[];
+    return list;
+  }, [hashError, oauthQueryError, apiBaseMisconfigurationHint, formError]);
+
   const consumeSessionFromHash = useCallback(async () => {
     if (typeof window === "undefined") {
       return;
@@ -149,64 +156,73 @@ export default function LoginPage() {
   }
 
   return (
-    <section className="module-shell" style={{ maxWidth: 620, margin: "0 auto" }}>
-      <div className="panel" style={{ padding: 22 }}>
-        <p className="eyebrow">AgentFlow</p>
-        <h1 style={{ marginTop: 8 }}>Sign in</h1>
-        <p className="muted" style={{ marginTop: 8 }}>
-          Workspace email and password. HighLevel OAuth (for API tokens) is separate — use Settings when needed.
-        </p>
+    <section className="module-shell auth-login-page">
+      <div className="panel auth-login-shell">
+        <span className="auth-login-mark">AgentFlow</span>
 
-        {(hashError || oauthQueryError) ? (
-          <p className="inbox-reply-error" style={{ marginTop: 14 }}>
-            {hashError ?? oauthQueryError}
+        <div className="auth-login-heading">
+          <h1>Sign in</h1>
+          <p className="auth-login-sub muted">
+            Workspace email and password. Connect HighLevel OAuth from Settings when you need API tokens.
           </p>
+        </div>
+
+        {alerts.length > 0 ? (
+          <div className="auth-login-alerts" role="alert">
+            {alerts.map((text, i) => (
+              <p className="auth-login-alert" key={i}>
+                {text}
+              </p>
+            ))}
+          </div>
         ) : null}
 
-        {apiBaseMisconfigurationHint ? (
-          <p className="inbox-reply-error" style={{ marginTop: 14 }}>
-            {apiBaseMisconfigurationHint}
-          </p>
-        ) : null}
+        <form className="auth-login-form" onSubmit={onLogin} noValidate>
+          <div className="auth-login-field">
+            <label className="auth-login-label" htmlFor="login-email">
+              Email
+            </label>
+            <input
+              id="login-email"
+              autoCapitalize="off"
+              autoComplete="email"
+              className="auth-login-input"
+              inputMode="email"
+              name="email"
+              onChange={(ev) => setEmail(ev.target.value)}
+              placeholder="you@company.com"
+              required
+              spellCheck={false}
+              type="email"
+              value={email}
+            />
+          </div>
 
-        {formError ? (
-          <p className="inbox-reply-error" style={{ marginTop: 14 }}>
-            {formError}
-          </p>
-        ) : null}
+          <div className="auth-login-field">
+            <label className="auth-login-label" htmlFor="login-password">
+              Password
+            </label>
+            <input
+              id="login-password"
+              autoComplete="current-password"
+              className="auth-login-input"
+              name="password"
+              onChange={(ev) => setPassword(ev.target.value)}
+              placeholder="············"
+              required
+              type="password"
+              value={password}
+            />
+          </div>
 
-        <form onSubmit={onLogin} style={{ marginTop: 18 }}>
-          <label className="muted" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>
-            Email
-          </label>
-          <input
-            autoComplete="email"
-            className="inbox-reply-input"
-            name="email"
-            onChange={(ev) => setEmail(ev.target.value)}
-            required
-            style={{ width: "100%", maxWidth: 400, marginBottom: 14 }}
-            type="email"
-            value={email}
-          />
-          <label className="muted" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>
-            Password
-          </label>
-          <input
-            autoComplete="current-password"
-            className="inbox-reply-input"
-            name="password"
-            onChange={(ev) => setPassword(ev.target.value)}
-            required
-            style={{ width: "100%", maxWidth: 400, marginBottom: 18 }}
-            type="password"
-            value={password}
-          />
-
-          <button className="button" disabled={pending || !hydrated} type="submit">
-            {pending ? "Please wait…" : "Sign in"}
+          <button className="button auth-login-submit" disabled={pending || !hydrated} type="submit">
+            {pending ? "Signing in…" : "Sign in"}
           </button>
         </form>
+
+        <p className="auth-login-footnote muted">
+          Having trouble with OAuth redirects? Confirm <code>NEXT_PUBLIC_API_BASE_URL</code> points at your Worker.
+        </p>
       </div>
     </section>
   );
