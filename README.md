@@ -26,13 +26,14 @@ Copy `.env.example` for local development. Do not commit real secrets.
 
 ### Workspace UI authentication
 
-The API can enforce JWT sessions whenever `JWT_SECRET` is configured on the Worker. When it is absent, callers may keep using `x-viewer-key` legacy visibility (matching `NEXT_PUBLIC_LEGACY_VIEWER_KEY` on the frontend).
+The **web app** always requires a stored workspace JWT: unauthenticated users are sent to `/connect` and the UI never falls back to anonymous “guest” or `x-viewer-key` from the browser.
+
+The **API** can still accept `x-viewer-key` when `JWT_SECRET` is **not** set (for other clients or tools). Configure `JWT_SECRET` for normal production use.
 
 Frontend variables:
 
 ```txt
-NEXT_PUBLIC_FORCE_WORKSPACE_LOGIN=true|false
-NEXT_PUBLIC_LEGACY_VIEWER_KEY=default
+NEXT_PUBLIC_API_BASE_URL=…
 ```
 
 With `JWT_SECRET` set on the Worker, users sign in via the GoHighLevel OAuth install flow (`/connect` in the app). After OAuth, the Worker provisions a workspace user from the Agency `userId`, issues a short-lived JWT, and redirects back to **`/connect#session=<jwt>`**, which the web app stores locally. Roles default to `user`; set `role=admin` directly in Postgres when you want full admin tooling.

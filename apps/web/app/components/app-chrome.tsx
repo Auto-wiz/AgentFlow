@@ -9,6 +9,7 @@ import {
 } from "./appointments-topbar-bridge";
 import { ThemeToggle } from "./theme-toggle";
 import { AppUserMenu } from "./app-user-menu";
+import { useWorkspaceAuth } from "./workspace-auth-provider";
 
 const navItems = [
   { href: "/appointments", label: "Appointments", icon: "⌚" },
@@ -17,6 +18,7 @@ const navItems = [
 
 export function AppChrome({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const { hydrated, token } = useWorkspaceAuth();
   const appointmentsContext = pathname === "/appointments" || pathname.startsWith("/appointments/");
 
   if (pathname === "/connect") {
@@ -24,6 +26,20 @@ export function AppChrome({ children }: { children: ReactNode }) {
       <AppointmentsTopbarBridgeProvider>
         <div className="app-shell app-shell-plain">
           <section className="app-page">{children}</section>
+        </div>
+      </AppointmentsTopbarBridgeProvider>
+    );
+  }
+
+  if (pathname !== "/connect" && (!hydrated || !token)) {
+    return (
+      <AppointmentsTopbarBridgeProvider>
+        <div className="app-shell app-shell-plain">
+          <section className="app-page" aria-busy aria-live="polite">
+            <div className="panel" style={{ padding: 22 }}>
+              <p className="muted">{!hydrated ? "Loading…" : "Signing in…"}</p>
+            </div>
+          </section>
         </div>
       </AppointmentsTopbarBridgeProvider>
     );

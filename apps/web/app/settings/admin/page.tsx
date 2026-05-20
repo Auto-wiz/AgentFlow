@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "../../../lib/api-base-url";
 import { mergeWorkspaceHeaders } from "../../../lib/workspace-api-headers";
 import { useWorkspaceAuth } from "../../components/workspace-auth-provider";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 type AdminUserRow = {
@@ -24,6 +25,7 @@ type LocationOption = {
 
 export default function WorkspaceAdminSettingsPage() {
   const apiBaseUrl = getApiBaseUrl();
+  const router = useRouter();
   const { user, hydrated, sessionKey } = useWorkspaceAuth();
 
   const [users, setUsers] = useState<AdminUserRow[]>([]);
@@ -48,6 +50,15 @@ export default function WorkspaceAdminSettingsPage() {
   }, [users]);
 
   const selectedUserRole = users.find((u) => u.id === selectedUserId)?.role ?? null;
+
+  useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+    if (user?.role !== "admin") {
+      router.replace("/settings");
+    }
+  }, [hydrated, router, user?.role]);
 
   useEffect(() => {
     let cancelled = false;

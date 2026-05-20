@@ -3,15 +3,25 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { useWorkspaceAuth } from "../components/workspace-auth-provider";
+
 export function SettingsSubnav() {
   const pathname = usePathname();
+  const { user, hydrated } = useWorkspaceAuth();
+
+  const isAdmin = hydrated && user?.role === "admin";
+
   const links = [
     { href: "/settings", active: pathname === "/settings", label: "General" },
-    {
-      href: "/settings/admin",
-      active: pathname === "/settings/admin" || pathname.startsWith("/settings/admin/"),
-      label: "Workspace admin"
-    },
+    ...(isAdmin
+      ? [
+          {
+            href: "/settings/admin",
+            active: pathname === "/settings/admin" || pathname.startsWith("/settings/admin/"),
+            label: "Workspace admin"
+          }
+        ]
+      : []),
     {
       href: "/settings/team-selections",
       active: pathname === "/settings/team-selections",

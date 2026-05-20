@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
-import { isForceWorkspaceLogin } from "../../lib/workspace-auth-env";
 import { useWorkspaceAuth } from "./workspace-auth-provider";
 
 function initialsFromLabel(label: string) {
@@ -20,7 +19,7 @@ function initialsFromLabel(label: string) {
 
 export function AppUserMenu() {
   const router = useRouter();
-  const { user, hydrated, signOut } = useWorkspaceAuth();
+  const { user, hydrated, token, signOut } = useWorkspaceAuth();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -42,16 +41,14 @@ export function AppUserMenu() {
     user?.displayName?.trim() ||
     user?.email?.trim() ||
     fallbackName ||
-    (hydrated ? "Guest" : "…");
+    "…";
 
-  const showSignOut = hydrated && Boolean(user);
+  const showSignOut = hydrated && Boolean(token);
 
   function handleSignOut() {
     signOut();
     setOpen(false);
-    if (isForceWorkspaceLogin()) {
-      router.replace("/connect");
-    }
+    router.replace("/connect");
   }
 
   return (
@@ -71,17 +68,8 @@ export function AppUserMenu() {
         <div className="app-user-menu-popover" role="dialog" aria-label="Account">
           <p className="app-user-menu-name">{displayName}</p>
           <p className="muted app-user-menu-note">
-            {user
-              ? `Signed in${user.role === "admin" ? " · admin" : ""}`
-              : isForceWorkspaceLogin()
-                ? "You are browsing without a workspace login."
-                : "Legacy viewer key mode is enabled for this deployment."}
+            {user ? `Signed in${user.role === "admin" ? " · admin" : ""}` : "Loading profile…"}
           </p>
-          {hydrated && isForceWorkspaceLogin() && !user ? (
-            <Link className="app-user-menu-link" href="/connect" onClick={() => setOpen(false)}>
-              Sign in
-            </Link>
-          ) : null}
           <Link className="app-user-menu-link" href="/settings" onClick={() => setOpen(false)}>
             Settings
           </Link>

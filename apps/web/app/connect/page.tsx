@@ -2,9 +2,7 @@
 
 import { getApiBaseUrl } from "../../lib/api-base-url";
 import { writeStoredGhlUserId, writeStoredToken } from "../../lib/auth-storage";
-import { isForceWorkspaceLogin } from "../../lib/workspace-auth-env";
 import { useWorkspaceAuth } from "../components/workspace-auth-provider";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
@@ -83,15 +81,13 @@ export default function ConnectGhlPage() {
   }, [apiBaseUrl, reloadFromStorage, router]);
 
   useEffect(() => {
-    if (!hydrated || !isForceWorkspaceLogin() || !token) {
+    if (!hydrated || !token) {
       return;
     }
     const sp = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
     const next = sp?.get("next");
     router.replace(next && next.startsWith("/") ? next : "/appointments");
   }, [hydrated, router, token]);
-
-  const legacyBypass = hydrated && !isForceWorkspaceLogin();
 
   return (
     <section className="module-shell" style={{ maxWidth: 620, margin: "0 auto" }}>
@@ -102,15 +98,6 @@ export default function ConnectGhlPage() {
           Iniciá OAuth en el Marketplace. Al volver creamos tu usuario AgentFlow usando el HL user id y guardamos sesión en
           este navegador.
         </p>
-        {legacyBypass ? (
-          <p className="muted" style={{ marginTop: 12 }}>
-            Este entorno permite modo legacy (`NEXT_PUBLIC_FORCE_WORKSPACE_LOGIN=false`). Podés entrar igual a{" "}
-            <Link className="app-user-menu-link" href="/appointments">
-              Appointments
-            </Link>{" "}
-            sin JWT.
-          </p>
-        ) : null}
 
         {(hashError || oauthQueryError) ? (
           <p className="inbox-reply-error" style={{ marginTop: 14 }}>

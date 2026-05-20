@@ -1,6 +1,5 @@
 "use client";
 
-import { isForceWorkspaceLogin } from "../../lib/workspace-auth-env";
 import { useWorkspaceAuth } from "./workspace-auth-provider";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
@@ -11,7 +10,7 @@ export function WorkspaceAuthGate() {
   const { hydrated, token } = useWorkspaceAuth();
 
   useEffect(() => {
-    if (!hydrated || !isForceWorkspaceLogin()) {
+    if (!hydrated) {
       return;
     }
     if (pathname === "/connect") {
@@ -23,7 +22,7 @@ export function WorkspaceAuthGate() {
   }, [hydrated, pathname, router, token]);
 
   useEffect(() => {
-    if (!hydrated || !isForceWorkspaceLogin()) {
+    if (!hydrated) {
       return;
     }
     if (pathname !== "/connect") {

@@ -1,8 +1,14 @@
+"use client";
+
 import Link from "next/link";
 import { getGhlInstallUrl } from "../../lib/ghl-install-url";
+import { useWorkspaceAuth } from "../components/workspace-auth-provider";
 
 export default function SettingsPage() {
   const goHighLevelConnectUrl = getGhlInstallUrl();
+  const { user, hydrated } = useWorkspaceAuth();
+
+  const isAdmin = hydrated && user?.role === "admin";
 
   return (
     <>
@@ -33,13 +39,15 @@ export default function SettingsPage() {
               Manage subaccounts
             </Link>
           </article>
-          <article className="placeholder-card">
-            <strong>Workspace admin</strong>
-            <span className="muted">Create users and choose which locations each role=user can filter</span>
-            <Link className="button secondary" href="/settings/admin">
-              Open workspace admin
-            </Link>
-          </article>
+          {isAdmin ? (
+            <article className="placeholder-card">
+              <strong>Workspace admin</strong>
+              <span className="muted">Choose which locations each role=user can filter by default</span>
+              <Link className="button secondary" href="/settings/admin">
+                Open workspace admin
+              </Link>
+            </article>
+          ) : null}
         </div>
       </div>
     </>

@@ -1,19 +1,14 @@
 import { readStoredToken } from "./auth-storage";
-import { isForceWorkspaceLogin, legacyViewerKey } from "./workspace-auth-env";
 
 /**
- * Builds API request headers compatible with legacy `x-viewer-key` flows and JWT workspace sessions.
- * When NEXT_PUBLIC_FORCE_WORKSPACE_LOGIN=true, unauthenticated callers omit the legacy header so the API rejects with 401.
+ * Web app always uses a stored workspace JWT. No anonymous `x-viewer-key` fallback in the browser.
  */
 export function getWorkspaceHeaders(): Record<string, string> {
   const token = readStoredToken();
   if (token) {
     return { Authorization: `Bearer ${token}` };
   }
-  if (isForceWorkspaceLogin()) {
-    return {};
-  }
-  return { "x-viewer-key": legacyViewerKey() };
+  return {};
 }
 
 export function mergeWorkspaceHeaders(
