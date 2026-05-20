@@ -36,7 +36,9 @@ Frontend variables:
 NEXT_PUBLIC_API_BASE_URL=…
 ```
 
-With `JWT_SECRET` set on the Worker, users sign in via the GoHighLevel OAuth install flow (`/connect` in the app). After OAuth, the Worker provisions a workspace user from the Agency `userId`, issues a short-lived JWT, and redirects back to **`/connect#session=<jwt>`**, which the web app stores locally. Roles default to `user`; set `role=admin` directly in Postgres when you want full admin tooling.
+With `JWT_SECRET` set on the Worker, users sign in via GoHighLevel OAuth (`/connect` in the app). Configure the Worker with **`GHL_OAUTH_START_URL`**: paste the full **Installation URL** from Developer Portal → your app → **Advanced Settings → Auth** → show install link. That is the account-connect / consent screen (iframe-friendly) — not the public Marketplace browse experience. If you omit it, **`GHL_INSTALL_URL`** is built from pieces as a fallback.
+
+After OAuth, the Worker provisions a workspace user from the Agency `userId`, issues a session JWT, and redirects back to **`/connect#session=<jwt>`**, which the web app stores locally. Roles default to `user`; set `role=admin` directly in Postgres when you want full admin tooling.
 
 OAuth runs only for the **same HighLevel agency** already represented in your database: `agencies.ghl_agency_id` and/or `ghl_oauth_installations.company_id`. If both are empty, the **first** successful OAuth defines the tenant; later logins must use that same agency company id (otherwise the callback returns `wrong_agency` on `/connect`).
 
@@ -59,8 +61,9 @@ Set these Worker variables in the Cloudflare dashboard or as `[vars]` in
 `apps/api/wrangler.toml` for OAuth/install routing:
 
 ```txt
-GHL_INSTALL_URL
-GHL_APP_ID (optional, recommended for Marketplace v2 URLs)
+GHL_OAUTH_START_URL (recommended — Installation URL from portal)
+GHL_INSTALL_URL (fallback if GHL_OAUTH_START_URL unset)
+GHL_APP_ID (optional)
 GHL_OAUTH_REDIRECT_URI
 GHL_OAUTH_USER_TYPE
 FRONTEND_BASE_URL

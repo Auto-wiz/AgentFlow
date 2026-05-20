@@ -1,33 +1,15 @@
-import { DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE, normalizeGhlMarketplaceOAuthScope } from "@agentflow/shared";
+import { getApiBaseUrl } from "./api-base-url";
 
-const defaultClientId = "6a035ee24b80374d79d8c5c0-mp2xo4p3";
-const defaultVersionId = "6a035ee24b80374d79d8c5c0";
-const defaultRedirectUri = "https://api.agentflow.autowiz.net/oauth/gohighlevel/callback";
+/**
+ * Use the Worker OAuth start route so the CSRF `state` cookie is set before redirecting to HighLevel.
+ * Do not link directly to Marketplace or a raw Installation URL from the web app.
+ */
+export function getGhlWorkerOAuthStartUrl() {
+  const base = getApiBaseUrl().replace(/\/$/, "");
+  return `${base}/oauth/gohighlevel/start`;
+}
 
+/** @deprecated Use {@link getGhlWorkerOAuthStartUrl} — same behavior (Worker start URL). */
 export function getGhlInstallUrl() {
-  const configuredInstallUrl = process.env.NEXT_PUBLIC_GHL_INSTALL_URL?.trim();
-  const url = configuredInstallUrl ? parseUrl(configuredInstallUrl) : createDefaultInstallUrl();
-  const clientId = process.env.NEXT_PUBLIC_GHL_CLIENT_ID?.trim() || defaultClientId;
-
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("redirect_uri", defaultRedirectUri);
-  url.searchParams.set("client_id", clientId);
-  url.searchParams.set(
-    "scope",
-    normalizeGhlMarketplaceOAuthScope(url.searchParams.get("scope") ?? DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE)
-  );
-  url.searchParams.set("version_id", defaultVersionId);
-  return url.toString();
-}
-
-function parseUrl(value: string) {
-  try {
-    return new URL(value);
-  } catch {
-    return createDefaultInstallUrl();
-  }
-}
-
-function createDefaultInstallUrl() {
-  return new URL("https://marketplace.gohighlevel.com/v2/oauth/chooselocation");
+  return getGhlWorkerOAuthStartUrl();
 }

@@ -85,6 +85,11 @@ type Env = {
   GHL_CLIENT_SECRET?: string;
   GHL_APP_ID?: string;
   GHL_INSTALL_URL?: string;
+  /**
+   * Full "Installation URL" from Developer Portal → your app → Advanced Settings → Auth (Show install link).
+   * Prefer this over GHL_INSTALL_URL — same OAuth/iframe flow without assembling Marketplace query params by hand.
+   */
+  GHL_OAUTH_START_URL?: string;
   /** Space-separated scopes for Marketplace install URL; overrides default when set. */
   GHL_OAUTH_SCOPE?: string;
   /** Marketplace app version id; used if absent from GHL_INSTALL_URL query. */
@@ -259,68 +264,27 @@ app.get("/webhooks/gohighlevel", (c) =>
 );
 
 app.get("/oauth/gohighlevel/start", (c) => {
-  if (!c.env.GHL_INSTALL_URL) {
-    return c.json({ error: "GHL_INSTALL_URL is not configured" }, 500);
-  }
-
-  const state = crypto.randomUUID();
-  const installUrl = new URL(c.env.GHL_INSTALL_URL);
-  normalizeGhlMarketplaceInstallUrl(installUrl);
-
-  let versionId =
-    getNonEmptyQueryParam(installUrl, "versionId") ?? getNonEmptyQueryParam(installUrl, "version_id");
-  if (!versionId && c.env.GHL_VERSION_ID?.trim()) {
-    versionId = c.env.GHL_VERSION_ID.trim();
-  }
-
-  const clientId =
-    getNonEmptyQueryParam(installUrl, "client_id") ?? c.env.GHL_CLIENT_ID?.trim() ?? null;
-
-  /** OAuth / Marketplace "application id" — only when explicitly set; never reuse version_id here. */
-  const marketplaceAppId = getNonEmptyQueryParam(installUrl, "appId") ?? c.env.GHL_APP_ID?.trim() ?? null;
-
-  if (!clientId) {
+  const hasPortalTemplate = Boolean(c.env.GHL_OAUTH_START_URL?.trim());
+  const hasLegacyInstall = Boolean(c.env.GHL_INSTALL_URL?.trim());
+  if (!hasPortalTemplate && !hasLegacyInstall) {
     return c.json(
       {
-        error: "Missing GoHighLevel OAuth client_id",
-        hint: "Set client_id on GHL_INSTALL_URL or set GHL_CLIENT_ID"
+        error: "oauth_start_not_configured",
+        message: "Set GHL_OAUTH_START_URL (Installation URL from the GHL developer portal) or GHL_INSTALL_URL"
       },
       500
     );
   }
 
-  installUrl.searchParams.set("client_id", clientId);
-  if (marketplaceAppId) {
-    installUrl.searchParams.set("appId", marketplaceAppId);
-  }
-  installUrl.searchParams.set("response_type", "code");
-
-  installUrl.searchParams.delete("versionId");
-
-  const existingScope = getNonEmptyQueryParam(installUrl, "scope");
-  const scopeSource =
-    existingScope ?? c.env.GHL_OAUTH_SCOPE?.trim() ?? DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE;
-  installUrl.searchParams.set("scope", normalizeGhlMarketplaceOAuthScope(scopeSource));
-
-  if (versionId) {
-    installUrl.searchParams.set("version_id", versionId);
-  }
-
-  if (!getNonEmptyQueryParam(installUrl, "user_type") && c.env.GHL_OAUTH_USER_TYPE?.trim()) {
-    installUrl.searchParams.set("user_type", c.env.GHL_OAUTH_USER_TYPE.trim());
-  }
-
-  installUrl.searchParams.set("state", state);
-
-  if (c.env.GHL_OAUTH_REDIRECT_URI) {
-    installUrl.searchParams.set("redirect_uri", c.env.GHL_OAUTH_REDIRECT_URI);
-  }
-
+  const state = crypto.randomUUID();
+  let installUrl: URL;
   try {
-    assertGhlMarketplaceChooselocationUrl(installUrl);
+    installUrl = hasPortalTemplate
+      ? prepareGhlOAuthRedirectFromPortalStartUrl(c.env, c.env.GHL_OAUTH_START_URL!, state)
+      : prepareGhlOAuthRedirectFromLegacyInstallUrl(c.env, c.env.GHL_INSTALL_URL!, state);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return c.json({ error: "invalid_ghl_install_url", message }, 500);
+    return c.json({ error: "invalid_ghl_oauth_config", message }, 500);
   }
 
   setCookie(c, {
@@ -1568,18 +1532,91 @@ function normalizeGhlMarketplaceInstallUrl(url: URL) {
   }
 }
 
-function assertGhlMarketplaceChooselocationUrl(url: URL) {
+function assertAllowedGhlMarketplaceHost(url: URL) {
   const host = url.hostname.toLowerCase();
-  const okHost =
-    host === "marketplace.gohighlevel.com" || host === "marketplace.leadconnectorhq.com";
-  if (!okHost) {
+  const ok = host === "marketplace.gohighlevel.com" || host === "marketplace.leadconnectorhq.com";
+  if (!ok) {
     throw new Error(
-      `GHL_INSTALL_URL host must be marketplace.gohighlevel.com or marketplace.leadconnectorhq.com (got ${url.hostname})`
+      `Host must be marketplace.gohighlevel.com or marketplace.leadconnectorhq.com (got ${url.hostname})`
     );
   }
-  if (!url.pathname.includes("chooselocation")) {
-    throw new Error(`GHL_INSTALL_URL path must be a Marketplace chooselocation URL (got ${url.pathname})`);
+}
+
+function prepareGhlOAuthRedirectFromPortalStartUrl(env: Env, rawPortalUrl: string, state: string): URL {
+  const installUrl = new URL(rawPortalUrl.trim());
+  normalizeGhlMarketplaceInstallUrl(installUrl);
+
+  if (!getNonEmptyQueryParam(installUrl, "client_id") && env.GHL_CLIENT_ID?.trim()) {
+    installUrl.searchParams.set("client_id", env.GHL_CLIENT_ID.trim());
   }
+  if (!getNonEmptyQueryParam(installUrl, "scope")) {
+    const scopeSource = env.GHL_OAUTH_SCOPE?.trim() ?? DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE;
+    installUrl.searchParams.set("scope", normalizeGhlMarketplaceOAuthScope(scopeSource));
+  }
+  if (!getNonEmptyQueryParam(installUrl, "response_type")) {
+    installUrl.searchParams.set("response_type", "code");
+  }
+
+  if (env.GHL_OAUTH_REDIRECT_URI?.trim()) {
+    installUrl.searchParams.set("redirect_uri", env.GHL_OAUTH_REDIRECT_URI.trim());
+  }
+
+  if (!getNonEmptyQueryParam(installUrl, "user_type") && env.GHL_OAUTH_USER_TYPE?.trim()) {
+    installUrl.searchParams.set("user_type", env.GHL_OAUTH_USER_TYPE.trim());
+  }
+
+  installUrl.searchParams.set("state", state);
+  assertAllowedGhlMarketplaceHost(installUrl);
+  return installUrl;
+}
+
+function prepareGhlOAuthRedirectFromLegacyInstallUrl(env: Env, rawInstallUrl: string, state: string): URL {
+  const installUrl = new URL(rawInstallUrl);
+  normalizeGhlMarketplaceInstallUrl(installUrl);
+
+  let versionId =
+    getNonEmptyQueryParam(installUrl, "versionId") ?? getNonEmptyQueryParam(installUrl, "version_id");
+  if (!versionId && env.GHL_VERSION_ID?.trim()) {
+    versionId = env.GHL_VERSION_ID.trim();
+  }
+
+  const clientId =
+    getNonEmptyQueryParam(installUrl, "client_id") ?? env.GHL_CLIENT_ID?.trim() ?? null;
+
+  const marketplaceAppId = getNonEmptyQueryParam(installUrl, "appId") ?? env.GHL_APP_ID?.trim() ?? null;
+
+  if (!clientId) {
+    throw new Error("Missing GoHighLevel OAuth client_id (set on GHL_INSTALL_URL or GHL_CLIENT_ID)");
+  }
+
+  installUrl.searchParams.set("client_id", clientId);
+  if (marketplaceAppId) {
+    installUrl.searchParams.set("appId", marketplaceAppId);
+  }
+  installUrl.searchParams.set("response_type", "code");
+
+  installUrl.searchParams.delete("versionId");
+
+  const existingScope = getNonEmptyQueryParam(installUrl, "scope");
+  const scopeSource = existingScope ?? env.GHL_OAUTH_SCOPE?.trim() ?? DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE;
+  installUrl.searchParams.set("scope", normalizeGhlMarketplaceOAuthScope(scopeSource));
+
+  if (versionId) {
+    installUrl.searchParams.set("version_id", versionId);
+  }
+
+  if (!getNonEmptyQueryParam(installUrl, "user_type") && env.GHL_OAUTH_USER_TYPE?.trim()) {
+    installUrl.searchParams.set("user_type", env.GHL_OAUTH_USER_TYPE.trim());
+  }
+
+  installUrl.searchParams.set("state", state);
+
+  if (env.GHL_OAUTH_REDIRECT_URI) {
+    installUrl.searchParams.set("redirect_uri", env.GHL_OAUTH_REDIRECT_URI);
+  }
+
+  assertAllowedGhlMarketplaceHost(installUrl);
+  return installUrl;
 }
 
 async function loadEstablishedGhlCompanyIds(db: ReturnType<typeof createDb>): Promise<Set<string>> {

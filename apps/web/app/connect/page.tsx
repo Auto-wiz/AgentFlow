@@ -139,8 +139,9 @@ export default function ConnectGhlPage() {
         <p className="eyebrow">GoHighLevel</p>
         <h1 style={{ marginTop: 8 }}>Connect workspace</h1>
         <p className="muted" style={{ marginTop: 8 }}>
-          Start OAuth from the Marketplace. When you return, we provision your AgentFlow user from the HighLevel user id and
-          keep the session in this browser.
+          Sign in to HighLevel and authorize AgentFlow. The Worker uses your app&apos;s{" "}
+          <strong>Installation URL</strong> from the Developer Portal (Advanced Settings → Auth → show install link) — you
+          don&apos;t browse the public Marketplace listing here.
         </p>
 
         {(hashError || oauthQueryError) ? (
