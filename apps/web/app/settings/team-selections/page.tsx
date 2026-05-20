@@ -51,7 +51,7 @@ export default function TeamSelectionsPage() {
       setLoading(false);
       setError(
         hydrated && !token
-          ? "Necesitás iniciar sesión con GoHighLevel para ver la matriz del equipo."
+          ? "Sign in to view the team selection matrix."
           : null
       );
       return;
@@ -76,10 +76,10 @@ export default function TeamSelectionsPage() {
 
         if (!matrixRes.ok) {
           const payload = (await matrixRes.json().catch(() => ({}))) as { error?: string };
-          throw new Error(payload.error ?? "No se pudo cargar selection-matrix");
+          throw new Error(payload.error ?? "Failed to load selection matrix");
         }
         if (!overviewRes.ok) {
-          throw new Error("No se pudo cargar resumen de subcuentas");
+          throw new Error("Failed to load subaccounts overview");
         }
 
         const matrixPayload = (await matrixRes.json()) as MatrixPayload;
@@ -91,7 +91,7 @@ export default function TeamSelectionsPage() {
         if (!controller.signal.aborted) {
           setMatrix(null);
           setLocations([]);
-          setError(caught instanceof Error ? caught.message : "Falló la carga");
+          setError(caught instanceof Error ? caught.message : "Failed to load");
         }
       } finally {
         if (!controller.signal.aborted) {
@@ -125,16 +125,20 @@ export default function TeamSelectionsPage() {
     <>
       <div className="panel" style={{ padding: 18 }}>
         <p className="eyebrow">Workspace</p>
-        <h2 style={{ marginTop: 8 }}>Matriz de subcuentas</h2>
+        <h2 style={{ marginTop: 8 }}>Subaccount selection matrix</h2>
         <p className="muted">
-          Vista de sólo lectura para todo el equipo: quién tiene listas explícitas y quién está en modo &quot;todas&quot; hasta
-          guardar su primera selección desde Subaccounts.
+          Read-only view for the whole team: who has explicit lists and who is in “all locations” mode until they save a
+          first selection from Subaccounts.
         </p>
-        {!token && hydrated ? <p className="muted" style={{ marginTop: 10 }}>Iniciá sesión en Connect.</p> : null}
+        {!token && hydrated ? (
+          <p className="muted" style={{ marginTop: 10 }}>
+            Sign in to continue.
+          </p>
+        ) : null}
       </div>
 
       <div className="panel" style={{ padding: 18, marginTop: 12 }}>
-        {loading ? <p className="muted">Cargando…</p> : null}
+        {loading ? <p className="muted">Loading…</p> : null}
         {error ? <div className="empty">{error}</div> : null}
 
         {!loading && matrix?.disclaimer ? (
@@ -145,22 +149,22 @@ export default function TeamSelectionsPage() {
 
         {!loading && !error && matrix ? (
           <>
-            <h3 style={{ marginTop: 0 }}>Por usuario</h3>
+            <h3 style={{ marginTop: 0 }}>By user</h3>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
                 <thead>
                   <tr>
                     <th style={{ textAlign: "left", padding: "8px 6px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-                      Quién
+                      Who
                     </th>
                     <th style={{ textAlign: "left", padding: "8px 6px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-                      Rol
+                      Role
                     </th>
                     <th style={{ textAlign: "left", padding: "8px 6px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-                      Modo
+                      Mode
                     </th>
                     <th style={{ textAlign: "left", padding: "8px 6px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-                      Seleccionadas (uuid)
+                      Selected (UUIDs)
                     </th>
                   </tr>
                 </thead>
@@ -176,7 +180,7 @@ export default function TeamSelectionsPage() {
                         ) : null}
                         {u.ghlUserId ? (
                           <div className="muted" style={{ fontSize: 12 }}>
-                            userId GHL: {u.ghlUserId}
+                            GHL user id: {u.ghlUserId}
                           </div>
                         ) : null}
                       </td>
@@ -188,7 +192,7 @@ export default function TeamSelectionsPage() {
                       </td>
                       <td style={{ padding: "10px 6px", verticalAlign: "top", wordBreak: "break-all", maxWidth: 480 }}>
                         {u.selectionMode === "all_locations"
-                          ? "(todas — sin filas en DB hasta el próximo PUT explícito)"
+                          ? "(all locations — no DB rows until the next explicit PUT)"
                           : u.locationIds?.join(", ") ?? "—"}
                       </td>
                     </tr>
@@ -197,13 +201,14 @@ export default function TeamSelectionsPage() {
               </table>
             </div>
 
-            <h3 style={{ marginTop: 28 }}>Por location (solo filas guardadas)</h3>
+            <h3 style={{ marginTop: 28 }}>By location (saved rows only)</h3>
             <p className="muted" style={{ marginTop: 6 }}>
-              Sólo aparecen locations donde al menos una persona tiene selección explícita en la tabla; no muestra usuarios que todavía están en modo “todas las locations”.
+              Only locations where at least one person has an explicit selection appear here; users still in “all
+              locations” mode are omitted until they save a concrete list.
             </p>
             {matrix.selectionsByLocation.length === 0 ? (
               <p className="muted" style={{ marginTop: 8 }}>
-                Aún nadie tiene checks guardados; todos los usuarios están en comportamiento amplio.
+                No explicit selections saved yet — everyone still has broad default behavior.
               </p>
             ) : (
               <div style={{ overflowX: "auto", marginTop: 12 }}>
@@ -214,7 +219,7 @@ export default function TeamSelectionsPage() {
                         Location
                       </th>
                       <th style={{ textAlign: "left", padding: "8px 6px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-                        Usuarios
+                        Users
                       </th>
                     </tr>
                   </thead>

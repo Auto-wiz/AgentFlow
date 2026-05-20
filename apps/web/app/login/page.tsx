@@ -219,10 +219,6 @@ export default function LoginPage() {
             {pending ? "Signing in…" : "Sign in"}
           </button>
         </form>
-
-        <p className="auth-login-footnote muted">
-          Having trouble with OAuth redirects? Confirm <code>NEXT_PUBLIC_API_BASE_URL</code> points at your Worker.
-        </p>
       </div>
     </section>
   );

@@ -110,7 +110,7 @@ export default function SubaccountsPage() {
       if (!legacyResponse.ok) {
         const payload = (await legacyResponse.json().catch(() => ({}))) as { error?: string };
         if (payload.error === "forbidden_legacy_only") {
-          throw new Error("Iniciá sesión con GoHighLevel para guardar selecciones.");
+          throw new Error("Sign in with GoHighLevel to save selections.");
         }
         throw new Error("Failed to update subaccount visibility");
       }
@@ -134,8 +134,8 @@ export default function SubaccountsPage() {
         <p className="eyebrow">Management module</p>
         <h2 style={{ marginTop: 8 }}>Subaccounts tracking</h2>
         <p className="muted">
-          Con sesión GoHighLevel, cada cambio reemplaza la lista de cuentas que querés destacar en los filtros. Modo legacy
-          sigue usando el endpoint viewer-key.
+          With an active GoHighLevel session, each change replaces the account list used to drive filters. Legacy mode
+          continues to use the viewer-key endpoint.
         </p>
       </div>
 

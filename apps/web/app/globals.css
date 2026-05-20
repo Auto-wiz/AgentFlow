@@ -539,8 +539,8 @@ button.appointments-row.active {
 }
 
 .appointments-gframe-chip {
+  left: 10px;
   position: absolute;
-  right: 10px;
   top: 10px;
   z-index: 2;
 }
@@ -756,13 +756,6 @@ button.appointments-row.active {
   margin-top: 4px;
   min-height: 48px;
   width: 100%;
-}
-
-.auth-login-footnote {
-  font-size: 12px;
-  line-height: 1.45;
-  margin: 20px 0 0;
-  text-align: center;
 }
 
 .toolbar {

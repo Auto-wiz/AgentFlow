@@ -206,9 +206,9 @@ export default function WorkspaceAdminSettingsPage() {
         <p className="eyebrow">Workspace</p>
         <h2 style={{ marginTop: 8 }}>User access</h2>
         <p className="muted">
-          Los usuarios se crean cuando se autentican con GoHighLevel (provisionado desde OAuth). Acá sólo configurás cuáles subcuentas
-          están habilitadas por defecto por usuario (<code className="muted">role=user</code>). El rol administrador sólo puede
-          marcarse manualmente en la base de datos.
+          Workspace users are created when they authenticate with GoHighLevel (provisioned via OAuth). Here you configure which subaccounts
+          are enabled by default for each user (<code className="muted">role=user</code>). Administrator role can only be
+          assigned manually in the database.
         </p>
         {headerNote ? <p className="muted" style={{ marginTop: 10 }}>{headerNote}</p> : null}
       </div>
@@ -284,7 +284,7 @@ export default function WorkspaceAdminSettingsPage() {
                     <div className="muted">GHL: {loc.ghlLocationId}</div>
                     <div className="muted">
                       uuid: {loc.locationId}
-                      {loc.implicitAll ? " · modo implícito: todas hasta guardar primera lista" : null}
+                      {loc.implicitAll ? " · implicit: all locations until the first explicit save" : null}
                     </div>
                   </div>
                   <input
