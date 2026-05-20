@@ -42,6 +42,8 @@ OAuth runs only for the **same HighLevel agency** already represented in your da
 
 Configure **Settings → Workspace admin** to choose default picked locations (`role=user`), and **Settings → Team selections** read-only overview of selections across everyone.
 
+**Troubleshooting OAuth (XML `Generation` / `InvalidArgument`):** that response is from **Google Cloud Storage**, not HighLevel. It almost always means `NEXT_PUBLIC_API_BASE_URL` on the Pages build points at a **storage bucket**, the **Pages** hostname, or another non-API host. The OAuth buttons must call your **Worker** origin (`https://…workers.dev` or custom API domain) so `/oauth/gohighlevel/start` runs on the Worker and redirects to Marketplace.
+
 Production secrets are configured through Wrangler:
 
 ```sh

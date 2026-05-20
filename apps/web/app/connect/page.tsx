@@ -27,12 +27,28 @@ function describeOAuthReason(raw: string | null): string {
   return raw.replace(/_/g, " ");
 }
 
+/** XML error mentioning `Generation` usually means the browser hit Google Cloud Storage, not the Worker API. */
+function misconfiguredApiBaseHint(apiBase: string): string | null {
+  try {
+    const u = new URL(apiBase);
+    const h = u.hostname.toLowerCase();
+    if (h === "storage.googleapis.com" || h.endsWith(".storage.googleapis.com")) {
+      return "NEXT_PUBLIC_API_BASE_URL points at Google Cloud Storage. Set it to your Cloudflare Worker API origin (for example https://your-api.workers.dev), not a static bucket URL.";
+    }
+    return null;
+  } catch {
+    return "NEXT_PUBLIC_API_BASE_URL is not a valid URL.";
+  }
+}
+
 /** OAuth entry + session hash from Marketplace callback (provisioned via API Worker). */
 export default function ConnectGhlPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const apiBaseUrl = getApiBaseUrl();
   const ghlOAuthStartUrl = `${apiBaseUrl}/oauth/gohighlevel/start`;
+
+  const apiBaseMisconfigurationHint = useMemo(() => misconfiguredApiBaseHint(apiBaseUrl), [apiBaseUrl]);
 
   const { hydrated, reloadFromStorage, token, user } = useWorkspaceAuth();
   const [hashError, setHashError] = useState<string | null>(null);
@@ -133,6 +149,12 @@ export default function ConnectGhlPage() {
           </p>
         ) : null}
 
+        {apiBaseMisconfigurationHint ? (
+          <p className="inbox-reply-error" style={{ marginTop: 14 }}>
+            {apiBaseMisconfigurationHint}
+          </p>
+        ) : null}
+
         <div className="toolbar" style={{ marginTop: 18, flexWrap: "wrap", gap: 10 }}>
           <a className="button" href={ghlOAuthStartUrl} target="_blank" rel="noopener noreferrer">
             Open OAuth in a new tab
@@ -158,7 +180,10 @@ export default function ConnectGhlPage() {
         </div>
 
         <p className="muted" style={{ marginTop: 10 }}>
-          If the iframe stays blank because of HighLevel policies, use the buttons above.
+          If the iframe stays blank because of HighLevel policies, use the buttons above. If you see an XML error about{" "}
+          <code className="muted">Generation</code> or <code className="muted">InvalidArgument</code>, the browser likely hit
+          Google Cloud Storage or another static host — set <code className="muted">NEXT_PUBLIC_API_BASE_URL</code> to your
+          Cloudflare Worker API origin, not the Pages app URL or a bucket.
         </p>
       </div>
     </section>

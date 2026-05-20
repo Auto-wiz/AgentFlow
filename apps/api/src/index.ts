@@ -35,6 +35,7 @@ import {
   userSubaccountVisibilities,
   webhookEvents
 } from "@agentflow/db";
+import { DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE, normalizeGhlMarketplaceOAuthScope } from "@agentflow/shared";
 import type {
   ContactOnDemandDetails,
   MessageChannel,
@@ -84,7 +85,9 @@ type Env = {
   GHL_CLIENT_SECRET?: string;
   GHL_APP_ID?: string;
   GHL_INSTALL_URL?: string;
-  /** Marketplace app version id (same as dashboard / NEXT_PUBLIC_GHL_VERSION_ID); used if absent from GHL_INSTALL_URL query. */
+  /** Space-separated scopes for Marketplace install URL; overrides default when set. */
+  GHL_OAUTH_SCOPE?: string;
+  /** Marketplace app version id; used if absent from GHL_INSTALL_URL query. */
   GHL_VERSION_ID?: string;
   GHL_OAUTH_REDIRECT_URI?: string;
   GHL_OAUTH_USER_TYPE?: string;
@@ -292,8 +295,14 @@ app.get("/oauth/gohighlevel/start", (c) => {
   }
   installUrl.searchParams.set("response_type", "code");
 
+  installUrl.searchParams.delete("versionId");
+
+  const existingScope = getNonEmptyQueryParam(installUrl, "scope");
+  const scopeSource =
+    existingScope ?? c.env.GHL_OAUTH_SCOPE?.trim() ?? DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE;
+  installUrl.searchParams.set("scope", normalizeGhlMarketplaceOAuthScope(scopeSource));
+
   if (versionId) {
-    installUrl.searchParams.set("versionId", versionId);
     installUrl.searchParams.set("version_id", versionId);
   }
 
@@ -305,6 +314,13 @@ app.get("/oauth/gohighlevel/start", (c) => {
 
   if (c.env.GHL_OAUTH_REDIRECT_URI) {
     installUrl.searchParams.set("redirect_uri", c.env.GHL_OAUTH_REDIRECT_URI);
+  }
+
+  try {
+    assertGhlMarketplaceChooselocationUrl(installUrl);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return c.json({ error: "invalid_ghl_install_url", message }, 500);
   }
 
   setCookie(c, {
@@ -1549,6 +1565,20 @@ function normalizeGhlMarketplaceInstallUrl(url: URL) {
   }
   if (url.pathname === "/oauth/chooselocation") {
     url.pathname = "/v2/oauth/chooselocation";
+  }
+}
+
+function assertGhlMarketplaceChooselocationUrl(url: URL) {
+  const host = url.hostname.toLowerCase();
+  const okHost =
+    host === "marketplace.gohighlevel.com" || host === "marketplace.leadconnectorhq.com";
+  if (!okHost) {
+    throw new Error(
+      `GHL_INSTALL_URL host must be marketplace.gohighlevel.com or marketplace.leadconnectorhq.com (got ${url.hostname})`
+    );
+  }
+  if (!url.pathname.includes("chooselocation")) {
+    throw new Error(`GHL_INSTALL_URL path must be a Marketplace chooselocation URL (got ${url.pathname})`);
   }
 }
 

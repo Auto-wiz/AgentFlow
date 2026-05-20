@@ -251,7 +251,7 @@ export type SubaccountOverview = {
   appointmentCount: number;
   visible: boolean;
   /**
-   * JWT workspace UX: cuando true, el usuario aún no fijó filas explícitas en DB y ve todas las locations hasta el primer PUT.
+   * JWT workspace UX: when true, the user has not saved explicit DB rows yet and still sees all locations until the first PUT.
    */
   implicitAllSelections?: boolean;
 };
@@ -260,3 +260,17 @@ export type SubaccountsOverviewResponse = {
   viewerKey: string;
   subaccounts: SubaccountOverview[];
 };
+
+/** Space-separated OAuth scopes for HighLevel Marketplace install / chooselocation (keep in sync with app settings). */
+export const DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE =
+  "contacts.readonly conversations.readonly conversations.write conversations/message.readonly conversations/message.write conversations/reports.readonly conversations/livechat.write locations.readonly locations/tags.readonly locations/tags.write locations/customValues.readonly oauth.write oauth.readonly calendars/events.readonly invoices.readonly invoices/schedule.readonly";
+
+export function normalizeGhlMarketplaceOAuthScope(raw: string): string {
+  return raw
+    .trim()
+    .replace(/%2F/gi, "/")
+    .replace(/\+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ");
+}
