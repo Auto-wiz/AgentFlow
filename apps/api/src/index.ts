@@ -733,11 +733,21 @@ app.get("/locations", async (c) => {
 
   const rows = await query.orderBy(desc(locations.updatedAt)).limit(limit);
 
+  const locationNameMap = await hydrateMissingLocationNames(
+    c.env,
+    db,
+    rows.map((row) => ({
+      locationId: row.id,
+      ghlLocationId: row.ghlLocationId,
+      locationName: row.name
+    }))
+  );
+
   return c.json({
     locations: rows.map((row) => ({
       id: row.id,
       ghlLocationId: row.ghlLocationId,
-      name: row.name,
+      name: locationNameMap.get(row.id) ?? row.name,
       agencyId: row.agencyId,
       agencyName: row.agencyName,
       updatedAt: row.updatedAt.toISOString()
@@ -922,11 +932,21 @@ app.get("/subaccounts/overview", async (c) => {
   const visibilityByLocation = new Map(visibilityRows.map((row) => [row.locationId, row.isVisible]));
   const jwtSelectionNullable = rowsToNullableSelectionSet(workspaceSelectionRows);
 
+  const locationNameMap = await hydrateMissingLocationNames(
+    c.env,
+    db,
+    locationRows.map((row) => ({
+      locationId: row.locationId,
+      ghlLocationId: row.ghlLocationId,
+      locationName: row.locationName
+    }))
+  );
+
   const subaccounts = locationRows
     .map((row) => ({
       locationId: row.locationId,
       ghlLocationId: row.ghlLocationId,
-      locationName: row.locationName,
+      locationName: locationNameMap.get(row.locationId) ?? row.locationName,
       agencyId: row.agencyId,
       agencyName: row.agencyName,
       conversationCount: conversationsByLocation.get(row.locationId) ?? 0,
@@ -2473,11 +2493,19 @@ async function processInvoiceWebhookEvent(env: Env, event: NormalizedGhlInvoiceW
         updatedAt: now
       }
     })
-    .returning({ id: locations.id });
+    .returning({ id: locations.id, name: locations.name });
 
   if (!location) {
     throw new Error("Failed to upsert location");
   }
+
+  await hydrateMissingLocationNames(env, db, [
+    {
+      locationId: location.id,
+      ghlLocationId: event.location.ghlLocationId,
+      locationName: location.name
+    }
+  ]);
 
   let contactId: string | null = null;
   let ghlContactId = event.contact.ghlContactId;
@@ -2636,11 +2664,19 @@ async function processOrderWebhookEvent(env: Env, event: NormalizedGhlOrderWebho
         updatedAt: now
       }
     })
-    .returning({ id: locations.id });
+    .returning({ id: locations.id, name: locations.name });
 
   if (!location) {
     throw new Error("Failed to upsert location");
   }
+
+  await hydrateMissingLocationNames(env, db, [
+    {
+      locationId: location.id,
+      ghlLocationId: event.location.ghlLocationId,
+      locationName: location.name
+    }
+  ]);
 
   let contactId: string | null = null;
   let ghlContactId = event.contact.ghlContactId;
