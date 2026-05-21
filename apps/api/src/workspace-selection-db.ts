@@ -26,21 +26,20 @@ export async function replaceWorkspaceSelections(
   locationIds: string[],
   now = new Date()
 ) {
-  await db.transaction(async (tx) => {
-    await tx
-      .delete(workspaceUserLocationSelection)
-      .where(eq(workspaceUserLocationSelection.workspaceUserId, workspaceUserUuid));
-    if (locationIds.length === 0) {
-      return;
-    }
-    await tx.insert(workspaceUserLocationSelection).values(
-      locationIds.map((locationId) => ({
-        workspaceUserId: workspaceUserUuid,
-        locationId,
-        createdAt: now
-      }))
-    );
-  });
+  // neon-http driver does not support db.transaction(); delete + insert are sequential.
+  await db
+    .delete(workspaceUserLocationSelection)
+    .where(eq(workspaceUserLocationSelection.workspaceUserId, workspaceUserUuid));
+  if (locationIds.length === 0) {
+    return;
+  }
+  await db.insert(workspaceUserLocationSelection).values(
+    locationIds.map((locationId) => ({
+      workspaceUserId: workspaceUserUuid,
+      locationId,
+      createdAt: now
+    }))
+  );
 }
 
 export async function assertAllLocationIdsExist(db: DrizzleDb, locationIds: string[]) {
