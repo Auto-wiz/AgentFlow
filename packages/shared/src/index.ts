@@ -124,11 +124,41 @@ export type NormalizedGhlInvoiceWebhookEvent = NormalizedGhlBaseWebhookEvent & {
   };
 };
 
+export type NormalizedGhlOrderWebhookEvent = NormalizedGhlBaseWebhookEvent & {
+  kind: "order";
+  location: {
+    ghlLocationId: string;
+  };
+  agency: {
+    ghlAgencyId: string;
+  };
+  contact: {
+    ghlContactId: string | null;
+    name: string | null;
+    email: string | null;
+    phone: string | null;
+    companyName: string | null;
+  };
+  order: {
+    ghlOrderId: string;
+    status: string | null;
+    fulfillmentStatus: string | null;
+    liveMode: boolean | null;
+    amount: number | null;
+    currency: string | null;
+    altId: string | null;
+    altType: string | null;
+    createdAt: string | null;
+    updatedAt: string | null;
+  };
+};
+
 export type NormalizedGhlWebhookEvent =
   | NormalizedGhlMessageWebhookEvent
   | NormalizedGhlAppointmentWebhookEvent
   | NormalizedGhlInstallWebhookEvent
-  | NormalizedGhlInvoiceWebhookEvent;
+  | NormalizedGhlInvoiceWebhookEvent
+  | NormalizedGhlOrderWebhookEvent;
 
 export type ContactOnDemandDetails = {
   id: string | null;
@@ -263,7 +293,7 @@ export type SubaccountsOverviewResponse = {
 
 /** Space-separated OAuth scopes for HighLevel Marketplace install / chooselocation (keep in sync with app settings). */
 export const DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE =
-  "contacts.readonly conversations.readonly conversations.write conversations/message.readonly conversations/message.write conversations/reports.readonly conversations/livechat.write locations.readonly locations/tags.readonly locations/tags.write locations/customValues.readonly oauth.write oauth.readonly calendars/events.readonly invoices.readonly invoices/schedule.readonly";
+  "contacts.readonly conversations.readonly conversations.write conversations/message.readonly conversations/message.write conversations/reports.readonly conversations/livechat.write locations.readonly locations/tags.readonly locations/tags.write locations/customValues.readonly oauth.write oauth.readonly calendars/events.readonly invoices.readonly invoices/schedule.readonly payments/orders.readonly payments/orders.collectPayment payments/integration.readonly payments/transactions.readonly payments/subscriptions.readonly payments/coupons.readonly payments/custom-provider.readonly opportunities.readonly opportunities.write";
 
 export function normalizeGhlMarketplaceOAuthScope(raw: string): string {
   return raw

@@ -436,6 +436,44 @@ export const appointments = pgTable(
   })
 );
 
+/** GoHighLevel payment orders from OrderCreate / OrderStatusUpdate webhooks. */
+export const ghlPaymentOrders = pgTable(
+  "ghl_payment_orders",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => locations.id, { onDelete: "cascade" }),
+    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    ghlOrderId: text("ghl_order_id").notNull(),
+    status: text("status"),
+    fulfillmentStatus: text("fulfillment_status"),
+    liveMode: boolean("live_mode"),
+    amount: integer("amount"),
+    currency: text("currency"),
+    altId: text("alt_id"),
+    altType: text("alt_type"),
+    ghlCreatedAt: timestamp("ghl_created_at", { withTimezone: true }),
+    ghlUpdatedAt: timestamp("ghl_updated_at", { withTimezone: true }),
+    lastEventType: text("last_event_type").notNull(),
+    isDeleted: boolean("is_deleted").notNull().default(false),
+    raw: jsonb("raw").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    paymentOrderPerLocationUnique: uniqueIndex("ghl_payment_orders_location_id_ghl_order_id_unique").on(
+      table.locationId,
+      table.ghlOrderId
+    ),
+    locationIdx: index("ghl_payment_orders_location_id_idx").on(table.locationId),
+    contactIdx: index("ghl_payment_orders_contact_id_idx").on(table.contactId),
+    statusIdx: index("ghl_payment_orders_status_idx").on(table.status)
+  })
+);
+
 export const invoices = pgTable(
   "invoices",
   {
@@ -496,7 +534,8 @@ export const locationsRelations = relations(locations, ({ one, many }) => ({
   threads: many(threads),
   messages: many(messages),
   appointments: many(appointments),
-  invoices: many(invoices)
+  invoices: many(invoices),
+  ghlPaymentOrders: many(ghlPaymentOrders)
 }));
 
 export const userSubaccountVisibilitiesRelations = relations(
@@ -535,7 +574,8 @@ export const contactsRelations = relations(contacts, ({ one, many }) => ({
   threads: many(threads),
   messages: many(messages),
   appointments: many(appointments),
-  invoices: many(invoices)
+  invoices: many(invoices),
+  ghlPaymentOrders: many(ghlPaymentOrders)
 }));
 
 export const threadsRelations = relations(threads, ({ one, many }) => ({
@@ -583,6 +623,17 @@ export const invoicesRelations = relations(invoices, ({ one }) => ({
   }),
   contact: one(contacts, {
     fields: [invoices.contactId],
+    references: [contacts.id]
+  })
+}));
+
+export const ghlPaymentOrdersRelations = relations(ghlPaymentOrders, ({ one }) => ({
+  location: one(locations, {
+    fields: [ghlPaymentOrders.locationId],
+    references: [locations.id]
+  }),
+  contact: one(contacts, {
+    fields: [ghlPaymentOrders.contactId],
     references: [contacts.id]
   })
 }));

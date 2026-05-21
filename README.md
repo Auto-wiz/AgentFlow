@@ -113,7 +113,11 @@ InvoicePaid
 InvoicePartiallyPaid
 InvoiceVoid
 InvoiceDelete
+OrderCreate
+OrderStatusUpdate
 ```
+
+Appointment **paid/unpaid** in the API blends **invoices** and **payment orders** (`ghl_payment_orders`): same contact and location window as invoices where possible; when an order exposes `altId`/`altType` pointing at an appointment, that counts without the time overlap.
 
 Install flow entrypoint:
 

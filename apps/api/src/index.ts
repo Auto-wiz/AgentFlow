@@ -28,6 +28,7 @@ import {
   ghlWebhookTaskMirror,
   ghlWebhookUserMirror,
   ghlWebhookVoiceAiMirror,
+  ghlPaymentOrders,
   invoices,
   locations,
   messages,
@@ -44,11 +45,12 @@ import type {
   NormalizedGhlAppointmentWebhookEvent,
   NormalizedGhlInstallWebhookEvent,
   NormalizedGhlInvoiceWebhookEvent,
+  NormalizedGhlOrderWebhookEvent,
   NormalizedGhlMessageWebhookEvent,
   NormalizedGhlWebhookEvent,
   ThreadOpportunity
 } from "@agentflow/shared";
-import { and, desc, eq, exists, inArray, notExists, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, exists, inArray, not, notExists, notInArray, or, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -629,7 +631,7 @@ app.get("/appointments", async (c) => {
       startTime: appointments.startTime,
       endTime: appointments.endTime,
       appointmentCreatedAt: sql<Date>`COALESCE(${appointments.dateAdded}, ${appointments.createdAt})`,
-      isPaid: exists(buildAppointmentPaidSubquery(db)),
+      isPaid: buildAppointmentPaidSubquery(db),
       updatedAt: appointments.updatedAt
     })
     .from(appointments)
@@ -652,9 +654,9 @@ app.get("/appointments", async (c) => {
   }
 
   if (paymentStatus === "unpaid") {
-    filters.push(notExists(buildAppointmentPaidSubquery(db)));
+    filters.push(not(buildAppointmentPaidSubquery(db)));
   } else if (paymentStatus === "paid") {
-    filters.push(exists(buildAppointmentPaidSubquery(db)));
+    filters.push(buildAppointmentPaidSubquery(db));
   }
 
   if (filters.length > 0) {
@@ -743,8 +745,13 @@ app.get("/locations", async (c) => {
   });
 });
 
+/** Predicate: GoHighLevel order `status` counts as capturing payment toward appointments. */
+function orderCountsAsPaidInSql() {
+  return sql`trim(lower(coalesce(${ghlPaymentOrders.status}, ''))) IN ('completed','paid','succeeded','successful','fully_paid','complete')`;
+}
+
 function buildAppointmentPaidSubquery(db: ReturnType<typeof createDb>) {
-  const matchWhere = and(
+  const invoiceMatchWhere = and(
     eq(invoices.locationId, appointments.locationId),
     eq(invoices.contactId, appointments.contactId),
     eq(invoices.isDeleted, false),
@@ -760,7 +767,37 @@ function buildAppointmentPaidSubquery(db: ReturnType<typeof createDb>) {
     )
   );
 
-  return db.select({ one: sql`1`.as("one") }).from(invoices).where(matchWhere);
+  const orderCommon = and(
+    eq(ghlPaymentOrders.locationId, appointments.locationId),
+    eq(ghlPaymentOrders.contactId, appointments.contactId),
+    eq(ghlPaymentOrders.isDeleted, false),
+    sql`${appointments.contactId} is not null`,
+    orderCountsAsPaidInSql()
+  );
+
+  const orderTemporalMatch = and(
+    orderCommon,
+    sql`${appointments.startTime} is not null`,
+    sql`coalesce(${ghlPaymentOrders.ghlUpdatedAt}, ${ghlPaymentOrders.ghlCreatedAt}, ${ghlPaymentOrders.updatedAt}, ${ghlPaymentOrders.createdAt})
+        between coalesce(${appointments.dateAdded}, ${appointments.createdAt})
+        and ${appointments.startTime}`
+  );
+
+  const orderAltAppointmentMatch = and(
+    orderCommon,
+    eq(ghlPaymentOrders.altId, appointments.ghlAppointmentId),
+    sql`strpos(lower(trim(coalesce(${ghlPaymentOrders.altType}, ''))), 'appointment') > 0`
+  );
+
+  const invoiceSubq = db.select({ one: sql`1`.as("one") }).from(invoices).where(invoiceMatchWhere);
+  const orderSubq = db
+    .select({ one: sql`1`.as("one") })
+    .from(ghlPaymentOrders)
+    .where(or(orderTemporalMatch, orderAltAppointmentMatch));
+
+  const paidInvoice = exists(invoiceSubq);
+  const paidOrder = exists(orderSubq);
+  return sql<boolean>`(${paidInvoice}) OR (${paidOrder})`;
 }
 
 function toMaybeIso(value: unknown): string | null {
@@ -1082,7 +1119,7 @@ app.get("/threads/:id/messages", async (c) => {
     .where(eq(messages.threadId, threadId))
     .orderBy(messages.sentAt);
 
-  const [paymentsRow] = await db
+  const [paymentsRowInvoice] = await db
     .select({
       total: sql<number>`COALESCE(SUM(${invoices.amountPaid}), 0)::float`,
       currency: sql<string | null>`MAX(${invoices.currency})`
@@ -1095,6 +1132,24 @@ app.get("/threads/:id/messages", async (c) => {
         eq(invoices.isDeleted, false)
       )
     );
+
+  const [paymentsRowOrders] = await db
+    .select({
+      total: sql<number>`COALESCE(SUM(${ghlPaymentOrders.amount}), 0)::float`,
+      currency: sql<string | null>`MAX(${ghlPaymentOrders.currency})`
+    })
+    .from(ghlPaymentOrders)
+    .where(
+      and(
+        eq(ghlPaymentOrders.locationId, threadRow.locationId),
+        eq(ghlPaymentOrders.contactId, threadRow.contactId),
+        eq(ghlPaymentOrders.isDeleted, false),
+        sql`trim(lower(coalesce(${ghlPaymentOrders.status}, ''))) IN ('completed','paid','succeeded','successful','fully_paid','complete')`
+      )
+    );
+
+  const paymentTotalNum =
+    Number(paymentsRowInvoice?.total ?? 0) + Number(paymentsRowOrders?.total ?? 0);
 
   const contactDetails =
     (await fetchContactDetailsOnDemand(c.env, db, threadRow.ghlLocationId, threadRow.ghlContactId)) ??
@@ -1139,8 +1194,8 @@ app.get("/threads/:id/messages", async (c) => {
     })),
     contactDetails,
     paymentsSummary: {
-      total: Number(paymentsRow?.total ?? 0),
-      currency: paymentsRow?.currency ?? "USD"
+      total: paymentTotalNum,
+      currency: paymentsRowInvoice?.currency ?? paymentsRowOrders?.currency ?? "USD"
     }
   });
 });
@@ -1684,7 +1739,7 @@ async function buildWebhookMirrorRecord(args: {
   const message = asRecord(payloadRecord.message ?? payloadRecord.messageData);
   const appointment = asRecord(payloadRecord.appointment);
   const invoice = asRecord(payloadRecord.invoice);
-  const contact = asRecord(payloadRecord.contact ?? message.contact ?? appointment.contact ?? invoice.contact);
+  const contact = asRecord(payloadRecord.contact ?? message.contact ?? appointment.contact ?? invoice.contact ?? payloadRecord.contactSnapshot);
   const location = asRecord(payloadRecord.location ?? appointment.location ?? invoice.location);
   const company = asRecord(payloadRecord.company ?? payloadRecord.agency);
   const note = asRecord(payloadRecord.note);
@@ -1727,6 +1782,7 @@ async function buildWebhookMirrorRecord(args: {
     stringOrNull(task.contactId)
   );
   const entityId = firstNonEmptyString(
+    stringOrNull(payloadRecord._id),
     stringOrNull(payloadRecord.id),
     stringOrNull(payloadRecord.messageId),
     stringOrNull(payloadRecord.appointmentId),
@@ -1920,6 +1976,11 @@ async function processWebhookEvent(env: Env, event: NormalizedGhlWebhookEvent) {
 
   if (event.kind === "invoice") {
     await processInvoiceWebhookEvent(env, event);
+    return;
+  }
+
+  if (event.kind === "order") {
+    await processOrderWebhookEvent(env, event);
     return;
   }
 
@@ -2530,6 +2591,151 @@ async function processInvoiceWebhookEvent(env: Env, event: NormalizedGhlInvoiceW
         ghlUpdatedAt: parseNullableDate(event.invoice.updatedAt),
         lastEventType: event.eventType,
         isDeleted: event.invoice.eventAction === "delete",
+        raw: event.raw,
+        updatedAt: now
+      }
+    });
+
+  await db
+    .update(webhookEvents)
+    .set({ status: "processed", processedAt: now, error: null })
+    .where(eq(webhookEvents.idempotencyKey, event.idempotencyKey));
+}
+
+async function processOrderWebhookEvent(env: Env, event: NormalizedGhlOrderWebhookEvent) {
+  const db = createDb(env.DATABASE_URL);
+  const now = new Date();
+
+  const [agency] = await db
+    .insert(agencies)
+    .values({
+      ghlAgencyId: event.agency.ghlAgencyId,
+      updatedAt: now
+    })
+    .onConflictDoUpdate({
+      target: agencies.ghlAgencyId,
+      set: { updatedAt: now }
+    })
+    .returning({ id: agencies.id });
+
+  if (!agency) {
+    throw new Error("Failed to upsert agency");
+  }
+
+  const [location] = await db
+    .insert(locations)
+    .values({
+      agencyId: agency.id,
+      ghlLocationId: event.location.ghlLocationId,
+      updatedAt: now
+    })
+    .onConflictDoUpdate({
+      target: locations.ghlLocationId,
+      set: {
+        agencyId: agency.id,
+        updatedAt: now
+      }
+    })
+    .returning({ id: locations.id });
+
+  if (!location) {
+    throw new Error("Failed to upsert location");
+  }
+
+  let contactId: string | null = null;
+  let ghlContactId = event.contact.ghlContactId;
+  let contactProfile: ContactProfileOnDemand | null = null;
+
+  if (!ghlContactId) {
+    const storedContact = await findStoredContactForInvoice(db, location.id, event.contact.email, event.contact.phone);
+    if (storedContact) {
+      contactId = storedContact.id;
+      ghlContactId = storedContact.ghlContactId;
+    }
+  }
+
+  if (!ghlContactId) {
+    contactProfile = await fetchContactProfileByIdentityOnDemand(
+      env,
+      db,
+      event.location.ghlLocationId,
+      event.contact.email,
+      event.contact.phone
+    );
+    ghlContactId = contactProfile?.id ?? null;
+  }
+
+  if (ghlContactId) {
+    const nameParts = splitContactName(event.contact.name);
+    contactProfile =
+      contactProfile ??
+      (await fetchContactProfileForWebhookIfNeeded(env, db, location.id, event.location.ghlLocationId, ghlContactId, {
+        firstName: nameParts.firstName,
+        lastName: nameParts.lastName,
+        email: event.contact.email,
+        phone: event.contact.phone
+      }));
+    const [contact] = await db
+      .insert(contacts)
+      .values({
+        locationId: location.id,
+        ghlContactId,
+        firstName: nameParts.firstName ?? contactProfile?.firstName ?? null,
+        lastName: nameParts.lastName ?? contactProfile?.lastName ?? null,
+        email: event.contact.email ?? contactProfile?.email ?? null,
+        phone: event.contact.phone ?? contactProfile?.phone ?? null,
+        tags: contactProfile?.tags ?? null,
+        updatedAt: now
+      })
+      .onConflictDoUpdate({
+        target: [contacts.locationId, contacts.ghlContactId],
+        set: {
+          firstName: sql`COALESCE(EXCLUDED.first_name, ${contacts.firstName})`,
+          lastName: sql`COALESCE(EXCLUDED.last_name, ${contacts.lastName})`,
+          email: sql`COALESCE(EXCLUDED.email, ${contacts.email})`,
+          phone: sql`COALESCE(EXCLUDED.phone, ${contacts.phone})`,
+          tags: sql`COALESCE(EXCLUDED.tags, ${contacts.tags})`,
+          updatedAt: now
+        }
+      })
+      .returning({ id: contacts.id });
+    contactId = contact?.id ?? null;
+  }
+
+  await db
+    .insert(ghlPaymentOrders)
+    .values({
+      locationId: location.id,
+      contactId,
+      ghlOrderId: event.order.ghlOrderId,
+      status: event.order.status,
+      fulfillmentStatus: event.order.fulfillmentStatus,
+      liveMode: event.order.liveMode,
+      amount: normalizeMoneyAmount(event.order.amount),
+      currency: event.order.currency,
+      altId: event.order.altId,
+      altType: event.order.altType,
+      ghlCreatedAt: parseNullableDate(event.order.createdAt),
+      ghlUpdatedAt: parseNullableDate(event.order.updatedAt),
+      lastEventType: event.eventType,
+      isDeleted: false,
+      raw: event.raw,
+      updatedAt: now
+    })
+    .onConflictDoUpdate({
+      target: [ghlPaymentOrders.locationId, ghlPaymentOrders.ghlOrderId],
+      set: {
+        contactId,
+        status: event.order.status,
+        fulfillmentStatus: event.order.fulfillmentStatus,
+        liveMode: event.order.liveMode,
+        amount: normalizeMoneyAmount(event.order.amount),
+        currency: event.order.currency,
+        altId: event.order.altId,
+        altType: event.order.altType,
+        ghlCreatedAt: parseNullableDate(event.order.createdAt),
+        ghlUpdatedAt: parseNullableDate(event.order.updatedAt),
+        lastEventType: event.eventType,
         raw: event.raw,
         updatedAt: now
       }
@@ -4256,6 +4462,10 @@ async function normalizeGhlWebhook(
     return normalizeAppointmentWebhook(root, headers, rawBody, eventType);
   }
 
+  if (eventLower.includes("order")) {
+    return normalizeOrderWebhook(root, headers, rawBody, eventType);
+  }
+
   if (eventLower.includes("invoice")) {
     return normalizeInvoiceWebhook(root, headers, rawBody, eventType);
   }
@@ -4506,6 +4716,63 @@ async function normalizeInvoiceWebhook(
       createdAt: stringOrNull(root.createdAt),
       updatedAt: stringOrNull(root.updatedAt),
       eventAction: normalizeInvoiceEventAction(eventType)
+    },
+    raw: root
+  };
+}
+
+async function normalizeOrderWebhook(
+  root: Record<string, any>,
+  headers: Headers,
+  rawBody: string,
+  eventType: string
+): Promise<NormalizedGhlOrderWebhookEvent | null> {
+  const snap = asRecord(root.contactSnapshot);
+  const ghlLocationId = stringValue(root.locationId ?? snap.locationId);
+  const ghlOrderId = stringValue(root._id ?? root.id ?? root.orderId);
+
+  if (!ghlLocationId || !ghlOrderId) {
+    return null;
+  }
+
+  const idempotencyHeader = getWebhookIdempotencyHeader(headers);
+  const idempotencyKey =
+    idempotencyHeader ??
+    `${eventType}:${ghlLocationId}:${ghlOrderId}:${stringValue(root.updatedAt ?? root.createdAt) || (await sha256Hex(rawBody))}`;
+
+  const snapFirstName = stringOrNull(snap.firstName);
+  const snapLastName = stringOrNull(snap.lastName);
+  const combinedSnapName =
+    snapFirstName || snapLastName ? [snapFirstName, snapLastName].filter(Boolean).join(" ").trim() : null;
+
+  return {
+    kind: "order",
+    idempotencyKey,
+    eventType,
+    location: {
+      ghlLocationId
+    },
+    agency: {
+      ghlAgencyId: stringValue(root.companyId ?? root.agencyId ?? root.agency?.id) || "default"
+    },
+    contact: {
+      ghlContactId: stringOrNull(root.contactId ?? snap.id),
+      name: combinedSnapName || stringOrNull(snap.name),
+      email: stringOrNull(snap.email),
+      phone: stringOrNull(snap.phone ?? snap.phoneNo ?? root.phone),
+      companyName: stringOrNull(snap.companyName)
+    },
+    order: {
+      ghlOrderId,
+      status: stringOrNull(root.status),
+      fulfillmentStatus: stringOrNull(root.fulfillmentStatus),
+      liveMode: typeof root.liveMode === "boolean" ? root.liveMode : null,
+      amount: numberOrNull(root.amount),
+      currency: stringOrNull(root.currency),
+      altId: stringOrNull(root.altId),
+      altType: stringOrNull(root.altType),
+      createdAt: stringOrNull(root.createdAt),
+      updatedAt: stringOrNull(root.updatedAt)
     },
     raw: root
   };
