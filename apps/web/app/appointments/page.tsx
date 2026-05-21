@@ -2,16 +2,13 @@
 
 import type { AppointmentSummary, SubaccountOverview } from "@agentflow/shared";
 import { getApiBaseUrl } from "../../lib/api-base-url";
+import { formatLocationName } from "../../lib/location-display";
 import { mergeWorkspaceHeaders } from "../../lib/workspace-api-headers";
 import { useAppointmentsTopbarSlot } from "../components/appointments-topbar-bridge";
 import { useWorkspaceAuth } from "../components/workspace-auth-provider";
 import { useEffect, useMemo, useState } from "react";
 
 type AppointmentTimeFilter = "future" | "past" | "all";
-
-function formatLocationName(locationName: string | null, ghlLocationId: string) {
-  return locationName ? `${locationName} (${ghlLocationId})` : ghlLocationId;
-}
 
 function formatDate(value: string | null) {
   if (!value) {
@@ -216,6 +213,11 @@ export default function AppointmentsPage() {
                     </div>
                   </div>
                   <div className="appointments-row-sub muted">{formatLocationName(appointment.locationName, appointment.ghlLocationId)}</div>
+                  {(appointment.locationName ?? "").trim() ? (
+                    <div className="muted" style={{ fontSize: 10, lineHeight: 1.2 }}>
+                      Location ID: {appointment.ghlLocationId}
+                    </div>
+                  ) : null}
                   <div className="appointments-row-sub muted appointments-row-contact">
                     {appointment.contactName} · {formatDate(appointment.startTime)}
                   </div>

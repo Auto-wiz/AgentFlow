@@ -2,13 +2,10 @@
 
 import type { SubaccountOverview } from "@agentflow/shared";
 import { getApiBaseUrl } from "../../lib/api-base-url";
+import { formatLocationName } from "../../lib/location-display";
 import { mergeWorkspaceHeaders } from "../../lib/workspace-api-headers";
 import { useWorkspaceAuth } from "../components/workspace-auth-provider";
 import { useEffect, useMemo, useState } from "react";
-
-function formatLocationName(locationName: string | null, ghlLocationId: string) {
-  return locationName ? `${locationName} (${ghlLocationId})` : ghlLocationId;
-}
 
 export default function SubaccountsPage() {
   const apiBaseUrl = getApiBaseUrl();

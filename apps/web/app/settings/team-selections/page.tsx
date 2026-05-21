@@ -105,11 +105,17 @@ export default function TeamSelectionsPage() {
   }, [apiBaseUrl, hydrated, token, sessionKey]);
 
   const locMetaById = useMemo(() => {
-    const map = new Map<string, { ghlLocationId: string; label: string }>();
+    const map = new Map<
+      string,
+      { ghlLocationId: string; primaryLabel: string; showLocationIdSubtitle: boolean }
+    >();
     for (const l of locations) {
+      const friendly =
+        typeof l.locationName === "string" ? l.locationName.trim() : "";
       map.set(l.locationId, {
         ghlLocationId: l.ghlLocationId,
-        label: l.locationName ? `${l.locationName} (${l.ghlLocationId})` : l.ghlLocationId
+        primaryLabel: friendly.length > 0 ? friendly : l.ghlLocationId,
+        showLocationIdSubtitle: friendly.length > 0
       });
     }
     return map;
@@ -229,7 +235,12 @@ export default function TeamSelectionsPage() {
                       return (
                         <tr key={row.locationId}>
                           <td style={{ padding: "10px 6px", verticalAlign: "top" }}>
-                            <div>{meta?.label ?? row.locationId}</div>
+                            <div>{meta?.primaryLabel ?? row.locationId}</div>
+                            {meta?.showLocationIdSubtitle ? (
+                              <div className="muted" style={{ fontSize: 12 }}>
+                                Location ID: {meta.ghlLocationId}
+                              </div>
+                            ) : null}
                           </td>
                           <td style={{ padding: "10px 6px", verticalAlign: "top" }}>
                             <ul style={{ margin: 0, paddingInlineStart: 18 }}>

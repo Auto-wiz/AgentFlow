@@ -6,9 +6,7 @@ import { mergeWorkspaceHeaders } from "../../../lib/workspace-api-headers";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-function formatLocationName(locationName: string | null, ghlLocationId: string) {
-  return locationName ? `${locationName} (${ghlLocationId})` : ghlLocationId;
-}
+import { formatLocationName } from "../../../lib/location-display";
 
 export const runtime = "edge";
 
@@ -84,6 +82,11 @@ export default function ThreadMessagesPage({ params }: { params: { id: string } 
         <p className="eyebrow">
           {formatLocationName(data.thread.locationName, data.thread.ghlLocationId)}
         </p>
+        {(data.thread.locationName ?? "").trim() ? (
+          <p className="muted" style={{ fontSize: 11 }}>
+            Location ID: {data.thread.ghlLocationId}
+          </p>
+        ) : null}
         <h2>{data.thread.contactName}</h2>
         <div className="badge-row">
           {data.thread.pendingReply ? <span className="badge">Pending reply</span> : null}

@@ -9,13 +9,10 @@ import type {
   ThreadSummary
 } from "@agentflow/shared";
 import { getApiBaseUrl } from "../../lib/api-base-url";
+import { formatLocationName } from "../../lib/location-display";
 import { mergeWorkspaceHeaders } from "../../lib/workspace-api-headers";
 import { useWorkspaceAuth } from "../components/workspace-auth-provider";
 import { useEffect, useState } from "react";
-
-function formatLocationName(locationName: string | null, ghlLocationId: string) {
-  return locationName ? `${locationName} (${ghlLocationId})` : ghlLocationId;
-}
 
 export default function ThreadsPage() {
   const apiBaseUrl = getApiBaseUrl();
@@ -407,6 +404,11 @@ export default function ThreadsPage() {
               type="button"
             >
               <strong>{formatLocationName(subaccount.locationName, subaccount.ghlLocationId)}</strong>
+              {(subaccount.locationName ?? "").trim() ? (
+                <span className="muted" style={{ display: "block", fontSize: 11, marginTop: 3 }}>
+                  Location ID: {subaccount.ghlLocationId}
+                </span>
+              ) : null}
               <span className="muted">
                 {subaccount.conversationCount} conversations · {subaccount.pendingCount} pending
               </span>
@@ -467,6 +469,11 @@ export default function ThreadsPage() {
                 </span>
               </div>
               <span className="muted">{formatLocationName(thread.locationName, thread.ghlLocationId)}</span>
+              {(thread.locationName ?? "").trim() ? (
+                <span className="muted" style={{ display: "block", fontSize: 11, marginTop: 2 }}>
+                  Location ID: {thread.ghlLocationId}
+                </span>
+              ) : null}
               <div className="inbox-status-row">
                 {thread.pendingReply ? <span className="inbox-status-chip">Pending</span> : null}
                 <span className="inbox-status-chip">{thread.unreadCount} unread</span>
@@ -480,6 +487,11 @@ export default function ThreadsPage() {
         <div className="inbox-thread-header">
           <div>
             <p className="eyebrow">{selectedLocationLabel}</p>
+            {selectedThreadSummary && (selectedThreadSummary.locationName ?? "").trim() ? (
+              <p className="muted" style={{ fontSize: 11, marginTop: -4, marginBottom: 4 }}>
+                Location ID: {selectedThreadSummary.ghlLocationId}
+              </p>
+            ) : null}
             <h3 style={{ marginTop: 8 }}>{selectedContactName || "Select a conversation"}</h3>
             <p className="muted">
               {selectedContactEmail ??
@@ -549,6 +561,11 @@ export default function ThreadsPage() {
             <p className="eyebrow">Contact details</p>
             <h3 style={{ marginTop: 8 }}>{selectedContactName}</h3>
             <p className="muted">{selectedLocationLabel}</p>
+            {selectedThreadSummary && (selectedThreadSummary.locationName ?? "").trim() ? (
+              <p className="muted" style={{ fontSize: 11 }}>
+                Location ID: {selectedThreadSummary.ghlLocationId}
+              </p>
+            ) : null}
           </div>
         </div>
         <section className="inbox-payments-card panel">
