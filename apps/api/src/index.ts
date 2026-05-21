@@ -67,7 +67,8 @@ import {
   meHandler,
   provisionWorkspaceUserFromGhlAccount,
   resolveAccessPolicy,
-  signSessionForProvisionedUser
+  signSessionForProvisionedUser,
+  type AccessPolicy
 } from "./workspace-access.js";
 import {
   mePutLocationSelectionsHandler,
@@ -77,6 +78,30 @@ import { fetchSelectionLocationRows, rowsToNullableSelectionSet } from "./worksp
 
 function jwtConfiguredForWorkspace(env: Env) {
   return Boolean(env.JWT_SECRET?.trim());
+}
+
+/** JWT workspace: explicit location picks in DB -> restrict reads to those UUIDs. No rows stored => null (implicit all). */
+async function jwtWorkspaceAllowedLocationUuidList(
+  db: ReturnType<typeof createDb>,
+  policy: AccessPolicy
+): Promise<string[] | null> {
+  if (policy.kind !== "jwt_workspace") {
+    return null;
+  }
+  const rows = await fetchSelectionLocationRows(db, policy.workspaceUserId);
+  const scope = rowsToNullableSelectionSet(rows);
+  return scope === null ? null : [...scope];
+}
+
+function appendJwtWorkspaceLocationConstraint(
+  filters: unknown[],
+  allowed: string[] | null,
+  locationIdColumn: typeof appointments.locationId | typeof threads.locationId | typeof locations.id
+) {
+  if (allowed === null) {
+    return;
+  }
+  filters.push(allowed.length === 0 ? sql`false` : inArray(locationIdColumn, allowed));
 }
 
 type Env = {
@@ -513,6 +538,12 @@ app.get("/threads", async (c) => {
     }
   }
 
+  appendJwtWorkspaceLocationConstraint(
+    filters,
+    await jwtWorkspaceAllowedLocationUuidList(db, policy),
+    threads.locationId
+  );
+
   if (pendingReply === "true") {
     filters.push(eq(threads.pendingReply, true));
   }
@@ -612,6 +643,12 @@ app.get("/appointments", async (c) => {
       filters.push(notInArray(appointments.locationId, hiddenLocationIds));
     }
   }
+
+  appendJwtWorkspaceLocationConstraint(
+    filters,
+    await jwtWorkspaceAllowedLocationUuidList(db, policy),
+    appointments.locationId
+  );
 
   let query = db
     .select({
@@ -713,6 +750,12 @@ app.get("/locations", async (c) => {
       filters.push(notInArray(locations.id, hiddenLocationIds));
     }
   }
+
+  appendJwtWorkspaceLocationConstraint(
+    filters,
+    await jwtWorkspaceAllowedLocationUuidList(db, policy),
+    locations.id
+  );
 
   let query = db
     .select({
