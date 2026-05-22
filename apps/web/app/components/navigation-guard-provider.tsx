@@ -171,7 +171,7 @@ export function NavigationGuardProvider({ children }: { children: ReactNode }) {
 
   const ctxValue = useMemo(() => ({ pushGuarded, replaceGuarded }), [pushGuarded, replaceGuarded]);
 
-  /** Clicks en `<Link>`/`a` mismo origen salvo mismo path: si hay borrador, abrimos el mismo modal. */
+  /** Intercept same-origin `<a href>` clicks except same path; drafts open the leave dialog. */
   useEffect(() => {
     const onAnchorClickCapture = (event: MouseEvent) => {
       if (prompt || navigationLockRef.current) {
@@ -302,15 +302,15 @@ export function NavigationGuardProvider({ children }: { children: ReactNode }) {
               onClick={(event) => event.stopPropagation()}
             >
               <h3 id="nav-guard-dialog-title" style={{ marginTop: 0 }}>
-                Cambios sin guardar
+                Unsaved changes
               </h3>
               <p className="muted" style={{ marginTop: 8 }}>
-                Tenés cambios locales. ¿Los guardamos antes de ir a otro lugar de la app (por ejemplo Appointments o
+                You have unsaved changes. Save before navigating to another part of the app (such as Appointments or
                 Settings)?
               </p>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 18 }}>
                 <button type="button" className="button" disabled={savingPrompt} onClick={() => void handleSaveAndLeave()}>
-                  {savingPrompt ? "Guardando…" : "Guardar y salir"}
+                  {savingPrompt ? "Saving…" : "Save and leave"}
                 </button>
                 <button
                   type="button"
@@ -318,7 +318,7 @@ export function NavigationGuardProvider({ children }: { children: ReactNode }) {
                   disabled={savingPrompt}
                   onClick={() => handleLeaveWithoutSaving()}
                 >
-                  Salir sin guardar
+                  Leave without saving
                 </button>
                 <button
                   type="button"
@@ -326,7 +326,7 @@ export function NavigationGuardProvider({ children }: { children: ReactNode }) {
                   disabled={savingPrompt}
                   onClick={() => handleKeepEditing()}
                 >
-                  Seguir editando
+                  Keep editing
                 </button>
               </div>
             </div>

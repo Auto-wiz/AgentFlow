@@ -77,7 +77,7 @@ function formatLinkedUsersLine(matrix: MatrixPayload | null, workspaceLocationUu
   const maxShown = 3;
   const head = labels.slice(0, maxShown).join(", ");
   const rest = labels.length - maxShown;
-  return rest > 0 ? `${head} +${rest} más` : head;
+  return rest > 0 ? `${head} +${rest} more` : head;
 }
 
 function buildLegacyVisibilityDiff(base: SubaccountOverview[], draft: SubaccountOverview[]) {
@@ -122,7 +122,7 @@ export default function SubaccountsPage() {
       ]);
 
       if (!overviewRes.ok) {
-        throw new Error("No se pudieron cargar las subcuentas");
+        throw new Error("Failed to load subaccounts");
       }
       const overviewPayload = (await overviewRes.json()) as { subaccounts: SubaccountOverview[] };
       const rows = overviewPayload.subaccounts ?? [];
@@ -136,7 +136,7 @@ export default function SubaccountsPage() {
         setMatrix(null);
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "No se pudieron cargar las subcuentas");
+      setError(caught instanceof Error ? caught.message : "Failed to load subaccounts");
       setBaseline([]);
       setDraft([]);
       setMatrix(null);
@@ -151,7 +151,7 @@ export default function SubaccountsPage() {
       setBaseline([]);
       setDraft([]);
       setLoading(false);
-      setError(hydrated && !token ? "Tenés que iniciar sesión para gestionar subcuentas." : null);
+      setError(hydrated && !token ? "Sign in to manage subaccounts." : null);
       return;
     }
     void loadAll();
@@ -223,7 +223,7 @@ export default function SubaccountsPage() {
           headers: mergeWorkspaceHeaders()
         });
         if (!refreshed.ok) {
-          throw new Error("Se guardó, pero no se pudo volver a cargar la lista");
+          throw new Error("Saved, but failed to reload the list");
         }
         const data = (await refreshed.json()) as { subaccounts: SubaccountOverview[] };
         const next = cloneRows(data.subaccounts ?? []);
@@ -234,7 +234,7 @@ export default function SubaccountsPage() {
 
       if (jwtResponse.status !== 401) {
         const payload = (await jwtResponse.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error ?? "No se pudieron guardar las selecciones");
+        throw new Error(payload.error ?? "Failed to save selections");
       }
 
       const diff = buildLegacyVisibilityDiff(baseline, draft);
@@ -253,9 +253,9 @@ export default function SubaccountsPage() {
         if (!legacyResponse.ok) {
           const payload = (await legacyResponse.json().catch(() => ({}))) as { error?: string };
           if (payload.error === "forbidden_legacy_only") {
-            throw new Error("Iniciá sesión con el workspace para guardar las selecciones.");
+            throw new Error("Sign in with workspace credentials to save selections.");
           }
-          throw new Error("No se pudo guardar la visibilidad (modo legacy)");
+          throw new Error("Failed to save visibility (legacy mode)");
         }
       }
 
@@ -263,7 +263,7 @@ export default function SubaccountsPage() {
         headers: mergeWorkspaceHeaders()
       });
       if (!refreshedLegacy.ok) {
-        throw new Error("Se guardó (legacy), pero no se pudo recargar la lista");
+        throw new Error("Saved (legacy), but failed to reload the list");
       }
       const dataLegacy = (await refreshedLegacy.json()) as { subaccounts: SubaccountOverview[] };
       const merged = cloneRows(dataLegacy.subaccounts ?? []);
@@ -271,7 +271,7 @@ export default function SubaccountsPage() {
       setDraft(merged);
       return true;
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "No se pudo guardar");
+      setError(caught instanceof Error ? caught.message : "Failed to save");
       return false;
     } finally {
       setSaving(false);
@@ -288,7 +288,7 @@ export default function SubaccountsPage() {
       return;
     }
     const ok = window.confirm(
-      "¿Descartamos todos los cambios sin guardar en la lista de seguimiento?"
+      "Discard all unsaved subaccount visibility changes?"
     );
     if (!ok) {
       return;
@@ -299,31 +299,30 @@ export default function SubaccountsPage() {
   const filterUserOptions = useMemo(() => (matrix ? workspaceUsersSortedForFilters(matrix) : []), [matrix]);
 
   const layoutSketch = `
-┌ Fila tipo card (lista actual) ────────────────────┐
-│ Nombre de la location (negrita)                   │
-│ Muted · ID Location (GoHighLevel)                   │
-│ Muted · N turnos                                    │
-│ Muted más chico · Usuarios workspace: Ana, Leo +3 │ ← línea nueva
-└─────────────────────────────────────────────────────┘
-Barra encima del listado:
-  [ Buscar ] [ Usuario ▼ ] | [ Todos ninguno · visibles ] [ Revertir ] [ Guardar ]
+┌ Card-style row (current list) ────────────────────┐
+│ Bold · location display name                         │
+│ Muted · GoHighLevel Location ID                      │
+│ Muted · N appointments                               │
+│ Muted smaller · Workspace users: Ana, Leo +3        │ ← new line
+└────────────────────────────────────────────────────────┘
+Toolbar above list:
+  [ Search ] [ User ▼ ] | [ Toggle visible in current list ] [ Revert ] [ Save ]
 `;
 
   return (
     <section className="module-shell">
       <div className="panel" style={{ padding: 18 }}>
         <p className="eyebrow">Management module</p>
-        <h2 style={{ marginTop: 8 }}>Seguimiento de subcuentas</h2>
+        <h2 style={{ marginTop: 8 }}>Subaccounts tracking</h2>
         <p className="muted">
-          Los cambios en los checkboxes quedan en memoria hasta que tocás Guardar. Al guardar se reemplaza la lista de
-          locations que usan los filtros del workspace (o la tabla legacy del viewer si no hay JWT). El filtro por
-          usuario usa las selecciones del dashboard de cada persona (modo &quot;todas las locations&quot; hasta que
-          alguien fija una lista explícita).
+          Checkbox changes stay in memory until you save. Saving replaces the location list that powers workspace filters
+          (or the legacy viewer mapping when JWT is unavailable). The user filter mirrors each teammate&apos;s dashboard
+          picker (&quot;all locations&quot; until someone saves an explicit subset).
         </p>
       </div>
 
       <details className="panel" style={{ padding: "12px 18", marginBottom: 12 }}>
-        <summary style={{ cursor: "pointer", fontWeight: 700 }}>Esquema: dónde mostrar usuarios del workspace</summary>
+        <summary style={{ cursor: "pointer", fontWeight: 700 }}>Layout sketch: workspace users on each row</summary>
         <pre
           style={{
             marginTop: 10,
@@ -338,19 +337,19 @@ Barra encima del listado:
       </details>
 
       <div className="panel" style={{ padding: 18, marginBottom: 12 }}>
-        <p className="eyebrow">Subcuentas</p>
-        <h2 style={{ marginTop: 8 }}>Elegí qué subcuentas se tienen en cuenta</h2>
+        <p className="eyebrow">Subaccounts</p>
+        <h2 style={{ marginTop: 8 }}>Choose which subaccounts are tracked</h2>
         <div className="toolbar" style={{ marginBottom: 0 }}>
           <input
-            aria-label="Buscar por nombre o ID de GoHighLevel"
-            placeholder="Buscar por nombre o ID de GoHighLevel"
+            aria-label="Search by name or GoHighLevel Location ID"
+            placeholder="Search by name or GoHighLevel Location ID"
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
             disabled={loading || saving}
           />
           {matrix ? (
             <select
-              aria-label="Filtrar por usuario del workspace"
+              aria-label="Filter by workspace user"
               value={filterWorkspaceUserId}
               onChange={(event) => setFilterWorkspaceUserId(event.target.value)}
               disabled={loading || saving}
@@ -363,18 +362,18 @@ Barra encima del listado:
                 padding: "10px 14px"
               }}
             >
-              <option value="">Todos los usuarios del workspace</option>
+              <option value="">All workspace users</option>
               {filterUserOptions.map((user) => (
                 <option key={user.workspaceUserId} value={user.workspaceUserId}>
                   {personLabel(user)}
-                  {user.selectionMode === "all_locations" ? " (todas las locations)" : ""}
+                  {user.selectionMode === "all_locations" ? " (all locations)" : ""}
                   {user.role === "admin" ? " · admin" : ""}
                 </option>
               ))}
             </select>
           ) : (
             <span className="muted" style={{ alignSelf: "center" }}>
-              El filtro por usuario requiere sesión de equipo.
+              Workspace user filter requires a signed-in team session.
             </span>
           )}
           <button
@@ -383,10 +382,10 @@ Barra encima del listado:
             onClick={toggleVisibleForFilteredRows}
             disabled={loading || saving || filteredForDisplay.length === 0}
           >
-            {allFilteredTracked ? "Quitar todos (listado actual)" : "Seleccionar todos (listado actual)"}
+            {allFilteredTracked ? "Deselect all in current view" : "Select all in current view"}
           </button>
           <button type="button" className="button secondary" onClick={revertDraft} disabled={!dirty || loading || saving}>
-            Revertir
+            Revert
           </button>
           <button
             type="button"
@@ -394,17 +393,17 @@ Barra encima del listado:
             onClick={() => void persistSelections()}
             disabled={!dirty || loading || saving}
           >
-            {saving ? "Guardando…" : "Guardar"}
+            {saving ? "Saving…" : "Save"}
           </button>
         </div>
         {matrix?.disclaimer ? <p className="muted">{matrix.disclaimer}</p> : null}
       </div>
 
       <div className="panel" style={{ padding: 18 }}>
-        {loading ? <div className="empty muted">Cargando subcuentas…</div> : null}
+        {loading ? <div className="empty muted">Loading subaccounts…</div> : null}
         {error ? <div className="empty">{error}</div> : null}
         {!loading && !error && filteredForDisplay.length === 0 ? (
-          <div className="empty muted">Ninguna subcuenta coincide con los filtros actuales.</div>
+          <div className="empty muted">No subaccounts match the current filters.</div>
         ) : null}
         <div className="subaccounts-config-list">
           {filteredForDisplay.map((subaccount) => {
@@ -414,15 +413,15 @@ Barra encima del listado:
                 <div>
                   <strong>{formatLocationName(subaccount.locationName, subaccount.ghlLocationId)}</strong>
                   <div className="muted">Location ID: {subaccount.ghlLocationId}</div>
-                  <div className="muted">{subaccount.appointmentCount} citas</div>
+                  <div className="muted">{subaccount.appointmentCount} appointments</div>
                   {linkedLine ? (
                     <div className="muted" style={{ fontSize: 12 }}>
-                      Usuarios del workspace asociados: {linkedLine}
+                      Linked workspace users: {linkedLine}
                     </div>
                   ) : null}
                 </div>
                 <input
-                  aria-label={`Seguir subcuenta ${subaccount.ghlLocationId}`}
+                  aria-label={`Track subaccount ${subaccount.ghlLocationId}`}
                   checked={subaccount.visible}
                   disabled={loading || saving}
                   onChange={(event) => toggleDraftVisibility(subaccount.locationId, event.target.checked)}
