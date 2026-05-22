@@ -824,9 +824,60 @@ function sqlPaymentAtOrAfterAppointmentBooking(timestampExpr: ReturnType<typeof 
   return sql`${timestampExpr} >= (coalesce(${appointments.dateAdded}, ${appointments.createdAt}) - interval '2 days')`;
 }
 
+/** Some webhooks stash status only under `appointment` in payload — mirror normalized paths we store in `raw`. */
+function appointmentStatusNormalizedSql() {
+  return sql`trim(lower(coalesce(
+    ${appointments.status},
+    ${appointments.raw}->'appointment'->>'appointmentStatus',
+    ${appointments.raw}->'appointment'->>'status',
+    ${appointments.raw}->>'appointmentStatus'
+  , '')))`;
+}
+
+/**
+ * Appointment webhooks omit `contact` at the envelope level sometimes, so `appointment.contact_id` stays null
+ * even though payload JSON still carries GoHighLevel's contact identifier.
+ */
+function appointmentWebhookGhlContactIdFromRawSql() {
+  return sql`nullif(trim(both '"' from trim(coalesce(
+    ${appointments.raw}->'appointment'->>'contactId',
+    ${appointments.raw}->>'contactId',
+    ''
+  ))), '')`;
+}
+
+/** Join payment rows to appointments when internal UUIDs mismatch or appointment row never received a FK backfill. */
+function orderPaymentTouchesAppointmentPartySql() {
+  return or(
+    and(sql`${appointments.contactId} is not null`, eq(ghlPaymentOrders.contactId, appointments.contactId)),
+    sql`(${appointmentWebhookGhlContactIdFromRawSql()}) is not null
+        and exists (
+          select 1
+          from contacts payment_party_contact
+          where payment_party_contact.id = ${ghlPaymentOrders.contactId}
+          and payment_party_contact.location_id = ${appointments.locationId}
+          and payment_party_contact.ghl_contact_id = ${appointmentWebhookGhlContactIdFromRawSql()}
+        )`
+  );
+}
+
+function invoicePaymentTouchesAppointmentPartySql() {
+  return or(
+    and(sql`${appointments.contactId} is not null`, eq(invoices.contactId, appointments.contactId)),
+    sql`(${appointmentWebhookGhlContactIdFromRawSql()}) is not null
+        and exists (
+          select 1
+          from contacts invoice_party_contact
+          where invoice_party_contact.id = ${invoices.contactId}
+          and invoice_party_contact.location_id = ${appointments.locationId}
+          and invoice_party_contact.ghl_contact_id = ${appointmentWebhookGhlContactIdFromRawSql()}
+        )`
+  );
+}
+
 /** Omit cancelled-ish rows from appointments lists unless we add an explicit escape hatch later. */
 function appointmentNotCancelledSql() {
-  const s = sql`trim(lower(coalesce(${appointments.status}, '')))`;
+  const s = appointmentStatusNormalizedSql();
   return sql`NOT (
     ${s} LIKE '%cancel%'
     OR ${s} IN ('deleted', 'declined', 'invalid', 'noshow')
@@ -839,9 +890,8 @@ function buildAppointmentPaidSubquery(db: ReturnType<typeof createDb>) {
 
   const invoiceMatchWhere = and(
     eq(invoices.locationId, appointments.locationId),
-    eq(invoices.contactId, appointments.contactId),
+    invoicePaymentTouchesAppointmentPartySql(),
     eq(invoices.isDeleted, false),
-    sql`${appointments.contactId} is not null`,
     sql`${appointments.startTime} is not null`,
     sqlPaymentTimestampInsideAppointmentBookingWindow(invoiceTsSql),
     or(
@@ -853,10 +903,9 @@ function buildAppointmentPaidSubquery(db: ReturnType<typeof createDb>) {
 
   const orderCommon = and(
     eq(ghlPaymentOrders.locationId, appointments.locationId),
-    eq(ghlPaymentOrders.contactId, appointments.contactId),
     eq(ghlPaymentOrders.isDeleted, false),
-    sql`${appointments.contactId} is not null`,
-    orderCountsAsPaidInSql()
+    orderCountsAsPaidInSql(),
+    orderPaymentTouchesAppointmentPartySql()
   );
 
   const orderTsSql = sql`coalesce(${ghlPaymentOrders.ghlUpdatedAt}, ${ghlPaymentOrders.ghlCreatedAt}, ${ghlPaymentOrders.updatedAt}, ${ghlPaymentOrders.createdAt})`;
