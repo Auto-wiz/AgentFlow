@@ -208,7 +208,9 @@ export default function AppointmentsPage() {
                   <div className="appointments-row-main">
                     <strong className="appointments-row-title">{appointment.title ?? "Untitled appointment"}</strong>
                     <div className="badge-row appointments-badge-row">
-                      <span className="badge">Unpaid</span>
+                      <span className="badge">
+                        {appointment.paymentStatus === "paid" ? "Paid" : "Unpaid"}
+                      </span>
                       <span className="badge">{appointment.status ?? "status"}</span>
                     </div>
                   </div>
