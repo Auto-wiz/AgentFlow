@@ -815,13 +815,23 @@ function orderCountsAsPaidInSql() {
 function sqlPaymentTimestampInsideAppointmentBookingWindow(timestampExpr: ReturnType<typeof sql>) {
   const anchorLow = sql`least(coalesce(${appointments.dateAdded}, ${appointments.createdAt}), ${appointments.startTime})`;
   const anchorHigh = sql`greatest(coalesce(${appointments.dateAdded}, ${appointments.createdAt}), ${appointments.startTime})`;
-  return sql`${timestampExpr} >= ${anchorLow} AND ${timestampExpr} <= ${anchorHigh}`;
+  /** Payments often settle slightly before booking anchors or shortly after visit; keep lower strict, upper loose. */
+  return sql`${timestampExpr} >= (${anchorLow} - interval '2 days') AND ${timestampExpr} <= (${anchorHigh} + interval '180 days')`;
+}
+
+/** When GHL never sent a slot time, still allow matching a paid order to the booking row. */
+function sqlPaymentAtOrAfterAppointmentBooking(timestampExpr: ReturnType<typeof sql>) {
+  return sql`${timestampExpr} >= (coalesce(${appointments.dateAdded}, ${appointments.createdAt}) - interval '2 days')`;
 }
 
 /** Omit cancelled-ish rows from appointments lists unless we add an explicit escape hatch later. */
 function appointmentNotCancelledSql() {
   const s = sql`trim(lower(coalesce(${appointments.status}, '')))`;
-  return sql`NOT (${s} LIKE '%cancel%' OR ${s} IN ('deleted', 'declined'))`;
+  return sql`NOT (
+    ${s} LIKE '%cancel%'
+    OR ${s} IN ('deleted', 'declined', 'invalid', 'noshow')
+    OR ${s} LIKE 'no-show%'
+  )`;
 }
 
 function buildAppointmentPaidSubquery(db: ReturnType<typeof createDb>) {
@@ -857,6 +867,14 @@ function buildAppointmentPaidSubquery(db: ReturnType<typeof createDb>) {
     sqlPaymentTimestampInsideAppointmentBookingWindow(orderTsSql)
   );
 
+  /** start_time omitted in webhooks occasionally; correlate by contact/location once payment is captured. */
+  const orderTemporalMatchNoStartTime = and(
+    orderCommon,
+    sql`${appointments.startTime} is null`,
+    sqlPaymentAtOrAfterAppointmentBooking(orderTsSql),
+    sql`${orderTsSql} <= coalesce(${appointments.dateUpdated}, ${appointments.updatedAt}) + interval '366 days'`
+  );
+
   const orderAltAppointmentMatch = and(
     orderCommon,
     eq(ghlPaymentOrders.altId, appointments.ghlAppointmentId),
@@ -876,7 +894,14 @@ function buildAppointmentPaidSubquery(db: ReturnType<typeof createDb>) {
   const orderSubq = db
     .select({ one: sql`1`.as("one") })
     .from(ghlPaymentOrders)
-    .where(or(orderTemporalMatch, orderAltAppointmentMatch, orderAltAppointmentMatchLooseContact));
+    .where(
+      or(
+        orderTemporalMatch,
+        orderTemporalMatchNoStartTime,
+        orderAltAppointmentMatch,
+        orderAltAppointmentMatchLooseContact
+      )
+    );
 
   const paidInvoice = exists(invoiceSubq);
   const paidOrder = exists(orderSubq);
