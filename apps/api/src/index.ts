@@ -696,6 +696,8 @@ app.get("/appointments", async (c) => {
     filters.push(buildAppointmentPaidSubquery(db));
   }
 
+  filters.push(appointmentNotCancelledSql());
+
   if (filters.length > 0) {
     query = query.where(and(...filters));
   }
@@ -800,19 +802,38 @@ app.get("/locations", async (c) => {
 
 /** Predicate: GoHighLevel order `status` counts as capturing payment toward appointments. */
 function orderCountsAsPaidInSql() {
-  return sql`trim(lower(coalesce(${ghlPaymentOrders.status}, ''))) IN ('completed','paid','succeeded','successful','fully_paid','complete')`;
+  const st = sql`trim(lower(coalesce(${ghlPaymentOrders.status}, '')))`;
+  const fs = sql`trim(lower(coalesce(${ghlPaymentOrders.fulfillmentStatus}, '')))`;
+  /** Avoid substring hacks on `status` — e.g. "unpaid" contains "paid". */
+  return sql`(
+    ${st} IN ('completed','paid','succeeded','successful','fully_paid','complete','paid_in_full')
+    OR ${fs} IN ('fulfilled','complete','completed','paid','successful','processed')
+  )`;
+}
+
+/** Normalize booking window: Postgres `x BETWEEN a AND b` matches nothing when a > b; GHL can send mismatched timestamps. */
+function sqlPaymentTimestampInsideAppointmentBookingWindow(timestampExpr: ReturnType<typeof sql>) {
+  const anchorLow = sql`least(coalesce(${appointments.dateAdded}, ${appointments.createdAt}), ${appointments.startTime})`;
+  const anchorHigh = sql`greatest(coalesce(${appointments.dateAdded}, ${appointments.createdAt}), ${appointments.startTime})`;
+  return sql`${timestampExpr} >= ${anchorLow} AND ${timestampExpr} <= ${anchorHigh}`;
+}
+
+/** Omit cancelled-ish rows from appointments lists unless we add an explicit escape hatch later. */
+function appointmentNotCancelledSql() {
+  const s = sql`trim(lower(coalesce(${appointments.status}, '')))`;
+  return sql`NOT (${s} LIKE '%cancel%' OR ${s} IN ('deleted', 'declined'))`;
 }
 
 function buildAppointmentPaidSubquery(db: ReturnType<typeof createDb>) {
+  const invoiceTsSql = sql`coalesce(${invoices.ghlUpdatedAt}, ${invoices.issueDate}, ${invoices.dueDate}, ${invoices.updatedAt}, ${invoices.createdAt})`;
+
   const invoiceMatchWhere = and(
     eq(invoices.locationId, appointments.locationId),
     eq(invoices.contactId, appointments.contactId),
     eq(invoices.isDeleted, false),
     sql`${appointments.contactId} is not null`,
     sql`${appointments.startTime} is not null`,
-    sql`coalesce(${invoices.ghlUpdatedAt}, ${invoices.issueDate}, ${invoices.dueDate}, ${invoices.updatedAt}, ${invoices.createdAt})
-        between coalesce(${appointments.dateAdded}, ${appointments.createdAt})
-        and ${appointments.startTime}`,
+    sqlPaymentTimestampInsideAppointmentBookingWindow(invoiceTsSql),
     or(
       sql`lower(coalesce(${invoices.lastEventType}, '')) = 'invoicepaid'`,
       sql`lower(coalesce(${invoices.status}, '')) = 'paid'`,
@@ -828,12 +849,12 @@ function buildAppointmentPaidSubquery(db: ReturnType<typeof createDb>) {
     orderCountsAsPaidInSql()
   );
 
+  const orderTsSql = sql`coalesce(${ghlPaymentOrders.ghlUpdatedAt}, ${ghlPaymentOrders.ghlCreatedAt}, ${ghlPaymentOrders.updatedAt}, ${ghlPaymentOrders.createdAt})`;
+
   const orderTemporalMatch = and(
     orderCommon,
     sql`${appointments.startTime} is not null`,
-    sql`coalesce(${ghlPaymentOrders.ghlUpdatedAt}, ${ghlPaymentOrders.ghlCreatedAt}, ${ghlPaymentOrders.updatedAt}, ${ghlPaymentOrders.createdAt})
-        between coalesce(${appointments.dateAdded}, ${appointments.createdAt})
-        and ${appointments.startTime}`
+    sqlPaymentTimestampInsideAppointmentBookingWindow(orderTsSql)
   );
 
   const orderAltAppointmentMatch = and(
@@ -842,11 +863,20 @@ function buildAppointmentPaidSubquery(db: ReturnType<typeof createDb>) {
     sql`strpos(lower(trim(coalesce(${ghlPaymentOrders.altType}, ''))), 'appointment') > 0`
   );
 
+  /** Same-location + appointment-linked order; skips contact FK match (fixes merged contact drift / NULL order contact). */
+  const orderAltAppointmentMatchLooseContact = and(
+    eq(ghlPaymentOrders.locationId, appointments.locationId),
+    eq(ghlPaymentOrders.isDeleted, false),
+    orderCountsAsPaidInSql(),
+    eq(ghlPaymentOrders.altId, appointments.ghlAppointmentId),
+    sql`strpos(lower(trim(coalesce(${ghlPaymentOrders.altType}, ''))), 'appointment') > 0`
+  );
+
   const invoiceSubq = db.select({ one: sql`1`.as("one") }).from(invoices).where(invoiceMatchWhere);
   const orderSubq = db
     .select({ one: sql`1`.as("one") })
     .from(ghlPaymentOrders)
-    .where(or(orderTemporalMatch, orderAltAppointmentMatch));
+    .where(or(orderTemporalMatch, orderAltAppointmentMatch, orderAltAppointmentMatchLooseContact));
 
   const paidInvoice = exists(invoiceSubq);
   const paidOrder = exists(orderSubq);
