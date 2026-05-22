@@ -658,6 +658,27 @@ function pickAppointmentLifecycleQueryParam(lifecycleRaw: string | undefined, le
   return a !== "" ? legacyRaw : undefined;
 }
 
+/** `schedule`/`time`: future | past | all (unknown → future). Prefer `schedule` — `time=` empty used to disable SQL filtering. */
+function normalizeScheduleQuery(raw: string | undefined): "future" | "past" | "all" {
+  const s = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (s === "past") {
+    return "past";
+  }
+  if (s === "all") {
+    return "all";
+  }
+  return "future";
+}
+
+function pickScheduleQueryParam(scheduleRaw: string | undefined, legacyTimeRaw: string | undefined): string | undefined {
+  const s = typeof scheduleRaw === "string" ? scheduleRaw.trim() : "";
+  if (s !== "") {
+    return scheduleRaw;
+  }
+  const t = typeof legacyTimeRaw === "string" ? legacyTimeRaw.trim() : "";
+  return t !== "" ? legacyTimeRaw : undefined;
+}
+
 app.get("/appointments", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   const policy = await resolveAccessPolicy(c, c.env);
@@ -666,7 +687,7 @@ app.get("/appointments", async (c) => {
   }
 
   const locationId = c.req.query("locationId");
-  const time = c.req.query("time") ?? "future";
+  const scheduleFilter = normalizeScheduleQuery(pickScheduleQueryParam(c.req.query("schedule"), c.req.query("time")));
   const paymentFilterMode = normalizeAppointmentsPaymentQuery(c.req.query("paymentStatus"));
   /** `active`: hide cancelled-ish (default). `cancelled`: only those. `all`: no status narrowing. */
   const appointmentLifecycle = normalizeAppointmentLifecycleQuery(
@@ -726,9 +747,9 @@ app.get("/appointments", async (c) => {
     filters.push(or(...locationFilters));
   }
 
-  if (time === "future") {
+  if (scheduleFilter === "future") {
     filters.push(sql`${appointments.startTime} >= NOW()`);
-  } else if (time === "past") {
+  } else if (scheduleFilter === "past") {
     filters.push(sql`${appointments.startTime} < NOW()`);
   }
 

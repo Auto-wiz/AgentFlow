@@ -51,6 +51,21 @@ function buildGhlContactEmbedUrl(locationId: string, contactId: string | null) {
   return `https://app.gohighlevel.com/v2/location/${encodeURIComponent(locationId)}/contacts/detail/${encodeURIComponent(contactId)}`;
 }
 
+function appointmentMatchesScheduleFilter(startTimeIso: string | null, filter: AppointmentTimeFilter): boolean {
+  if (filter === "all") {
+    return true;
+  }
+  if (!startTimeIso) {
+    return false;
+  }
+  const t = new Date(startTimeIso).getTime();
+  if (!Number.isFinite(t)) {
+    return false;
+  }
+  const now = Date.now();
+  return filter === "future" ? t >= now : t < now;
+}
+
 export default function AppointmentsPage() {
   const setTopbarFilters = useAppointmentsTopbarSlot();
   const { sessionKey } = useWorkspaceAuth();
@@ -104,9 +119,8 @@ export default function AppointmentsPage() {
         if (nextSelectedLocationId) {
           params.set("locationId", nextSelectedLocationId);
         }
-        if (timeFilter !== "all") {
-          params.set("time", timeFilter);
-        }
+        params.set("schedule", timeFilter);
+
         params.set("paymentStatus", paymentFilter === "all" ? "all" : paymentFilter);
         params.set(
           "lifecycle",
@@ -134,6 +148,9 @@ export default function AppointmentsPage() {
         }
         if (paymentFilter !== "all") {
           rows = rows.filter((appointment) => appointment.paymentStatus === paymentFilter);
+        }
+        if (timeFilter !== "all") {
+          rows = rows.filter((appointment) => appointmentMatchesScheduleFilter(appointment.startTime, timeFilter));
         }
         setAppointments(rows);
       } catch (caught) {
