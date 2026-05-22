@@ -19,14 +19,14 @@ export function SettingsSubnav() {
             href: "/settings/admin",
             active: pathname === "/settings/admin" || pathname.startsWith("/settings/admin/"),
             label: "Workspace admin"
+          },
+          {
+            href: "/settings/team-selections",
+            active: pathname === "/settings/team-selections",
+            label: "Team selections"
           }
         ]
-      : []),
-    {
-      href: "/settings/team-selections",
-      active: pathname === "/settings/team-selections",
-      label: "Team selections"
-    }
+      : [])
   ];
 
   return (

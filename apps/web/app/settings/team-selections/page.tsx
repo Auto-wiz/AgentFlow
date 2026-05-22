@@ -4,6 +4,7 @@ import type { SubaccountOverview } from "@agentflow/shared";
 import { getApiBaseUrl } from "../../../lib/api-base-url";
 import { mergeWorkspaceHeaders } from "../../../lib/workspace-api-headers";
 import { useWorkspaceAuth } from "../../components/workspace-auth-provider";
+import { useGuardedNavigate } from "../../components/navigation-guard-provider";
 import { useEffect, useMemo, useState } from "react";
 
 type MatrixUserRow = {
@@ -38,7 +39,8 @@ function personLabel(row: Pick<MatrixUserRow, "displayName" | "email" | "ghlUser
 
 export default function TeamSelectionsPage() {
   const apiBaseUrl = getApiBaseUrl();
-  const { hydrated, token, sessionKey } = useWorkspaceAuth();
+  const { replaceGuarded } = useGuardedNavigate();
+  const { hydrated, token, sessionKey, user } = useWorkspaceAuth();
   const [matrix, setMatrix] = useState<MatrixPayload | null>(null);
   const [locations, setLocations] = useState<SubaccountOverview[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,6 +56,15 @@ export default function TeamSelectionsPage() {
           ? "Sign in to view the team selection matrix."
           : null
       );
+      return;
+    }
+
+    if (user?.role !== "admin") {
+      setMatrix(null);
+      setLocations([]);
+      setLoading(false);
+      setError(null);
+      void replaceGuarded("/settings");
       return;
     }
 
@@ -102,7 +113,7 @@ export default function TeamSelectionsPage() {
 
     void load();
     return () => controller.abort();
-  }, [apiBaseUrl, hydrated, token, sessionKey]);
+  }, [apiBaseUrl, hydrated, token, sessionKey, user?.role, replaceGuarded]);
 
   const locMetaById = useMemo(() => {
     const map = new Map<

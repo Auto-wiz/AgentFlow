@@ -53,7 +53,9 @@ function userTracksLocation(user: MatrixUserRow, workspaceLocationUuid: string):
 }
 
 function workspaceUsersSortedForFilters(matrix: MatrixPayload): MatrixUserRow[] {
-  return [...matrix.users].sort((a, b) => personLabel(a).localeCompare(personLabel(b), undefined, { sensitivity: "base" }));
+  return [...matrix.users]
+    .filter((u) => u.role !== "admin")
+    .sort((a, b) => personLabel(a).localeCompare(personLabel(b), undefined, { sensitivity: "base" }));
 }
 
 /** Users explicitly or implicitly tied to this workspace location UUID (dashboard selection). */
@@ -298,16 +300,15 @@ export default function SubaccountsPage() {
 
   const filterUserOptions = useMemo(() => (matrix ? workspaceUsersSortedForFilters(matrix) : []), [matrix]);
 
-  const layoutSketch = `
-┌ Card-style row (current list) ────────────────────┐
-│ Bold · location display name                         │
-│ Muted · GoHighLevel Location ID                      │
-│ Muted · N appointments                               │
-│ Muted smaller · Workspace users: Ana, Leo +3        │ ← new line
-└────────────────────────────────────────────────────────┘
-Toolbar above list:
-  [ Search ] [ User ▼ ] | [ Toggle visible in current list ] [ Revert ] [ Save ]
-`;
+  useEffect(() => {
+    if (!filterWorkspaceUserId || !matrix) {
+      return;
+    }
+    const picked = matrix.users.find((u) => u.workspaceUserId === filterWorkspaceUserId);
+    if (!picked || picked.role === "admin") {
+      setFilterWorkspaceUserId("");
+    }
+  }, [matrix, filterWorkspaceUserId]);
 
   return (
     <section className="module-shell">
@@ -317,24 +318,10 @@ Toolbar above list:
         <p className="muted">
           Checkbox changes stay in memory until you save. Saving replaces the location list that powers workspace filters
           (or the legacy viewer mapping when JWT is unavailable). The user filter mirrors each teammate&apos;s dashboard
-          picker (&quot;all locations&quot; until someone saves an explicit subset).
+          picker (&quot;all locations&quot; until someone saves an explicit subset). Administrators are omitted from this
+          dropdown because they are not scoped by teammate subaccount selections.
         </p>
       </div>
-
-      <details className="panel" style={{ padding: "12px 18", marginBottom: 12 }}>
-        <summary style={{ cursor: "pointer", fontWeight: 700 }}>Layout sketch: workspace users on each row</summary>
-        <pre
-          style={{
-            marginTop: 10,
-            fontSize: 12,
-            lineHeight: 1.35,
-            overflowX: "auto",
-            whiteSpace: "pre"
-          }}
-        >
-          {layoutSketch}
-        </pre>
-      </details>
 
       <div className="panel" style={{ padding: 18, marginBottom: 12 }}>
         <p className="eyebrow">Subaccounts</p>
@@ -367,7 +354,6 @@ Toolbar above list:
                 <option key={user.workspaceUserId} value={user.workspaceUserId}>
                   {personLabel(user)}
                   {user.selectionMode === "all_locations" ? " (all locations)" : ""}
-                  {user.role === "admin" ? " · admin" : ""}
                 </option>
               ))}
             </select>

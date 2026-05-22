@@ -758,6 +758,30 @@ button.appointments-row.active {
   width: 100%;
 }
 
+/* Reuse login field look on embedded admin/forms (Create user, etc.) */
+.auth-login-choice-group {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.auth-login-radio-row {
+  align-items: flex-start;
+  cursor: pointer;
+  display: flex;
+  font-size: 0.9375rem;
+  gap: 10px;
+  line-height: 1.45;
+}
+
+.auth-login-radio-row input[type="radio"] {
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;

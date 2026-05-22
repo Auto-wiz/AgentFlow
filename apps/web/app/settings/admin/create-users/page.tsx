@@ -92,77 +92,129 @@ export default function CreateWorkspaceUsersPage() {
       </div>
 
       <div className="panel" style={{ padding: 18, marginTop: 12 }}>
-        <form onSubmit={(e) => void onSubmit(e)} style={{ maxWidth: 420, display: "grid", gap: 14 }}>
-          <label style={{ display: "grid", gap: 6 }}>
-            <span>Email</span>
+        <form
+          className="auth-login-form"
+          onSubmit={(e) => void onSubmit(e)}
+          noValidate
+          style={{ marginTop: 0, maxWidth: 420 }}
+        >
+          <div className="auth-login-field">
+            <label className="auth-login-label" htmlFor="admin-create-email">
+              Email
+            </label>
             <input
+              autoCapitalize="off"
               autoComplete="username"
+              className="auth-login-input"
+              id="admin-create-email"
+              inputMode="email"
               name="email"
               onChange={(e) => setEmail(e.target.value)}
               placeholder="member@agency.com"
               required
+              spellCheck={false}
               type="email"
               value={email}
             />
-          </label>
-          <label style={{ display: "grid", gap: 6 }}>
-            <span>Password</span>
+          </div>
+
+          <div className="auth-login-field">
+            <label className="auth-login-label" htmlFor="admin-create-password">
+              Password
+            </label>
             <input
               autoComplete="new-password"
+              className="auth-login-input"
+              id="admin-create-password"
               minLength={8}
               name="password"
               onChange={(e) => setPassword(e.target.value)}
+              placeholder="············"
               required
               type="password"
               value={password}
             />
-          </label>
-          <label style={{ display: "grid", gap: 6 }}>
-            <span>Display name (optional)</span>
+          </div>
+
+          <div className="auth-login-field">
+            <label className="auth-login-label" htmlFor="admin-create-display-name">
+              Display name (optional)
+            </label>
             <input
+              autoCapitalize="words"
+              className="auth-login-input"
+              id="admin-create-display-name"
               name="displayName"
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="Alex Agent"
+              spellCheck={true}
               type="text"
               value={displayName}
             />
-          </label>
-          <fieldset style={{ border: "1px solid var(--border)", borderRadius: 12, padding: 12 }}>
-            <legend style={{ padding: "0 6px", fontWeight: 600 }}>Role</legend>
-            <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
-              <input
-                checked={role === "user"}
-                name="workspace-role"
-                onChange={() => setRole("user")}
-                type="radio"
-              />
-              <span>
-                Standard user (<code className="muted">user</code>) — gated by Team access subaccount list
-              </span>
-            </label>
-            <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input
-                checked={role === "admin"}
-                name="workspace-role"
-                onChange={() => setRole("admin")}
-                type="radio"
-              />
-              <span>
-                Administrator (<code className="muted">admin</code>) — full workspace admin menus
-              </span>
-            </label>
-          </fieldset>
-          {formError ? <p className="inbox-reply-error">{formError}</p> : null}
-          <button className="button" disabled={submitting || user?.role !== "admin"} type="submit">
+          </div>
+
+          <div className="auth-login-field">
+            <span className="auth-login-label" id="admin-create-role-label">
+              Role
+            </span>
+            <div
+              aria-labelledby="admin-create-role-label"
+              className="auth-login-choice-group"
+              role="radiogroup"
+            >
+              <label className="auth-login-radio-row">
+                <input
+                  checked={role === "user"}
+                  name="workspace-role"
+                  onChange={() => setRole("user")}
+                  type="radio"
+                />
+                <span>
+                  Standard user (<code className="muted">user</code>) — gated by Team access subaccount list
+                </span>
+              </label>
+              <label className="auth-login-radio-row">
+                <input
+                  checked={role === "admin"}
+                  name="workspace-role"
+                  onChange={() => setRole("admin")}
+                  type="radio"
+                />
+                <span>
+                  Administrator (<code className="muted">admin</code>) — full workspace admin menus
+                </span>
+              </label>
+            </div>
+          </div>
+
+          {formError ? (
+            <div className="auth-login-alerts" role="alert" style={{ marginTop: 0 }}>
+              <p className="auth-login-alert">{formError}</p>
+            </div>
+          ) : null}
+
+          <button
+            className="button auth-login-submit"
+            disabled={submitting || user?.role !== "admin"}
+            type="submit"
+          >
             {submitting ? "Creating…" : "Create user"}
           </button>
         </form>
 
         {lastCreated ? (
-          <div className="panel" style={{ marginTop: 20, padding: 14, border: "1px solid var(--border)" }}>
+          <div
+            className="panel"
+            style={{
+              marginTop: 20,
+              maxWidth: 420,
+              padding: 14,
+              border: "1px solid var(--border)",
+              background: "var(--panel-soft)"
+            }}
+          >
             <p style={{ margin: 0 }}>
-              <strong>Created</strong>{" "}
-              <span>{lastCreated.email ?? lastCreated.id}</span>{" "}
+              <strong>Created</strong> <span>{lastCreated.email ?? lastCreated.id}</span>{" "}
               <span className="muted">({lastCreated.role})</span>
             </p>
             <p className="muted" style={{ marginBottom: 0 }}>

@@ -16,22 +16,26 @@ export default function SettingsPage() {
         <p className="eyebrow">Configuration module</p>
         <h2 style={{ marginTop: 8 }}>Settings</h2>
         <p className="muted">
-          Central place for GoHighLevel connection setup and internal workspace configuration.
+          {isAdmin
+            ? "Central place for GoHighLevel connection setup and internal workspace configuration."
+            : "Preferences for subaccount visibility and how Appointments behaves for your account."}
         </p>
       </div>
 
       <div className="panel" style={{ padding: 18 }}>
         <div className="placeholder-grid">
-          <article className="placeholder-card">
-            <strong>GoHighLevel setup</strong>
-            <span className="muted">OAuth, connected locations, and token diagnostics</span>
-            <a className="button" href={goHighLevelConnectUrl}>
-              Connect GoHighLevel
-            </a>
-            <Link className="button secondary" href="/debug">
-              Open debug tools
-            </Link>
-          </article>
+          {isAdmin ? (
+            <article className="placeholder-card">
+              <strong>GoHighLevel setup</strong>
+              <span className="muted">OAuth, connected locations, and token diagnostics</span>
+              <a className="button" href={goHighLevelConnectUrl}>
+                Connect GoHighLevel
+              </a>
+              <Link className="button secondary" href="/debug">
+                Open debug tools
+              </Link>
+            </article>
+          ) : null}
           <article className="placeholder-card">
             <strong>Subaccount visibility</strong>
             <span className="muted">Choose which subaccounts are shown in Appointments</span>

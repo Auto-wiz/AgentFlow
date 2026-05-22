@@ -215,9 +215,6 @@ export default function WorkspaceAdminSettingsPage() {
 
       <div className="panel" style={{ padding: 18, marginTop: 12 }}>
         <h3 style={{ marginTop: 0 }}>Subaccount visibility by user</h3>
-        <p className="muted">
-          Applies to workspace users (`role=user`). Administrators are not constrained by this list.
-        </p>
 
         {loadingUsers ? <p className="muted">Loading roster…</p> : null}
         {listError ? <div className="empty">{listError}</div> : null}
