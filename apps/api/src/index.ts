@@ -625,6 +625,29 @@ app.get("/threads", async (c) => {
   });
 });
 
+/** Accept typo/whitespace/`paymentStatus=` empty; unknown values → unpaid (safe default). */
+function normalizeAppointmentsPaymentQuery(raw: string | undefined): "unpaid" | "paid" | "all" {
+  const s = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (s === "paid") {
+    return "paid";
+  }
+  if (s === "all") {
+    return "all";
+  }
+  return "unpaid";
+}
+
+function normalizeAppointmentLifecycleQuery(raw: string | undefined): "active" | "cancelled" | "all" {
+  const s = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (s === "cancelled") {
+    return "cancelled";
+  }
+  if (s === "all") {
+    return "all";
+  }
+  return "active";
+}
+
 app.get("/appointments", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   const policy = await resolveAccessPolicy(c, c.env);
@@ -634,9 +657,12 @@ app.get("/appointments", async (c) => {
 
   const locationId = c.req.query("locationId");
   const time = c.req.query("time") ?? "future";
-  const paymentStatus = c.req.query("paymentStatus") ?? "unpaid";
+  const paymentFilterMode = normalizeAppointmentsPaymentQuery(c.req.query("paymentStatus"));
   /** `active`: hide cancelled-ish (default). `cancelled`: only those. `all`: no status narrowing. */
-  const appointmentLifecycle = c.req.query("appointmentStatus") ?? "active";
+  const appointmentLifecycle = normalizeAppointmentLifecycleQuery(c.req.query("appointmentStatus"));
+
+  /** One fragment for SELECT + WHERE so correlation/aliases cannot diverge across duplicate builder calls. */
+  const appointmentIsPaid = buildAppointmentPaidSubquery(db);
   const filters = [];
 
   if (policy.kind === "legacy") {
@@ -670,7 +696,7 @@ app.get("/appointments", async (c) => {
       startTime: appointments.startTime,
       endTime: appointments.endTime,
       appointmentCreatedAt: sql<Date>`COALESCE(${appointments.dateAdded}, ${appointments.createdAt})`,
-      isPaid: buildAppointmentPaidSubquery(db),
+      isPaid: appointmentIsPaid,
       updatedAt: appointments.updatedAt
     })
     .from(appointments)
@@ -692,11 +718,11 @@ app.get("/appointments", async (c) => {
     filters.push(sql`${appointments.startTime} < NOW()`);
   }
 
-  /** Omit `paymentStatus`, or send `paymentStatus=all`, to disable payment narrowing (still returns `paymentStatus` per row). */
-  if (paymentStatus === "unpaid") {
-    filters.push(not(buildAppointmentPaidSubquery(db)));
-  } else if (paymentStatus === "paid") {
-    filters.push(buildAppointmentPaidSubquery(db));
+  /** paymentFilterMode=all omits narrowing (still returns `paymentStatus` per row). */
+  if (paymentFilterMode === "unpaid") {
+    filters.push(not(appointmentIsPaid));
+  } else if (paymentFilterMode === "paid") {
+    filters.push(appointmentIsPaid);
   }
 
   if (appointmentLifecycle === "cancelled") {

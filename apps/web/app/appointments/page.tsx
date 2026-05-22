@@ -118,13 +118,19 @@ export default function AppointmentsPage() {
           : `${apiBaseUrl}/appointments`;
         const response = await fetch(url, {
           signal: controller.signal,
-          headers: mergeWorkspaceHeaders()
+          headers: mergeWorkspaceHeaders(),
+          cache: "no-store"
         });
         if (!response.ok) {
           throw new Error("Failed to load appointments");
         }
         const data = (await response.json()) as { appointments: AppointmentSummary[] };
-        setAppointments(data.appointments);
+        /** Backstop if intermediary strips query params or stale responses mix paid/unpaid rows. */
+        const rows =
+          paymentFilter === "all"
+            ? data.appointments
+            : data.appointments.filter((appointment) => appointment.paymentStatus === paymentFilter);
+        setAppointments(rows);
       } catch (caught) {
         if (!controller.signal.aborted) {
           setError(caught instanceof Error ? caught.message : "Failed to load appointments");
