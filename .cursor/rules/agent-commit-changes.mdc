@@ -1,0 +1,14 @@
+---
+description: After implementing code edits, commit the result (never leave session work unstaged/uncommitted).
+alwaysApply: true
+---
+
+# Commits para cambios del agente
+
+Cuando hagas modificaciones **en este repo** (código, config, docs acordadas con el usuario), al terminar ese bloque de trabajo:
+
+1. **Haz commit** de los archivos tocados salvo los que parezcan secretos (`.env`, credenciales, tokens). Si algo es secreto pero el usuario insiste en commitear, adviértelo primero.
+2. **Mensaje**: conciso, estilo del repo (`fix(api): …`, `feat(web): …`, etc.) y que refleje el *por qué*.
+3. Si el usuario pidió **subir a remoto** o decir “push”, haz `git push` del branch actual después del commit (sin `--force` a `main`/`master` salvo que lo pida explícitamente).
+
+No amontones features no relacionadas en un mismo commit; si el usuario pidió varias cosas distintas, separa en commits lógicos cuando tenga sentido.

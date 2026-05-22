@@ -1150,6 +1150,10 @@ app.get("/subaccounts/overview", async (c) => {
   const visibilityByLocation = new Map(visibilityRows.map((row) => [row.locationId, row.isVisible]));
   const jwtSelectionNullable = rowsToNullableSelectionSet(workspaceSelectionRows);
 
+  /** Lightweight surfaces only need UUID↔counts; skip unbounded sequential GHL name hydration (CPU/Wall timeouts at scale). */
+  const hydrateNameBudget =
+    surface === "threads" || surface === "appointments" ? 0 : 35;
+
   const locationNameMap = await hydrateMissingLocationNames(
     c.env,
     db,
@@ -1157,7 +1161,8 @@ app.get("/subaccounts/overview", async (c) => {
       locationId: row.locationId,
       ghlLocationId: row.ghlLocationId,
       locationName: row.locationName
-    }))
+    })),
+    { maxOutboundLookups: hydrateNameBudget }
   );
 
   const subaccounts = locationRows
@@ -3372,7 +3377,11 @@ async function hydrateMissingLocationNames(
     locationId: string;
     ghlLocationId: string;
     locationName: string | null;
-  }>
+  }>,
+  opts?: {
+    /** Max distinct on-demand GHL lookups; 0 skips outbound calls. Omit = unlimited (list endpoints with small row counts). */
+    maxOutboundLookups?: number;
+  }
 ) {
   const locationNameMap = new Map(entries.map((entry) => [entry.locationId, entry.locationName]));
 
@@ -3386,18 +3395,38 @@ async function hydrateMissingLocationNames(
     missingByGhlId.set(entry.ghlLocationId, ids);
   }
 
+  const maxOutbound = opts?.maxOutboundLookups;
+  const isCapped =
+    typeof maxOutbound === "number" && Number.isFinite(maxOutbound) && maxOutbound >= 0;
+  let budget = isCapped ? maxOutbound : Number.POSITIVE_INFINITY;
+
   for (const [ghlLocationId, locationIds] of missingByGhlId.entries()) {
-    const fetchedName = await fetchLocationNameOnDemand(env, db, ghlLocationId);
-    if (!fetchedName) {
-      continue;
+    if (isCapped && budget <= 0) {
+      break;
+    }
+    if (Number.isFinite(budget)) {
+      budget -= 1;
     }
 
-    for (const locationId of locationIds) {
-      locationNameMap.set(locationId, fetchedName);
-      await db
-        .update(locations)
-        .set({ name: fetchedName, updatedAt: new Date() })
-        .where(eq(locations.id, locationId));
+    try {
+      const fetchedName = await fetchLocationNameOnDemand(env, db, ghlLocationId);
+      if (!fetchedName) {
+        continue;
+      }
+
+      for (const locationId of locationIds) {
+        locationNameMap.set(locationId, fetchedName);
+        try {
+          await db
+            .update(locations)
+            .set({ name: fetchedName, updatedAt: new Date() })
+            .where(eq(locations.id, locationId));
+        } catch (dbErr) {
+          console.warn("[hydrateMissingLocationNames] db.update failed", { locationId, ghlLocationId, dbErr });
+        }
+      }
+    } catch (caught) {
+      console.warn("[hydrateMissingLocationNames] lookup failed", { ghlLocationId, caught });
     }
   }
 
