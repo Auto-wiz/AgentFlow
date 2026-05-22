@@ -635,6 +635,8 @@ app.get("/appointments", async (c) => {
   const locationId = c.req.query("locationId");
   const time = c.req.query("time") ?? "future";
   const paymentStatus = c.req.query("paymentStatus") ?? "unpaid";
+  /** `active`: hide cancelled-ish (default). `cancelled`: only those. `all`: no status narrowing. */
+  const appointmentLifecycle = c.req.query("appointmentStatus") ?? "active";
   const filters = [];
 
   if (policy.kind === "legacy") {
@@ -690,13 +692,18 @@ app.get("/appointments", async (c) => {
     filters.push(sql`${appointments.startTime} < NOW()`);
   }
 
+  /** Omit `paymentStatus`, or send `paymentStatus=all`, to disable payment narrowing (still returns `paymentStatus` per row). */
   if (paymentStatus === "unpaid") {
     filters.push(not(buildAppointmentPaidSubquery(db)));
   } else if (paymentStatus === "paid") {
     filters.push(buildAppointmentPaidSubquery(db));
   }
 
-  filters.push(appointmentNotCancelledSql());
+  if (appointmentLifecycle === "cancelled") {
+    filters.push(appointmentCancelledOnlySql());
+  } else if (appointmentLifecycle === "active") {
+    filters.push(appointmentNotCancelledSql());
+  }
 
   if (filters.length > 0) {
     query = query.where(and(...filters));
@@ -873,6 +880,16 @@ function invoicePaymentTouchesAppointmentPartySql() {
           and invoice_party_contact.ghl_contact_id = ${appointmentWebhookGhlContactIdFromRawSql()}
         )`
   );
+}
+
+/** Rows GHL considers dead / withdrawn (same signals as skipping them in default lists). */
+function appointmentCancelledOnlySql() {
+  const s = appointmentStatusNormalizedSql();
+  return sql`(
+    ${s} LIKE '%cancel%'
+    OR ${s} IN ('deleted', 'declined', 'invalid', 'noshow')
+    OR ${s} LIKE 'no-show%'
+  )`;
 }
 
 /** Omit cancelled-ish rows from appointments lists unless we add an explicit escape hatch later. */

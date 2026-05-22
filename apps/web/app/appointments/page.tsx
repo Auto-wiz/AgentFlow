@@ -10,6 +10,30 @@ import { useEffect, useMemo, useState } from "react";
 
 type AppointmentTimeFilter = "future" | "past" | "all";
 
+type AppointmentPaymentFilter = "unpaid" | "paid" | "all";
+
+/** Mirrors API `appointmentStatus`: active = exclude cancelled-ish; cancelled = only those; all = none. */
+type AppointmentLifecycleFilter = "active" | "cancelled" | "all";
+
+function appointmentsEmptyMessage(
+  paymentFilter: AppointmentPaymentFilter,
+  lifecycleFilter: AppointmentLifecycleFilter
+): string {
+  const pay =
+    paymentFilter === "paid" ? "paid" : paymentFilter === "unpaid" ? "unpaid" : "";
+  const life =
+    lifecycleFilter === "active"
+      ? "confirmed"
+      : lifecycleFilter === "cancelled"
+        ? "cancelled"
+        : "";
+  const qualifiers = [pay, life].filter(Boolean).join(" ");
+  if (!qualifiers) {
+    return "No appointments found.";
+  }
+  return `No ${qualifiers} appointments found.`;
+}
+
 function formatDate(value: string | null) {
   if (!value) {
     return "Not scheduled";
@@ -35,6 +59,8 @@ export default function AppointmentsPage() {
   const [subaccounts, setSubaccounts] = useState<SubaccountOverview[]>([]);
   const [selectedLocationId, setSelectedLocationId] = useState("");
   const [timeFilter, setTimeFilter] = useState<AppointmentTimeFilter>("future");
+  const [paymentFilter, setPaymentFilter] = useState<AppointmentPaymentFilter>("unpaid");
+  const [lifecycleFilter, setLifecycleFilter] = useState<AppointmentLifecycleFilter>("active");
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +107,11 @@ export default function AppointmentsPage() {
         if (timeFilter !== "all") {
           params.set("time", timeFilter);
         }
-        params.set("paymentStatus", "unpaid");
+        params.set("paymentStatus", paymentFilter === "all" ? "all" : paymentFilter);
+        params.set(
+          "appointmentStatus",
+          lifecycleFilter === "all" ? "all" : lifecycleFilter === "cancelled" ? "cancelled" : "active"
+        );
 
         const url = params.toString()
           ? `${apiBaseUrl}/appointments?${params.toString()}`
@@ -108,7 +138,7 @@ export default function AppointmentsPage() {
 
     loadAppointments();
     return () => controller.abort();
-  }, [apiBaseUrl, selectedLocationId, timeFilter, sessionKey]);
+  }, [apiBaseUrl, selectedLocationId, timeFilter, paymentFilter, lifecycleFilter, sessionKey]);
 
   useEffect(() => {
     setSelectedAppointmentId((current) => {
@@ -141,7 +171,7 @@ export default function AppointmentsPage() {
 
   useEffect(() => {
     setTopbarFilters(
-      <div aria-label="Unpaid appointments filters" className="appointments-header-filters">
+      <div aria-label="Appointment filters" className="appointments-header-filters">
         <div className="appointments-filter-field appointments-filter-inline">
           <label className="appointments-filter-label" htmlFor="appointment-subaccount-filter">
             Subaccount
@@ -159,6 +189,59 @@ export default function AppointmentsPage() {
               </option>
             ))}
           </select>
+        </div>
+        <div className="appointments-filter-field appointments-filter-times appointments-filter-inline">
+          <span className="appointments-filter-label">Payment</span>
+          <div className="appointments-time-buttons">
+            <button
+              className={`button ${paymentFilter === "unpaid" ? "" : "secondary"}`}
+              onClick={() => setPaymentFilter("unpaid")}
+              type="button"
+            >
+              Unpaid
+            </button>
+            <button
+              className={`button ${paymentFilter === "paid" ? "" : "secondary"}`}
+              onClick={() => setPaymentFilter("paid")}
+              type="button"
+            >
+              Paid
+            </button>
+            <button
+              className={`button ${paymentFilter === "all" ? "" : "secondary"}`}
+              onClick={() => setPaymentFilter("all")}
+              type="button"
+            >
+              All
+            </button>
+          </div>
+        </div>
+        <div className="appointments-filter-field appointments-filter-times appointments-filter-inline">
+          <span className="appointments-filter-label">Status</span>
+          <div className="appointments-time-buttons">
+            <button
+              className={`button ${lifecycleFilter === "active" ? "" : "secondary"}`}
+              onClick={() => setLifecycleFilter("active")}
+              title="Excludes cancelled, invalid, deleted, declined, no-show"
+              type="button"
+            >
+              Confirmed
+            </button>
+            <button
+              className={`button ${lifecycleFilter === "cancelled" ? "" : "secondary"}`}
+              onClick={() => setLifecycleFilter("cancelled")}
+              type="button"
+            >
+              Cancelled
+            </button>
+            <button
+              className={`button ${lifecycleFilter === "all" ? "" : "secondary"}`}
+              onClick={() => setLifecycleFilter("all")}
+              type="button"
+            >
+              All
+            </button>
+          </div>
         </div>
         <div className="appointments-filter-field appointments-filter-times appointments-filter-inline">
           <span className="appointments-filter-label">Date</span>
@@ -181,7 +264,18 @@ export default function AppointmentsPage() {
       </div>
     );
     return () => setTopbarFilters(null);
-  }, [setTopbarFilters, selectedLocationId, subaccounts, timeFilter, totalAppointments]);
+  }, [setTopbarFilters, selectedLocationId, subaccounts, timeFilter, paymentFilter, lifecycleFilter, totalAppointments]);
+
+  const emptyListMessage = appointmentsEmptyMessage(paymentFilter, lifecycleFilter);
+  const statusScopeLabel =
+    lifecycleFilter === "active"
+      ? "Active bookings"
+      : lifecycleFilter === "cancelled"
+        ? "Cancelled bookings"
+        : "All statuses";
+  const paymentScopeLabel =
+    paymentFilter === "all" ? "Any payment" : paymentFilter === "paid" ? "Paid only" : "Unpaid only";
+  const appointmentsListAriaLabel = `${statusScopeLabel}, ${paymentScopeLabel}`;
 
   return (
     <section className="module-shell appointments-module-page">
@@ -190,11 +284,11 @@ export default function AppointmentsPage() {
           {loading ? <div className="empty muted">Loading appointments...</div> : null}
           {error ? <div className="empty">{error}</div> : null}
           {!loading && !error && appointments.length === 0 ? (
-            <div className="empty muted">No unpaid appointments found.</div>
+            <div className="empty muted">{emptyListMessage}</div>
           ) : null}
 
           {!loading && !error && appointments.length > 0 ? (
-            <div aria-label="Unpaid appointments" className="appointments-scroll-list" role="list">
+            <div aria-label={appointmentsListAriaLabel} className="appointments-scroll-list" role="list">
               {appointments.map((appointment) => (
                 <button
                   aria-current={appointment.id === selectedAppointmentId ? true : undefined}
