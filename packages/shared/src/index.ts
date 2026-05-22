@@ -263,6 +263,8 @@ export type AppointmentSummary = {
   endTime: string | null;
   appointmentCreatedAt: string | null;
   paymentStatus: "paid" | "unpaid";
+  /** True when status matches cancelled / invalid / no-show / deleted heuristic (aligned with GET /appointments filters). */
+  cancelledBooking: boolean;
   updatedAt: string;
 };
 

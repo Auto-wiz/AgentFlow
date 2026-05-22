@@ -648,6 +648,16 @@ function normalizeAppointmentLifecycleQuery(raw: string | undefined): "active" |
   return "active";
 }
 
+/** Prefer `lifecycle`; `appointmentStatus` kept for backwards compatibility (some gateways strip uncommon keys). */
+function pickAppointmentLifecycleQueryParam(lifecycleRaw: string | undefined, legacyRaw: string | undefined): string | undefined {
+  const l = typeof lifecycleRaw === "string" ? lifecycleRaw.trim() : "";
+  if (l !== "") {
+    return lifecycleRaw;
+  }
+  const a = typeof legacyRaw === "string" ? legacyRaw.trim() : "";
+  return a !== "" ? legacyRaw : undefined;
+}
+
 app.get("/appointments", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   const policy = await resolveAccessPolicy(c, c.env);
@@ -659,10 +669,13 @@ app.get("/appointments", async (c) => {
   const time = c.req.query("time") ?? "future";
   const paymentFilterMode = normalizeAppointmentsPaymentQuery(c.req.query("paymentStatus"));
   /** `active`: hide cancelled-ish (default). `cancelled`: only those. `all`: no status narrowing. */
-  const appointmentLifecycle = normalizeAppointmentLifecycleQuery(c.req.query("appointmentStatus"));
+  const appointmentLifecycle = normalizeAppointmentLifecycleQuery(
+    pickAppointmentLifecycleQueryParam(c.req.query("lifecycle"), c.req.query("appointmentStatus"))
+  );
 
   /** One fragment for SELECT + WHERE so correlation/aliases cannot diverge across duplicate builder calls. */
   const appointmentIsPaid = buildAppointmentPaidSubquery(db);
+  const cancelledBookingPredicate = appointmentCancelledOnlySql();
   const filters = [];
 
   if (policy.kind === "legacy") {
@@ -697,6 +710,7 @@ app.get("/appointments", async (c) => {
       endTime: appointments.endTime,
       appointmentCreatedAt: sql<Date>`COALESCE(${appointments.dateAdded}, ${appointments.createdAt})`,
       isPaid: appointmentIsPaid,
+      cancelledAppointment: cancelledBookingPredicate,
       updatedAt: appointments.updatedAt
     })
     .from(appointments)
@@ -726,9 +740,9 @@ app.get("/appointments", async (c) => {
   }
 
   if (appointmentLifecycle === "cancelled") {
-    filters.push(appointmentCancelledOnlySql());
+    filters.push(cancelledBookingPredicate);
   } else if (appointmentLifecycle === "active") {
-    filters.push(appointmentNotCancelledSql());
+    filters.push(not(cancelledBookingPredicate));
   }
 
   if (filters.length > 0) {
@@ -763,6 +777,7 @@ app.get("/appointments", async (c) => {
       endTime: row.endTime?.toISOString() ?? null,
       appointmentCreatedAt: toMaybeIso(row.appointmentCreatedAt),
       paymentStatus: coerceSqlBoolean(row.isPaid) ? "paid" : "unpaid",
+      cancelledBooking: coerceSqlBoolean(row.cancelledAppointment),
       updatedAt: row.updatedAt.toISOString()
     }))
   });
@@ -912,16 +927,6 @@ function invoicePaymentTouchesAppointmentPartySql() {
 function appointmentCancelledOnlySql() {
   const s = appointmentStatusNormalizedSql();
   return sql`(
-    ${s} LIKE '%cancel%'
-    OR ${s} IN ('deleted', 'declined', 'invalid', 'noshow')
-    OR ${s} LIKE 'no-show%'
-  )`;
-}
-
-/** Omit cancelled-ish rows from appointments lists unless we add an explicit escape hatch later. */
-function appointmentNotCancelledSql() {
-  const s = appointmentStatusNormalizedSql();
-  return sql`NOT (
     ${s} LIKE '%cancel%'
     OR ${s} IN ('deleted', 'declined', 'invalid', 'noshow')
     OR ${s} LIKE 'no-show%'

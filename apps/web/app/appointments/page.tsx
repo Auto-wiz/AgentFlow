@@ -12,7 +12,7 @@ type AppointmentTimeFilter = "future" | "past" | "all";
 
 type AppointmentPaymentFilter = "unpaid" | "paid" | "all";
 
-/** Mirrors API `appointmentStatus`: active = exclude cancelled-ish; cancelled = only those; all = none. */
+/** Mirrors GET /appointments: `lifecycle` query (active/cancelled/all). */
 type AppointmentLifecycleFilter = "active" | "cancelled" | "all";
 
 function appointmentsEmptyMessage(
@@ -109,7 +109,7 @@ export default function AppointmentsPage() {
         }
         params.set("paymentStatus", paymentFilter === "all" ? "all" : paymentFilter);
         params.set(
-          "appointmentStatus",
+          "lifecycle",
           lifecycleFilter === "all" ? "all" : lifecycleFilter === "cancelled" ? "cancelled" : "active"
         );
 
@@ -125,11 +125,16 @@ export default function AppointmentsPage() {
           throw new Error("Failed to load appointments");
         }
         const data = (await response.json()) as { appointments: AppointmentSummary[] };
-        /** Backstop if intermediary strips query params or stale responses mix paid/unpaid rows. */
-        const rows =
-          paymentFilter === "all"
-            ? data.appointments
-            : data.appointments.filter((appointment) => appointment.paymentStatus === paymentFilter);
+        let rows = data.appointments;
+        if (lifecycleFilter !== "all") {
+          rows =
+            lifecycleFilter === "cancelled"
+              ? rows.filter((appointment) => appointment.cancelledBooking)
+              : rows.filter((appointment) => !appointment.cancelledBooking);
+        }
+        if (paymentFilter !== "all") {
+          rows = rows.filter((appointment) => appointment.paymentStatus === paymentFilter);
+        }
         setAppointments(rows);
       } catch (caught) {
         if (!controller.signal.aborted) {
