@@ -5,67 +5,208 @@ import { getApiBaseUrl } from "../../lib/api-base-url";
 import { formatLocationName } from "../../lib/location-display";
 import { mergeWorkspaceHeaders } from "../../lib/workspace-api-headers";
 import { useWorkspaceAuth } from "../components/workspace-auth-provider";
-import { useEffect, useMemo, useState } from "react";
+import { useRegisterDraftNavigationGuard } from "../components/navigation-guard-provider";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+type MatrixUserRow = {
+  workspaceUserId: string;
+  email: string | null;
+  displayName: string | null;
+  role: string;
+  ghlUserId: string | null;
+  selectionMode: string;
+  locationIds: string[] | null;
+};
+
+type MatrixPayload = {
+  users: MatrixUserRow[];
+  selectionsByLocation: Array<{ locationId: string; workspaceUserIds: string[] }>;
+  disclaimer: string | null;
+};
+
+function cloneRows(rows: SubaccountOverview[]): SubaccountOverview[] {
+  return JSON.parse(JSON.stringify(rows)) as SubaccountOverview[];
+}
+
+function selectionFingerprint(rows: SubaccountOverview[]): string {
+  return rows
+    .filter((r) => r.visible)
+    .map((r) => r.locationId)
+    .sort()
+    .join("|");
+}
+
+function personLabel(row: Pick<MatrixUserRow, "displayName" | "email" | "ghlUserId" | "workspaceUserId">) {
+  return (
+    row.displayName?.trim() ||
+    row.email?.trim() ||
+    row.ghlUserId?.trim() ||
+    `${row.workspaceUserId.slice(0, 8)}…`
+  );
+}
+
+function userTracksLocation(user: MatrixUserRow, workspaceLocationUuid: string): boolean {
+  if (user.selectionMode === "all_locations") {
+    return true;
+  }
+  return Boolean(user.locationIds?.includes(workspaceLocationUuid));
+}
+
+function workspaceUsersSortedForFilters(matrix: MatrixPayload): MatrixUserRow[] {
+  return [...matrix.users].sort((a, b) => personLabel(a).localeCompare(personLabel(b), undefined, { sensitivity: "base" }));
+}
+
+/** Users explicitly or implicitly tied to this workspace location UUID (dashboard selection). */
+function linkedWorkspaceUsers(matrix: MatrixPayload, workspaceLocationUuid: string): MatrixUserRow[] {
+  return matrix.users.filter((u) => userTracksLocation(u, workspaceLocationUuid));
+}
+
+/** Short line for cards: chips optional; admins included but sorted last in label list. */
+function formatLinkedUsersLine(matrix: MatrixPayload | null, workspaceLocationUuid: string): string | null {
+  if (!matrix) {
+    return null;
+  }
+  const linked = linkedWorkspaceUsers(matrix, workspaceLocationUuid);
+  if (linked.length === 0) {
+    return null;
+  }
+  const admins = linked.filter((u) => u.role === "admin");
+  const members = linked.filter((u) => u.role !== "admin");
+  const ordered = [...members.sort((a, b) => personLabel(a).localeCompare(personLabel(b))), ...admins.sort((a, b) => personLabel(a).localeCompare(personLabel(b)))];
+  const labels = ordered.map(personLabel);
+  const maxShown = 3;
+  const head = labels.slice(0, maxShown).join(", ");
+  const rest = labels.length - maxShown;
+  return rest > 0 ? `${head} +${rest} más` : head;
+}
+
+function buildLegacyVisibilityDiff(base: SubaccountOverview[], draft: SubaccountOverview[]) {
+  const baseVis = new Map(base.map((r) => [r.locationId, r.visible]));
+  return draft.filter((r) => baseVis.get(r.locationId) !== r.visible).map((r) => ({
+    locationId: r.locationId,
+    visible: r.visible
+  }));
+}
 
 export default function SubaccountsPage() {
   const apiBaseUrl = getApiBaseUrl();
-  const { sessionKey } = useWorkspaceAuth();
-  const [subaccounts, setSubaccounts] = useState<SubaccountOverview[]>([]);
-  const [searchLocationId, setSearchLocationId] = useState("");
-  const [savingIds, setSavingIds] = useState<Record<string, boolean>>({});
+  const { hydrated, token, sessionKey } = useWorkspaceAuth();
+  const [matrix, setMatrix] = useState<MatrixPayload | null>(null);
+  const [baseline, setBaseline] = useState<SubaccountOverview[]>([]);
+  const [draft, setDraft] = useState<SubaccountOverview[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterWorkspaceUserId, setFilterWorkspaceUserId] = useState("");
+  const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const controller = new AbortController();
+  const dirtyRef = useRef(false);
 
-    async function loadSubaccounts() {
-      setLoading(true);
-      setError(null);
-      try {
-        const response = await fetch(`${apiBaseUrl}/subaccounts/overview?surface=all`, {
-          signal: controller.signal,
+  const dirty = useMemo(
+    () => selectionFingerprint(draft) !== selectionFingerprint(baseline),
+    [baseline, draft]
+  );
+  dirtyRef.current = dirty;
+
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [overviewRes, matrixRes] = await Promise.all([
+        fetch(`${apiBaseUrl}/subaccounts/overview?surface=all`, {
           headers: mergeWorkspaceHeaders()
-        });
-        if (!response.ok) {
-          throw new Error("Failed to load subaccounts");
-        }
-        const data = (await response.json()) as { subaccounts: SubaccountOverview[] };
-        setSubaccounts(data.subaccounts);
-      } catch (caught) {
-        if (!controller.signal.aborted) {
-          setError(caught instanceof Error ? caught.message : "Failed to load subaccounts");
-        }
-      } finally {
-        if (!controller.signal.aborted) {
-          setLoading(false);
-        }
+        }),
+        fetch(`${apiBaseUrl}/workspace/selection-matrix`, {
+          headers: mergeWorkspaceHeaders()
+        })
+      ]);
+
+      if (!overviewRes.ok) {
+        throw new Error("No se pudieron cargar las subcuentas");
       }
+      const overviewPayload = (await overviewRes.json()) as { subaccounts: SubaccountOverview[] };
+      const rows = overviewPayload.subaccounts ?? [];
+      const nextBaseline = cloneRows(rows);
+      setBaseline(nextBaseline);
+      setDraft(cloneRows(rows));
+
+      if (matrixRes.ok) {
+        setMatrix((await matrixRes.json()) as MatrixPayload);
+      } else {
+        setMatrix(null);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No se pudieron cargar las subcuentas");
+      setBaseline([]);
+      setDraft([]);
+      setMatrix(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [apiBaseUrl]);
+
+  useEffect(() => {
+    if (!hydrated || !token) {
+      setMatrix(null);
+      setBaseline([]);
+      setDraft([]);
+      setLoading(false);
+      setError(hydrated && !token ? "Tenés que iniciar sesión para gestionar subcuentas." : null);
+      return;
+    }
+    void loadAll();
+  }, [hydrated, token, sessionKey, loadAll]);
+
+  const rowsAfterUserFilter = useMemo(() => {
+    if (!matrix || !filterWorkspaceUserId) {
+      return draft;
+    }
+    const userRow = matrix.users.find((u) => u.workspaceUserId === filterWorkspaceUserId);
+    if (!userRow) {
+      return draft;
+    }
+    return draft.filter((row) => userTracksLocation(userRow, row.locationId));
+  }, [draft, filterWorkspaceUserId, matrix]);
+
+  const filteredForDisplay = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) {
+      return rowsAfterUserFilter;
+    }
+    return rowsAfterUserFilter.filter((subaccount) => {
+      const name = typeof subaccount.locationName === "string" ? subaccount.locationName.trim().toLowerCase() : "";
+      return (
+        subaccount.ghlLocationId.toLowerCase().includes(q) ||
+        (name.length > 0 && name.includes(q))
+      );
+    });
+  }, [rowsAfterUserFilter, searchQuery]);
+
+  const allFilteredTracked = filteredForDisplay.length > 0 && filteredForDisplay.every((r) => r.visible);
+
+  function toggleDraftVisibility(locationId: string, visible: boolean) {
+    setDraft((prev) => prev.map((r) => (r.locationId === locationId ? { ...r, visible } : r)));
+  }
+
+  function toggleVisibleForFilteredRows() {
+    if (filteredForDisplay.length === 0) {
+      return;
+    }
+    const ids = new Set(filteredForDisplay.map((r) => r.locationId));
+    const nextChecked = !allFilteredTracked;
+    setDraft((prev) => prev.map((r) => (ids.has(r.locationId) ? { ...r, visible: nextChecked } : r)));
+  }
+
+  async function persistSelections(): Promise<boolean> {
+    if (saving) {
+      return false;
+    }
+    if (!dirty) {
+      return true;
     }
 
-    loadSubaccounts();
-    return () => controller.abort();
-  }, [apiBaseUrl, sessionKey]);
-
-  const filteredSubaccounts = useMemo(() => {
-    const normalizedSearch = searchLocationId.trim().toLowerCase();
-    if (!normalizedSearch) {
-      return subaccounts;
-    }
-    return subaccounts.filter((subaccount) =>
-      subaccount.ghlLocationId.toLowerCase().includes(normalizedSearch)
-    );
-  }, [searchLocationId, subaccounts]);
-
-  async function toggleSubaccount(locationId: string, nextVisible: boolean, current: SubaccountOverview[]) {
-    const previous = current;
-    const optimistic = current.map((subaccount) =>
-      subaccount.locationId === locationId ? { ...subaccount, visible: nextVisible } : subaccount
-    );
-    const locationIds = optimistic.filter((s) => s.visible).map((s) => s.locationId);
-
-    setSubaccounts(optimistic);
-    setSavingIds((s) => ({ ...s, [locationId]: true }));
+    const locationIds = draft.filter((r) => r.visible).map((r) => r.locationId);
+    setSaving(true);
     setError(null);
 
     try {
@@ -78,100 +219,218 @@ export default function SubaccountsPage() {
       });
 
       if (jwtResponse.ok) {
-        const response = await fetch(`${apiBaseUrl}/subaccounts/overview?surface=all`, {
+        const refreshed = await fetch(`${apiBaseUrl}/subaccounts/overview?surface=all`, {
           headers: mergeWorkspaceHeaders()
         });
-        if (response.ok) {
-          const data = (await response.json()) as { subaccounts: SubaccountOverview[] };
-          setSubaccounts(data.subaccounts);
+        if (!refreshed.ok) {
+          throw new Error("Se guardó, pero no se pudo volver a cargar la lista");
         }
-        return;
+        const data = (await refreshed.json()) as { subaccounts: SubaccountOverview[] };
+        const next = cloneRows(data.subaccounts ?? []);
+        setBaseline(next);
+        setDraft(next);
+        return true;
       }
 
       if (jwtResponse.status !== 401) {
         const payload = (await jwtResponse.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error ?? "Failed to update selections");
+        throw new Error(payload.error ?? "No se pudieron guardar las selecciones");
       }
 
-      const legacyResponse = await fetch(`${apiBaseUrl}/subaccounts/visibility`, {
-        method: "POST",
-        headers: mergeWorkspaceHeaders({
-          "Content-Type": "application/json"
-        }),
-        body: JSON.stringify({
-          locationId,
-          visible: nextVisible
-        })
-      });
+      const diff = buildLegacyVisibilityDiff(baseline, draft);
+      for (const item of diff) {
+        const legacyResponse = await fetch(`${apiBaseUrl}/subaccounts/visibility`, {
+          method: "POST",
+          headers: mergeWorkspaceHeaders({
+            "Content-Type": "application/json"
+          }),
+          body: JSON.stringify({
+            locationId: item.locationId,
+            visible: item.visible
+          })
+        });
 
-      if (!legacyResponse.ok) {
-        const payload = (await legacyResponse.json().catch(() => ({}))) as { error?: string };
-        if (payload.error === "forbidden_legacy_only") {
-          throw new Error("Sign in with GoHighLevel to save selections.");
+        if (!legacyResponse.ok) {
+          const payload = (await legacyResponse.json().catch(() => ({}))) as { error?: string };
+          if (payload.error === "forbidden_legacy_only") {
+            throw new Error("Iniciá sesión con el workspace para guardar las selecciones.");
+          }
+          throw new Error("No se pudo guardar la visibilidad (modo legacy)");
         }
-        throw new Error("Failed to update subaccount visibility");
       }
 
-      setSubaccounts(optimistic);
-    } catch (caught) {
-      setSubaccounts(previous);
-      setError(caught instanceof Error ? caught.message : "Failed to update subaccount visibility");
-    } finally {
-      setSavingIds((s) => {
-        const copy = { ...s };
-        delete copy[locationId];
-        return copy;
+      const refreshedLegacy = await fetch(`${apiBaseUrl}/subaccounts/overview?surface=all`, {
+        headers: mergeWorkspaceHeaders()
       });
+      if (!refreshedLegacy.ok) {
+        throw new Error("Se guardó (legacy), pero no se pudo recargar la lista");
+      }
+      const dataLegacy = (await refreshedLegacy.json()) as { subaccounts: SubaccountOverview[] };
+      const merged = cloneRows(dataLegacy.subaccounts ?? []);
+      setBaseline(merged);
+      setDraft(merged);
+      return true;
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No se pudo guardar");
+      return false;
+    } finally {
+      setSaving(false);
     }
   }
+
+  useRegisterDraftNavigationGuard("subaccounts-tracking", {
+    isDirty: () => dirtyRef.current,
+    persist: persistSelections
+  });
+
+  function revertDraft() {
+    if (!dirty) {
+      return;
+    }
+    const ok = window.confirm(
+      "¿Descartamos todos los cambios sin guardar en la lista de seguimiento?"
+    );
+    if (!ok) {
+      return;
+    }
+    setDraft(cloneRows(baseline));
+  }
+
+  const filterUserOptions = useMemo(() => (matrix ? workspaceUsersSortedForFilters(matrix) : []), [matrix]);
+
+  const layoutSketch = `
+┌ Fila tipo card (lista actual) ────────────────────┐
+│ Nombre de la location (negrita)                   │
+│ Muted · ID Location (GoHighLevel)                   │
+│ Muted · N turnos                                    │
+│ Muted más chico · Usuarios workspace: Ana, Leo +3 │ ← línea nueva
+└─────────────────────────────────────────────────────┘
+Barra encima del listado:
+  [ Buscar ] [ Usuario ▼ ] | [ Todos ninguno · visibles ] [ Revertir ] [ Guardar ]
+`;
 
   return (
     <section className="module-shell">
       <div className="panel" style={{ padding: 18 }}>
         <p className="eyebrow">Management module</p>
-        <h2 style={{ marginTop: 8 }}>Subaccounts tracking</h2>
+        <h2 style={{ marginTop: 8 }}>Seguimiento de subcuentas</h2>
         <p className="muted">
-          With an active GoHighLevel session, each change replaces the account list used to drive filters. Legacy mode
-          continues to use the viewer-key endpoint.
+          Los cambios en los checkboxes quedan en memoria hasta que tocás Guardar. Al guardar se reemplaza la lista de
+          locations que usan los filtros del workspace (o la tabla legacy del viewer si no hay JWT). El filtro por
+          usuario usa las selecciones del dashboard de cada persona (modo &quot;todas las locations&quot; hasta que
+          alguien fija una lista explícita).
         </p>
       </div>
 
+      <details className="panel" style={{ padding: "12px 18", marginBottom: 12 }}>
+        <summary style={{ cursor: "pointer", fontWeight: 700 }}>Esquema: dónde mostrar usuarios del workspace</summary>
+        <pre
+          style={{
+            marginTop: 10,
+            fontSize: 12,
+            lineHeight: 1.35,
+            overflowX: "auto",
+            whiteSpace: "pre"
+          }}
+        >
+          {layoutSketch}
+        </pre>
+      </details>
+
       <div className="panel" style={{ padding: 18, marginBottom: 12 }}>
-        <p className="eyebrow">Subaccounts</p>
-        <h2 style={{ marginTop: 8 }}>Track and filter visible subaccounts</h2>
-        <div className="toolbar">
+        <p className="eyebrow">Subcuentas</p>
+        <h2 style={{ marginTop: 8 }}>Elegí qué subcuentas se tienen en cuenta</h2>
+        <div className="toolbar" style={{ marginBottom: 0 }}>
           <input
-            aria-label="Search by location ID"
-            placeholder="Search by location ID"
-            value={searchLocationId}
-            onChange={(event) => setSearchLocationId(event.target.value)}
+            aria-label="Buscar por nombre o ID de GoHighLevel"
+            placeholder="Buscar por nombre o ID de GoHighLevel"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            disabled={loading || saving}
           />
+          {matrix ? (
+            <select
+              aria-label="Filtrar por usuario del workspace"
+              value={filterWorkspaceUserId}
+              onChange={(event) => setFilterWorkspaceUserId(event.target.value)}
+              disabled={loading || saving}
+              style={{
+                background: "var(--panel-soft)",
+                border: "1px solid var(--border)",
+                borderRadius: 999,
+                color: "var(--foreground)",
+                minWidth: 220,
+                padding: "10px 14px"
+              }}
+            >
+              <option value="">Todos los usuarios del workspace</option>
+              {filterUserOptions.map((user) => (
+                <option key={user.workspaceUserId} value={user.workspaceUserId}>
+                  {personLabel(user)}
+                  {user.selectionMode === "all_locations" ? " (todas las locations)" : ""}
+                  {user.role === "admin" ? " · admin" : ""}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="muted" style={{ alignSelf: "center" }}>
+              El filtro por usuario requiere sesión de equipo.
+            </span>
+          )}
+          <button
+            type="button"
+            className="button secondary"
+            onClick={toggleVisibleForFilteredRows}
+            disabled={loading || saving || filteredForDisplay.length === 0}
+          >
+            {allFilteredTracked ? "Quitar todos (listado actual)" : "Seleccionar todos (listado actual)"}
+          </button>
+          <button type="button" className="button secondary" onClick={revertDraft} disabled={!dirty || loading || saving}>
+            Revertir
+          </button>
+          <button
+            type="button"
+            className="button"
+            onClick={() => void persistSelections()}
+            disabled={!dirty || loading || saving}
+          >
+            {saving ? "Guardando…" : "Guardar"}
+          </button>
         </div>
+        {matrix?.disclaimer ? <p className="muted">{matrix.disclaimer}</p> : null}
       </div>
 
       <div className="panel" style={{ padding: 18 }}>
-        {loading ? <div className="empty muted">Loading subaccounts...</div> : null}
+        {loading ? <div className="empty muted">Cargando subcuentas…</div> : null}
         {error ? <div className="empty">{error}</div> : null}
-        {!loading && !error && filteredSubaccounts.length === 0 ? (
-          <div className="empty muted">No subaccounts found.</div>
+        {!loading && !error && filteredForDisplay.length === 0 ? (
+          <div className="empty muted">Ninguna subcuenta coincide con los filtros actuales.</div>
         ) : null}
         <div className="subaccounts-config-list">
-          {filteredSubaccounts.map((subaccount) => (
-            <label className="subaccount-config-row" key={subaccount.locationId}>
-              <div>
-                <strong>{formatLocationName(subaccount.locationName, subaccount.ghlLocationId)}</strong>
-                <div className="muted">Location ID: {subaccount.ghlLocationId}</div>
-                <div className="muted">{subaccount.appointmentCount} appointments</div>
-              </div>
-              <input
-                aria-label={`Track subaccount ${subaccount.ghlLocationId}`}
-                checked={subaccount.visible}
-                disabled={Boolean(savingIds[subaccount.locationId])}
-                onChange={(event) => toggleSubaccount(subaccount.locationId, event.target.checked, subaccounts)}
-                type="checkbox"
-              />
-            </label>
-          ))}
+          {filteredForDisplay.map((subaccount) => {
+            const linkedLine = formatLinkedUsersLine(matrix, subaccount.locationId);
+            return (
+              <label className="subaccount-config-row" key={subaccount.locationId}>
+                <div>
+                  <strong>{formatLocationName(subaccount.locationName, subaccount.ghlLocationId)}</strong>
+                  <div className="muted">Location ID: {subaccount.ghlLocationId}</div>
+                  <div className="muted">{subaccount.appointmentCount} citas</div>
+                  {linkedLine ? (
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      Usuarios del workspace asociados: {linkedLine}
+                    </div>
+                  ) : null}
+                </div>
+                <input
+                  aria-label={`Seguir subcuenta ${subaccount.ghlLocationId}`}
+                  checked={subaccount.visible}
+                  disabled={loading || saving}
+                  onChange={(event) => toggleDraftVisibility(subaccount.locationId, event.target.checked)}
+                  type="checkbox"
+                />
+              </label>
+            );
+          })}
         </div>
       </div>
     </section>

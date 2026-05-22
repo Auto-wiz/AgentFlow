@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { useGuardedNavigate } from "./navigation-guard-provider";
 import { useWorkspaceAuth } from "./workspace-auth-provider";
 
 function initialsFromLabel(label: string) {
@@ -18,7 +18,7 @@ function initialsFromLabel(label: string) {
 }
 
 export function AppUserMenu() {
-  const router = useRouter();
+  const { replaceGuarded } = useGuardedNavigate();
   const { user, hydrated, token, signOut } = useWorkspaceAuth();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -45,10 +45,10 @@ export function AppUserMenu() {
 
   const showSignOut = hydrated && Boolean(token);
 
-  function handleSignOut() {
+  async function handleSignOut() {
     signOut();
     setOpen(false);
-    router.replace("/login");
+    await replaceGuarded("/login");
   }
 
   return (

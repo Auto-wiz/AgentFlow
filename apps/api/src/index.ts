@@ -60,6 +60,7 @@ import {
   adminGetUserSubaccounts,
   adminListLocations,
   adminListUsers,
+  adminPostWorkspaceUser,
   adminPutUserSubaccounts
 } from "./workspace-admin.js";
 import {
@@ -278,6 +279,7 @@ app.get("/auth/me", meHandler);
 app.put("/workspace/me/location-selections", mePutLocationSelectionsHandler);
 app.get("/workspace/selection-matrix", workspaceSelectionMatrixHandler);
 app.get("/admin/workspace-users", adminListUsers);
+app.post("/admin/workspace-users", adminPostWorkspaceUser);
 app.get("/admin/workspace-locations", adminListLocations);
 app.get("/admin/workspace-users/:id/subaccounts", adminGetUserSubaccounts);
 app.put("/admin/workspace-users/:id/subaccounts", adminPutUserSubaccounts);

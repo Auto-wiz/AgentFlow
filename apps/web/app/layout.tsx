@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 import { AppChrome } from "./components/app-chrome";
+import { NavigationGuardProvider } from "./components/navigation-guard-provider";
 import { WorkspaceAuthGate } from "./components/workspace-auth-gate";
 import { WorkspaceAuthProvider } from "./components/workspace-auth-provider";
 
@@ -17,7 +18,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <WorkspaceAuthProvider>
           <WorkspaceAuthGate />
-          <AppChrome>{children}</AppChrome>
+          <NavigationGuardProvider>
+            <AppChrome>{children}</AppChrome>
+          </NavigationGuardProvider>
         </WorkspaceAuthProvider>
       </body>
     </html>

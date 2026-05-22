@@ -3,7 +3,7 @@
 import { getApiBaseUrl } from "../../../lib/api-base-url";
 import { mergeWorkspaceHeaders } from "../../../lib/workspace-api-headers";
 import { useWorkspaceAuth } from "../../components/workspace-auth-provider";
-import { useRouter } from "next/navigation";
+import { useGuardedNavigate } from "../../components/navigation-guard-provider";
 import { useEffect, useMemo, useState } from "react";
 
 type AdminUserRow = {
@@ -25,7 +25,7 @@ type LocationOption = {
 
 export default function WorkspaceAdminSettingsPage() {
   const apiBaseUrl = getApiBaseUrl();
-  const router = useRouter();
+  const { replaceGuarded } = useGuardedNavigate();
   const { user, hydrated, sessionKey } = useWorkspaceAuth();
 
   const [users, setUsers] = useState<AdminUserRow[]>([]);
@@ -56,9 +56,9 @@ export default function WorkspaceAdminSettingsPage() {
       return;
     }
     if (user?.role !== "admin") {
-      router.replace("/settings");
+      void replaceGuarded("/settings");
     }
-  }, [hydrated, router, user?.role]);
+  }, [hydrated, replaceGuarded, user?.role]);
 
   useEffect(() => {
     let cancelled = false;
@@ -206,9 +206,9 @@ export default function WorkspaceAdminSettingsPage() {
         <p className="eyebrow">Workspace</p>
         <h2 style={{ marginTop: 8 }}>User access</h2>
         <p className="muted">
-          Workspace users are created when they authenticate with GoHighLevel (provisioned via OAuth). Here you configure which subaccounts
-          are enabled by default for each user (<code className="muted">role=user</code>). Administrator role can only be
-          assigned manually in the database.
+          Workspace users can sign in via GoHighLevel OAuth (provisioned automatically) or with email/password when an
+          admin creates them under <strong>Create users</strong>. Here you configure which subaccounts each standard user{" "}
+          (<code className="muted">role=user</code>) can see until they personalize their picker.
         </p>
         {headerNote ? <p className="muted" style={{ marginTop: 10 }}>{headerNote}</p> : null}
       </div>

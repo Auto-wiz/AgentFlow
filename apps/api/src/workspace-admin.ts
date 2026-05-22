@@ -3,6 +3,7 @@ import { locations, workspaceUsers } from "@agentflow/db";
 import { asc, eq } from "drizzle-orm";
 import type { Context } from "hono";
 
+import { hashPassword, normalizeEmail } from "./auth-lib.js";
 import { resolveSessionUser, type WorkspaceJwtEnv } from "./workspace-access.js";
 import {
   assertAllLocationIdsExist,
@@ -49,6 +50,68 @@ export async function adminListUsers(c: Context<HonoBindings>) {
     .from(workspaceUsers)
     .orderBy(asc(workspaceUsers.ghlUserId), asc(workspaceUsers.createdAt));
   return c.json({ users: rows });
+}
+
+/** Provision a workspace user that signs in with email + password (admin only). */
+export async function adminPostWorkspaceUser(c: Context<HonoBindings>) {
+  const admin = await assertAdminSession(c);
+  if (!admin) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+
+  const body = asRecord(await c.req.json().catch(() => ({})));
+  const emailRaw = typeof body.email === "string" ? body.email.trim() : "";
+  const passwordRaw = typeof body.password === "string" ? body.password : "";
+  const displayNameRaw = typeof body.displayName === "string" ? body.displayName.trim() : "";
+  const requestedRole =
+    body.role === "admin" || body.role === "user" ? (body.role as "admin" | "user") : "user";
+
+  if (!emailRaw || !passwordRaw || passwordRaw.length < 8) {
+    return c.json(
+      { error: "invalid_body", message: "Valid email and password (at least 8 characters) required" },
+      400
+    );
+  }
+
+  const email = normalizeEmail(emailRaw);
+  const db = createDb(c.env.DATABASE_URL);
+
+  const [duplicate] = await db
+    .select({ id: workspaceUsers.id })
+    .from(workspaceUsers)
+    .where(eq(workspaceUsers.email, email))
+    .limit(1);
+
+  if (duplicate) {
+    return c.json({ error: "email_taken", message: "That email already exists in this workspace." }, 409);
+  }
+
+  const passwordHash = await hashPassword(passwordRaw);
+  const displayName = displayNameRaw.length > 0 ? displayNameRaw : null;
+  const now = new Date();
+
+  const [inserted] = await db
+    .insert(workspaceUsers)
+    .values({
+      email,
+      passwordHash,
+      displayName,
+      role: requestedRole,
+      updatedAt: now
+    })
+    .returning({
+      id: workspaceUsers.id,
+      email: workspaceUsers.email,
+      displayName: workspaceUsers.displayName,
+      role: workspaceUsers.role,
+      createdAt: workspaceUsers.createdAt
+    });
+
+  if (!inserted) {
+    return c.json({ error: "insert_failed" }, 500);
+  }
+
+  return c.json({ user: inserted }, 201);
 }
 
 export async function adminListLocations(c: Context<HonoBindings>) {
