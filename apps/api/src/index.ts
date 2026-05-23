@@ -51,6 +51,7 @@ import type {
   ThreadOpportunity
 } from "@agentflow/shared";
 import { and, desc, eq, exists, inArray, not, notExists, notInArray, or, sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -1357,15 +1358,8 @@ function ghlContactIdFromAppointmentRawForDebug(raw: unknown): string | null {
  */
 app.get("/debug/appointment-payment-trace", async (c) => {
   const appointmentIdRaw = String(c.req.query("appointmentId") ?? "").trim();
-  if (!isUuid(appointmentIdRaw)) {
-    return c.json(
-      {
-        error: "invalid_appointment_id",
-        hint: "Pass query ?appointmentId=<uuid> matching appointments.id (internal id from AgentFlow)."
-      },
-      400
-    );
-  }
+  const ghlAppointmentLookup = String(c.req.query("ghlAppointmentId") ?? "").trim();
+  const locationIdForGhlLookup = String(c.req.query("locationId") ?? "").trim();
 
   const db = createDb(c.env.DATABASE_URL);
   const policy = await resolveAccessPolicy(c, c.env);
@@ -1373,22 +1367,63 @@ app.get("/debug/appointment-payment-trace", async (c) => {
     return c.json({ error: "unauthorized" }, 401);
   }
 
-  const aptFilters = [eq(appointments.id, appointmentIdRaw)];
+  const jwtAllowed = await jwtWorkspaceAllowedLocationUuidList(db, policy);
 
+  const accessFilters: SQL[] = [];
   if (policy.kind === "legacy") {
     const hiddenLocationIds = await getHiddenLocationIdsForPolicy(db, policy);
     if (hiddenLocationIds.length > 0) {
-      aptFilters.push(notInArray(appointments.locationId, hiddenLocationIds));
+      accessFilters.push(notInArray(appointments.locationId, hiddenLocationIds));
     }
   }
+  appendJwtWorkspaceLocationConstraint(accessFilters, jwtAllowed, appointments.locationId);
 
-  appendJwtWorkspaceLocationConstraint(
-    aptFilters,
-    await jwtWorkspaceAllowedLocationUuidList(db, policy),
-    appointments.locationId
-  );
+  /** One row under caller scope, or null. */
+  const findAppointmentIdInScope = async (whereCore: SQL) => {
+    const fullWhere = accessFilters.length ? and(whereCore, ...accessFilters) : whereCore;
+    const [hit] = await db
+      .select({ id: appointments.id })
+      .from(appointments)
+      .where(fullWhere)
+      .limit(1);
+    return hit?.id ?? null;
+  };
 
-  const aptWhere = aptFilters.length === 1 ? aptFilters[0] : and(...aptFilters);
+  let resolvedAppointmentId: string | null = null;
+
+  if (isUuid(appointmentIdRaw)) {
+    resolvedAppointmentId = await findAppointmentIdInScope(eq(appointments.id, appointmentIdRaw));
+  } else if (ghlAppointmentLookup !== "" && isUuid(locationIdForGhlLookup)) {
+    const ghlRowMatch = and(
+      eq(appointments.locationId, locationIdForGhlLookup),
+      eq(appointments.ghlAppointmentId, ghlAppointmentLookup)
+    );
+    resolvedAppointmentId = await findAppointmentIdInScope(ghlRowMatch!);
+  } else {
+    return c.json(
+      {
+        error: "invalid_lookup",
+        hint:
+          "Either ?appointmentId=<uuid> (AgentFlow internal id from GET /appointments), or ?locationId=<location uuid>&ghlAppointmentId=<GHL string> (e.g. WOcWeqZuP8KWxzRX3JOI)."
+      },
+      400
+    );
+  }
+
+  if (!resolvedAppointmentId) {
+    return c.json(
+      {
+        error: "not_found",
+        hint: "No appointment in your visible locations (JWT scope / legacy). Check id, or locationId + ghlAppointmentId."
+      },
+      404
+    );
+  }
+
+  const aptWhere = (() => {
+    const idPart = eq(appointments.id, resolvedAppointmentId);
+    return accessFilters.length ? and(idPart, ...accessFilters) : idPart;
+  })();
 
   const [aptRow] = await db
     .select({
@@ -1410,13 +1445,7 @@ app.get("/debug/appointment-payment-trace", async (c) => {
     .limit(1);
 
   if (!aptRow) {
-    return c.json(
-      {
-        error: "not_found",
-        hint: "No appointment rows for id + visible locations (JWT scope / legacy hidden list)."
-      },
-      404
-    );
+    return c.json({ error: "not_found", hint: "Appointment row missing after resolve (unexpected)." }, 404);
   }
 
   const p = buildAppointmentPaymentCorrelationParts(db);
@@ -1506,6 +1535,13 @@ app.get("/debug/appointment-payment-trace", async (c) => {
       "`appointments.start_time` IS NULL → the invoice-paid EXISTS branch cannot match (`start_time IS NOT NULL` gate). Orders may still match via null-start-time temporal path or appointment-linked altId."
     );
   }
+  if (!aptRow.contactId) {
+    hints.push(
+      "`appointments.contact_id` IS NULL → party matching relies on raw JSON GoHighLevel `contactId` resolved to `contacts.ghl_contact_id` EXISTS (invoice + strict order branches). Loose order alt-link skips contact predicates."
+    );
+  }
+
+  return c.json({
     appointment: {
       id: aptRow.id,
       locationId: aptRow.locationId,
