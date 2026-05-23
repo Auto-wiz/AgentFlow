@@ -956,7 +956,12 @@ function appointmentCancelledOnlySql() {
   )`;
 }
 
-function buildAppointmentPaidSubquery(db: ReturnType<typeof createDb>) {
+/**
+ * Appointment↔payment correlation (invoices + GHL orders). Keeps fragments in sync for list queries and /debug traces.
+ *
+ * Invoice path requires appointments.start_time IS NOT NULL. Order paths add fallbacks without start_time and alt-linkage.
+ */
+function buildAppointmentPaymentCorrelationParts(db: ReturnType<typeof createDb>) {
   const invoiceTsSql = sql`coalesce(${invoices.ghlUpdatedAt}, ${invoices.issueDate}, ${invoices.dueDate}, ${invoices.updatedAt}, ${invoices.createdAt})`;
 
   const invoiceMatchWhere = and(
@@ -1011,21 +1016,46 @@ function buildAppointmentPaidSubquery(db: ReturnType<typeof createDb>) {
   );
 
   const invoiceSubq = db.select({ one: sql`1`.as("one") }).from(invoices).where(invoiceMatchWhere);
-  const orderSubq = db
+  const orderTemporalOnlySubq = db
+    .select({ one: sql`1`.as("one") })
+    .from(ghlPaymentOrders)
+    .where(orderTemporalMatch);
+  const orderNoStartSubq = db
+    .select({ one: sql`1`.as("one") })
+    .from(ghlPaymentOrders)
+    .where(orderTemporalMatchNoStartTime);
+  const orderAltLinkSubq = db
+    .select({ one: sql`1`.as("one") })
+    .from(ghlPaymentOrders)
+    .where(orderAltAppointmentMatch);
+  const orderAltLooseLinkSubq = db
+    .select({ one: sql`1`.as("one") })
+    .from(ghlPaymentOrders)
+    .where(orderAltAppointmentMatchLooseContact);
+
+  const orderCombinedSubq = db
     .select({ one: sql`1`.as("one") })
     .from(ghlPaymentOrders)
     .where(
-      or(
-        orderTemporalMatch,
-        orderTemporalMatchNoStartTime,
-        orderAltAppointmentMatch,
-        orderAltAppointmentMatchLooseContact
-      )
+      or(orderTemporalMatch, orderTemporalMatchNoStartTime, orderAltAppointmentMatch, orderAltAppointmentMatchLooseContact)
     );
 
-  const paidInvoice = exists(invoiceSubq);
-  const paidOrder = exists(orderSubq);
-  return sql<boolean>`(${paidInvoice}) OR (${paidOrder})`;
+  return {
+    invoicePaidExists: exists(invoiceSubq),
+    /** Any order-based path matched (same as `(orderCombinedSubq)`). */
+    orderPaidExists: exists(orderCombinedSubq),
+    /** Order match only when start_time populated + temporal window holds. */
+    orderTemporalPaidExists: exists(orderTemporalOnlySubq),
+    orderNoStartTimePaidExists: exists(orderNoStartSubq),
+    /** Order altId = appointment GHL id and alt type references appointment — full contact predicates. */
+    orderAltAppointmentLinkExists: exists(orderAltLinkSubq),
+    orderAltAppointmentLinkLooseExists: exists(orderAltLooseLinkSubq)
+  };
+}
+
+function buildAppointmentPaidSubquery(db: ReturnType<typeof createDb>) {
+  const p = buildAppointmentPaymentCorrelationParts(db);
+  return sql<boolean>`(${p.invoicePaidExists}) OR (${p.orderPaidExists})`;
 }
 
 function toMaybeIso(value: unknown): string | null {
@@ -1292,6 +1322,227 @@ app.get("/debug/location/:ghlLocationId", async (c) => {
     headers: {
       "Content-Type": contentType
     }
+  });
+});
+
+/** Mirrors `appointmentWebhookGhlContactIdFromRawSql` for readable debug output (appointment row only). */
+function ghlContactIdFromAppointmentRawForDebug(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const envelope = raw as Record<string, unknown>;
+  const fromNestedAppointment = (): string | undefined => {
+    const ap = envelope.appointment;
+    if (!ap || typeof ap !== "object") {
+      return undefined;
+    }
+    const v = (ap as Record<string, unknown>).contactId;
+    return typeof v === "string" ? v.trim() : undefined;
+  };
+  const fromTop = (): string | undefined => {
+    const v = envelope.contactId;
+    return typeof v === "string" ? v.trim() : undefined;
+  };
+  const pick = fromNestedAppointment() ?? fromTop();
+  if (!pick) {
+    return null;
+  }
+  const unquoted = pick.replace(/^"|"$/g, "").trim();
+  return unquoted || null;
+}
+
+/**
+ * Authorized same as `/appointments`: JWT location scope / legacy visibility.
+ * Answers which SQL branch correlated payment for this UUID and lists nearby invoices/orders.
+ */
+app.get("/debug/appointment-payment-trace", async (c) => {
+  const appointmentIdRaw = String(c.req.query("appointmentId") ?? "").trim();
+  if (!isUuid(appointmentIdRaw)) {
+    return c.json(
+      {
+        error: "invalid_appointment_id",
+        hint: "Pass query ?appointmentId=<uuid> matching appointments.id (internal id from AgentFlow)."
+      },
+      400
+    );
+  }
+
+  const db = createDb(c.env.DATABASE_URL);
+  const policy = await resolveAccessPolicy(c, c.env);
+  if (!policy) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  const aptFilters = [eq(appointments.id, appointmentIdRaw)];
+
+  if (policy.kind === "legacy") {
+    const hiddenLocationIds = await getHiddenLocationIdsForPolicy(db, policy);
+    if (hiddenLocationIds.length > 0) {
+      aptFilters.push(notInArray(appointments.locationId, hiddenLocationIds));
+    }
+  }
+
+  appendJwtWorkspaceLocationConstraint(
+    aptFilters,
+    await jwtWorkspaceAllowedLocationUuidList(db, policy),
+    appointments.locationId
+  );
+
+  const aptWhere = aptFilters.length === 1 ? aptFilters[0] : and(...aptFilters);
+
+  const [aptRow] = await db
+    .select({
+      id: appointments.id,
+      locationId: appointments.locationId,
+      contactId: appointments.contactId,
+      ghlAppointmentId: appointments.ghlAppointmentId,
+      title: appointments.title,
+      status: appointments.status,
+      startTime: appointments.startTime,
+      dateAdded: appointments.dateAdded,
+      dateUpdated: appointments.dateUpdated,
+      createdAt: appointments.createdAt,
+      updatedAt: appointments.updatedAt,
+      raw: appointments.raw
+    })
+    .from(appointments)
+    .where(aptWhere)
+    .limit(1);
+
+  if (!aptRow) {
+    return c.json(
+      {
+        error: "not_found",
+        hint: "No appointment rows for id + visible locations (JWT scope / legacy hidden list)."
+      },
+      404
+    );
+  }
+
+  const p = buildAppointmentPaymentCorrelationParts(db);
+  const [corrRow] = await db
+    .select({
+      isPaid: sql<boolean>`(${p.invoicePaidExists}) OR (${p.orderPaidExists})`,
+      matchedViaInvoicePath: p.invoicePaidExists,
+      matchedViaOrderAny: p.orderPaidExists,
+      matchedOrderTemporalWithStartTime: p.orderTemporalPaidExists,
+      matchedOrderTemporalNoAppointmentStartTime: p.orderNoStartTimePaidExists,
+      matchedOrderAltAppointmentLinkStrict: p.orderAltAppointmentLinkExists,
+      matchedOrderAltAppointmentLinkLooseContactSkipped: p.orderAltAppointmentLinkLooseExists
+    })
+    .from(appointments)
+    .where(aptWhere)
+    .limit(1);
+
+  const ghlContactProbe = ghlContactIdFromAppointmentRawForDebug(aptRow.raw);
+
+  const orderStripe = {
+    id: ghlPaymentOrders.id,
+    ghlOrderId: ghlPaymentOrders.ghlOrderId,
+    contactId: ghlPaymentOrders.contactId,
+    altId: ghlPaymentOrders.altId,
+    altType: ghlPaymentOrders.altType,
+    status: ghlPaymentOrders.status,
+    fulfillmentStatus: ghlPaymentOrders.fulfillmentStatus,
+    amount: ghlPaymentOrders.amount,
+    ghlUpdatedAt: ghlPaymentOrders.ghlUpdatedAt,
+    ghlCreatedAt: ghlPaymentOrders.ghlCreatedAt,
+    updatedAt: ghlPaymentOrders.updatedAt
+  };
+
+  const ordersWithAltAppointment = await db
+    .select(orderStripe)
+    .from(ghlPaymentOrders)
+    .where(
+      and(
+        eq(ghlPaymentOrders.locationId, aptRow.locationId),
+        eq(ghlPaymentOrders.isDeleted, false),
+        eq(ghlPaymentOrders.altId, aptRow.ghlAppointmentId)
+      )
+    )
+    .limit(25);
+
+  const ordersSameContactFilters = [
+    eq(ghlPaymentOrders.locationId, aptRow.locationId),
+    eq(ghlPaymentOrders.isDeleted, false)
+  ];
+  if (aptRow.contactId) {
+    ordersSameContactFilters.push(eq(ghlPaymentOrders.contactId, aptRow.contactId));
+  }
+
+  const ordersSameContactCandidate = aptRow.contactId
+    ? await db
+        .select(orderStripe)
+        .from(ghlPaymentOrders)
+        .where(and(...ordersSameContactFilters))
+        .orderBy(desc(ghlPaymentOrders.updatedAt))
+        .limit(25)
+    : [];
+
+  const invoiceStripe = {
+    id: invoices.id,
+    ghlInvoiceId: invoices.ghlInvoiceId,
+    contactId: invoices.contactId,
+    status: invoices.status,
+    lastEventType: invoices.lastEventType,
+    amountPaid: invoices.amountPaid,
+    total: invoices.total,
+    ghlUpdatedAt: invoices.ghlUpdatedAt,
+    issueDate: invoices.issueDate
+  };
+
+  const invoicesSameContact = aptRow.contactId
+    ? await db
+        .select(invoiceStripe)
+        .from(invoices)
+        .where(and(eq(invoices.locationId, aptRow.locationId), eq(invoices.contactId, aptRow.contactId), eq(invoices.isDeleted, false)))
+        .orderBy(desc(invoices.updatedAt))
+        .limit(25)
+    : [];
+
+  const hints: string[] = [];
+  if (!aptRow.startTime) {
+    hints.push(
+      "`appointments.start_time` IS NULL → the invoice-paid EXISTS branch cannot match (`start_time IS NOT NULL` gate). Orders may still match via null-start-time temporal path or appointment-linked altId."
+    );
+  }
+    appointment: {
+      id: aptRow.id,
+      locationId: aptRow.locationId,
+      contactId: aptRow.contactId,
+      ghlAppointmentId: aptRow.ghlAppointmentId,
+      title: aptRow.title,
+      status: aptRow.status,
+      startTime: aptRow.startTime?.toISOString() ?? null,
+      dateAdded: aptRow.dateAdded?.toISOString() ?? null,
+      dateUpdated: aptRow.dateUpdated?.toISOString() ?? null,
+      appointmentCreatedAnchor: aptRow.createdAt?.toISOString() ?? null,
+      ghlContactIdFromAppointmentRawJson: ghlContactProbe,
+      correlation: corrRow
+        ? {
+            isPaidBoolean: coerceSqlBoolean(corrRow.isPaid),
+            matchedViaInvoicePath: coerceSqlBoolean(corrRow.matchedViaInvoicePath),
+            matchedViaOrderAny: coerceSqlBoolean(corrRow.matchedViaOrderAny),
+            orderBranchDetail: {
+              temporalWithStartTime: coerceSqlBoolean(corrRow.matchedOrderTemporalWithStartTime),
+              temporalWhenAppointmentMissingStartTime: coerceSqlBoolean(
+                corrRow.matchedOrderTemporalNoAppointmentStartTime
+              ),
+              altAppointmentStrict: coerceSqlBoolean(corrRow.matchedOrderAltAppointmentLinkStrict),
+              altAppointmentLooseContactSkipped: coerceSqlBoolean(
+                corrRow.matchedOrderAltAppointmentLinkLooseContactSkipped
+              )
+            }
+          }
+        : null
+    },
+    ordersLinkedByAppointmentAltId: ordersWithAltAppointment,
+    ordersSameContactRecent: ordersSameContactCandidate,
+    invoicesSameContactRecent: invoicesSameContact,
+    hints,
+    doc: [
+      "`GET /appointments` derives `paymentStatus` from `(invoice EXISTS) OR (order EXISTS)` with contact + timestamp windows documented in backend source beside `buildAppointmentPaymentCorrelationParts`."
+    ]
   });
 });
 
