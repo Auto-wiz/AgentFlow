@@ -50,7 +50,7 @@ import type {
   NormalizedGhlWebhookEvent,
   ThreadOpportunity
 } from "@agentflow/shared";
-import { and, desc, eq, exists, inArray, not, notExists, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, inArray, not, notExists, notInArray, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { Context } from "hono";
 import { Hono } from "hono";
@@ -69,6 +69,7 @@ import {
   meHandler,
   provisionWorkspaceUserFromGhlAccount,
   resolveAccessPolicy,
+  resolveSessionUser,
   signSessionForProvisionedUser,
   type AccessPolicy
 } from "./workspace-access.js";
@@ -129,6 +130,11 @@ type Env = {
   FRONTEND_BASE_URL?: string;
   MESSAGE_QUEUE: Queue<NormalizedGhlWebhookEvent>;
   JWT_SECRET?: string;
+  /**
+   * When set to a positive integer, the Worker scheduled handler drains up to that many unnamed
+   * `locations` per cron tick via GoHighLevel. `"0"` or unset disables scheduled hydration.
+   */
+  LOCATION_NAME_CRON_BATCH?: string;
 };
 
 type HonoBindings = {
@@ -282,6 +288,19 @@ app.get("/workspace/selection-matrix", workspaceSelectionMatrixHandler);
 app.get("/admin/workspace-users", adminListUsers);
 app.post("/admin/workspace-users", adminPostWorkspaceUser);
 app.get("/admin/workspace-locations", adminListLocations);
+app.post("/admin/locations/hydrate-missing-names", async (c) => {
+  const me = await resolveSessionUser(c, c.env);
+  if (!me || me.role !== "admin") {
+    return c.json({ error: "forbidden" }, 403);
+  }
+
+  const parsed = Number.parseInt(String(c.req.query("limit") ?? "25"), 10);
+  /** Keep each Worker invocation bounded; rerun the POST until backlogRemaining reaches 0. */
+  const limit = Number.isFinite(parsed) ? Math.min(60, Math.max(1, parsed)) : 25;
+
+  const body = await hydrateUnnamedLocationsCronBatch(c.env, limit);
+  return c.json(body);
+});
 app.get("/admin/workspace-users/:id/subaccounts", adminGetUserSubaccounts);
 app.put("/admin/workspace-users/:id/subaccounts", adminPutUserSubaccounts);
 
@@ -1181,9 +1200,9 @@ app.get("/subaccounts/overview", async (c) => {
   const visibilityByLocation = new Map(visibilityRows.map((row) => [row.locationId, row.isVisible]));
   const jwtSelectionNullable = rowsToNullableSelectionSet(workspaceSelectionRows);
 
-  /** Lightweight surfaces only need UUID↔counts; skip unbounded sequential GHL name hydration (CPU/Wall timeouts at scale). */
+  /** Heavier surface: drain more missing GHL names per request (still capped vs hundreds of sequential API calls per Worker invocation). */
   const hydrateNameBudget =
-    surface === "threads" || surface === "appointments" ? 0 : 35;
+    surface === "threads" || surface === "appointments" ? 0 : 60;
 
   const locationNameMap = await hydrateMissingLocationNames(
     c.env,
@@ -3720,6 +3739,81 @@ async function hydrateMissingLocationNames(
   return locationNameMap;
 }
 
+async function hydrateUnnamedLocationsCronBatch(env: Env, requestedLimit: number) {
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.min(80, Math.max(1, Math.floor(requestedLimit)))
+    : 25;
+
+  const db = createDb(env.DATABASE_URL);
+
+  const candidates = await db
+    .select({
+      locationId: locations.id,
+      ghlLocationId: locations.ghlLocationId,
+      locationName: locations.name
+    })
+    .from(locations)
+    .where(sql`(coalesce(trim(${locations.name}), '') = '')`)
+    .orderBy(asc(locations.ghlLocationId))
+    .limit(limit);
+
+  if (candidates.length === 0) {
+    const backlogRows = await db
+      .select({ backlog: sql<number>`count(*)::int` })
+      .from(locations)
+      .where(sql`(coalesce(trim(${locations.name}), '') = '')`);
+    const backlog = backlogRows[0]?.backlog ?? 0;
+
+    return {
+      ok: true as const,
+      message: "no_unnamed_locations_in_batch_scope",
+      batchLimit: limit,
+      backlogRemaining: backlog,
+      lookupsAttempted: 0,
+      hydratedRowsInBatch: 0
+    };
+  }
+
+  const beforeMissing = candidates.filter((row) => !row.locationName || !String(row.locationName).trim()).length;
+
+  const mapAfter = await hydrateMissingLocationNames(
+    env,
+    db,
+    candidates.map((row) => ({
+      locationId: row.locationId,
+      ghlLocationId: row.ghlLocationId,
+      locationName: row.locationName
+    })),
+    { maxOutboundLookups: limit }
+  );
+
+  const hydratedRowsInBatch = candidates.filter((row) => {
+    const resolved = mapAfter.get(row.locationId) ?? row.locationName;
+    return Boolean(resolved && String(resolved).trim());
+  }).length;
+
+  const backlogRows = await db
+    .select({ backlogRemaining: sql<number>`count(*)::int` })
+    .from(locations)
+    .where(sql`(coalesce(trim(${locations.name}), '') = '')`);
+
+  const backlogRemaining = backlogRows[0]?.backlogRemaining ?? 0;
+
+  return {
+    ok: true as const,
+    batchLimit: limit,
+    candidatesQueued: candidates.length,
+    unnamedInBatchBefore: beforeMissing,
+    lookupsAttempted: Math.min(limit, beforeMissing || candidates.length),
+    hydratedRowsInBatch,
+    backlogRemaining,
+    rerunHint:
+      backlogRemaining > 0
+        ? "POST admin/hydrate-missing-names again or raise LOCATION_NAME_CRON_BATCH scheduled backfill until backlogRemaining is 0."
+        : "All locations now have non-empty names in DB."
+  };
+}
+
 async function hydrateMissingContactFields(
   env: Env,
   db: ReturnType<typeof createDb>,
@@ -5635,6 +5729,24 @@ function toCustomFields(value: unknown): ContactOnDemandDetails["customFields"] 
 
 export default {
   fetch: app.fetch,
+  async scheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext) {
+    const raw = env.LOCATION_NAME_CRON_BATCH?.trim();
+    if (!raw || raw === "0") {
+      return;
+    }
+
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return;
+    }
+
+    try {
+      const summary = await hydrateUnnamedLocationsCronBatch(env, parsed);
+      console.log("[scheduled.location_names]", summary);
+    } catch (error) {
+      console.warn("[scheduled.location_names.failed]", error);
+    }
+  },
   async queue(batch: MessageBatch<NormalizedGhlWebhookEvent>, env: Env) {
     for (const message of batch.messages) {
       try {
