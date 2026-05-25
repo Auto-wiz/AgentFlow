@@ -1,11 +1,10 @@
-name = "agentflow-api"
+name = "agenflow-back"
 main = "src/index.ts"
 compatibility_date = "2026-05-12"
 compatibility_flags = ["nodejs_compat"]
 
-# Raised so batched Neon HTTP + outbound GHL fetches avoid "Too many subrequests" mid-handler.
-[limits]
-subrequests = 10000
+# Subrequest budget: custom [limits] subrequests requires a paid Workers plan (Free deploy fails API 100328).
+# On Free, rely on default limits + small hydrate batches. Upgrade and set limits in the dashboard if needed.
 
 # Cron runs every 15m; LOCATION_NAME_CRON_BATCH="0" (default below) skips GHL hydration for unnamed locations.
 # Set LOCATION_NAME_CRON_BATCH to e.g. 8 in Dashboard or `[vars]` to drain blank `locations.name` over time.
@@ -14,7 +13,7 @@ subrequests = 10000
 #   LOCATION_NAMES_REFRESH_BATCH — max GHL lookups per tick for rows that already have a display name (e.g. "4").
 #   LOCATION_NAMES_REFRESH_STALE_AFTER_DAYS — eligibility window (default "2").
 #   LOCATION_NAMES_REFRESH_HOUR_UTC — if set ("0"-"23"), only run refresh batches during that UTC hour.
-[[triggers]]
+[triggers]
 crons = ["*/15 * * * *"]
 
 [vars]
