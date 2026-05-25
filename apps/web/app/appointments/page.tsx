@@ -349,49 +349,48 @@ export default function AppointmentsPage() {
             </button>
           </div>
         </div>
-        <div className="appointments-header-filters-tail">
-          <div className="appointments-filter-field appointments-filter-times appointments-filter-inline">
-            <span className="appointments-filter-label">Hidden</span>
-            <div className="appointments-time-buttons">
-              <button
-                className={`button ${hiddenFilter === "omit" ? "" : "secondary"}`}
-                onClick={() => setHiddenFilter("omit")}
-                title="Exclude appointments marked hidden"
-                type="button"
-              >
-                Default
-              </button>
-              <button
-                className={`button ${hiddenFilter === "include" ? "" : "secondary"}`}
-                onClick={() => setHiddenFilter("include")}
-                title="Include hidden rows alongside normal list"
-                type="button"
-              >
-                Show all
-              </button>
-              <button
-                className={`button ${hiddenFilter === "only" ? "" : "secondary"}`}
-                onClick={() => setHiddenFilter("only")}
-                title="Recover rows hidden by mistake"
-                type="button"
-              >
-                Hidden only
-              </button>
-            </div>
-          </div>
-          <div className="appointments-filter-field appointments-filter-inline">
-            <span className="appointments-filter-label" style={{ visibility: "hidden", userSelect: "none" }}>
-              ·
-            </span>
+        <div className="appointments-filter-field appointments-filter-times appointments-filter-inline">
+          <span className="appointments-filter-label">Hidden</span>
+          <div className="appointments-time-buttons">
             <button
+              className={`button ${hiddenFilter === "omit" ? "" : "secondary"}`}
+              onClick={() => setHiddenFilter("omit")}
+              title="Exclude appointments marked hidden"
               type="button"
-              className="button secondary"
-              disabled={!selectedAppointmentId || Boolean(loading && appointments.length === 0)}
-              onClick={() => setOverridesOpen(true)}
             >
-              Appointment overrides…
+              Default
+            </button>
+            <button
+              className={`button ${hiddenFilter === "include" ? "" : "secondary"}`}
+              onClick={() => setHiddenFilter("include")}
+              title="Include hidden rows alongside normal list"
+              type="button"
+            >
+              Show all
+            </button>
+            <button
+              className={`button ${hiddenFilter === "only" ? "" : "secondary"}`}
+              onClick={() => setHiddenFilter("only")}
+              title="Recover rows hidden by mistake"
+              type="button"
+            >
+              Hidden only
             </button>
           </div>
+        </div>
+        <div className="appointments-filter-field appointments-filter-inline">
+          <label className="appointments-filter-label" htmlFor="appointment-modify-btn">
+            Appointment
+          </label>
+          <button
+            className="button secondary appointments-modify-inline-button"
+            disabled={!selectedAppointmentId || Boolean(loading && appointments.length === 0)}
+            id="appointment-modify-btn"
+            type="button"
+            onClick={() => setOverridesOpen(true)}
+          >
+            Modify Appointment
+          </button>
         </div>
       </div>
     );
@@ -440,9 +439,10 @@ export default function AppointmentsPage() {
           role="dialog"
         >
           <div className="panel appointments-override-modal panel-narrow">
-            <h3 style={{ marginTop: 0 }}>Appointment overrides</h3>
+            <h3 style={{ marginTop: 0 }}>Modify Appointment</h3>
             <p className="muted" style={{ marginTop: 8 }}>
-              Manual rows override GoHighLevel payment correlation for visibility and filters only. Workspace JWT required.
+              Overrides apply only in AgentFlow (payment label and hiding from this list). They do not change GoHighLevel.
+              Saving requires a workspace sign-in JWT.
             </p>
             <p className="muted" style={{ fontSize: 13 }}>
               {selectedAppointment.contactName} ·{" "}
