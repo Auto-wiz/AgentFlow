@@ -38,7 +38,7 @@ type SeriesResponse = {
     bookedAppointments: number;
     appointmentsWithCollectedPayment: number;
     depositsCollectedPercentage: number | null;
-    depositsCollectedAmountCents: number;
+    depositsCollectedAmount: number;
     depositsCollectedFormatted: string;
   };
   series: SeriesBucket[];

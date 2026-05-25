@@ -26,6 +26,10 @@ import {
 
 type Env = WorkspaceJwtEnv;
 
+/**
+ * Dashboard deposit sums use the same integer storage as webhooks (`normalizeMoneyAmount` → rounded major
+ * currency units from GoHighLevel, typically whole USD — not cents). Formatting must not divide by 100.
+ */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function isUuid(value: string) {
@@ -256,7 +260,7 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
     ? await db
         .select({
           locationId: ghlPaymentOrders.locationId,
-          depositCents: sql<number>`coalesce(sum(cast(${ghlPaymentOrders.amount} as bigint)), 0)::bigint`.as("depositCents")
+          depositSum: sql<number>`coalesce(sum(cast(${ghlPaymentOrders.amount} as bigint)), 0)::bigint`.as("depositSum")
         })
         .from(ghlPaymentOrders)
         .where(orderWhereCombined)
@@ -267,7 +271,7 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
     ? await db
         .select({
           locationId: invoices.locationId,
-          depositCents: sql<number>`coalesce(sum(cast(${invoices.amountPaid} as bigint)), 0)::bigint`.as("depositCents")
+          depositSum: sql<number>`coalesce(sum(cast(${invoices.amountPaid} as bigint)), 0)::bigint`.as("depositSum")
         })
         .from(invoices)
         .where(invoiceWhereCombined)
@@ -276,11 +280,11 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
 
   const amountByLocation = new Map<string, bigint>();
   for (const row of ordersByLoc) {
-    amountByLocation.set(row.locationId, BigInt(Number(row.depositCents ?? 0)));
+    amountByLocation.set(row.locationId, BigInt(Number(row.depositSum ?? 0)));
   }
   for (const row of invByLoc) {
     const cur = amountByLocation.get(row.locationId) ?? 0n;
-    amountByLocation.set(row.locationId, cur + BigInt(Number(row.depositCents ?? 0)));
+    amountByLocation.set(row.locationId, cur + BigInt(Number(row.depositSum ?? 0)));
   }
 
   const subaccounts = rollup
@@ -296,8 +300,8 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
         bookedAppointments: booked,
         appointmentsWithCollectedPayment: collectedCount,
         depositsCollectedPercentage: pct(collectedCount, booked),
-        depositsCollectedAmountCents: numAmount,
-        depositsCollectedFormatted: formatMoneyMinor(numAmount, null)
+        depositsCollectedAmount: numAmount,
+        depositsCollectedFormatted: formatDashboardDeposits(numAmount, null)
       };
     })
     .sort((a, b) => b.bookedAppointments - a.bookedAppointments || (a.locationName ?? "").localeCompare(b.locationName ?? ""));
@@ -310,7 +314,7 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
   }
 
   /** Sum of invoice + paid order totals in-window for all scoped locations (may include locations without bookings). */
-  const totalsDepositMinor = [...amountByLocation.values()].reduce((a, b) => a + b, 0n);
+  const totalsDepositAmount = [...amountByLocation.values()].reduce((a, b) => a + b, 0n);
 
   return c.json({
     fromInclusive: from.toISOString(),
@@ -319,23 +323,22 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
       bookedAppointments: sumBooked,
       appointmentsWithCollectedPayment: sumCollected,
       depositsCollectedPercentage: pct(sumCollected, sumBooked),
-      depositsCollectedAmountCents: Number(totalsDepositMinor),
-      depositsCollectedFormatted: formatMoneyMinor(Number(totalsDepositMinor), null)
+      depositsCollectedAmount: Number(totalsDepositAmount),
+      depositsCollectedFormatted: formatDashboardDeposits(Number(totalsDepositAmount), null)
     },
     subaccounts
   });
 }
 
-function formatMoneyMinor(centsOrMinorUnits: number, currency: string | null) {
-  if (!Number.isFinite(centsOrMinorUnits)) {
+function formatDashboardDeposits(amountMajor: number, currency: string | null) {
+  if (!Number.isFinite(amountMajor)) {
     return "—";
   }
-  const digits = centsOrMinorUnits / 100;
   const nf = new Intl.NumberFormat("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   });
-  const num = nf.format(digits);
+  const num = nf.format(amountMajor);
   const cur = currency?.trim()?.toUpperCase();
   return cur ? `${num} ${cur}` : `$${num}`;
 }
@@ -403,7 +406,7 @@ export async function getWorkspaceDashboardSubaccountSeriesHandler(c: Context<{ 
   const [orderTotals] = orderWhere
     ? await db
         .select({
-          depositCents: sql<number>`coalesce(sum(cast(${ghlPaymentOrders.amount} as bigint)), 0)::bigint`.as("depositCents")
+          depositSum: sql<number>`coalesce(sum(cast(${ghlPaymentOrders.amount} as bigint)), 0)::bigint`.as("depositSum")
         })
         .from(ghlPaymentOrders)
         .where(orderWhere)
@@ -412,14 +415,14 @@ export async function getWorkspaceDashboardSubaccountSeriesHandler(c: Context<{ 
   const [invTotals] = invoiceWhere
     ? await db
         .select({
-          depositCents: sql<number>`coalesce(sum(cast(${invoices.amountPaid} as bigint)), 0)::bigint`.as("depositCents")
+          depositSum: sql<number>`coalesce(sum(cast(${invoices.amountPaid} as bigint)), 0)::bigint`.as("depositSum")
         })
         .from(invoices)
         .where(invoiceWhere)
     : [];
 
-  const totalMinor =
-    BigInt(Number(orderTotals?.depositCents ?? 0)) + BigInt(Number(invTotals?.depositCents ?? 0));
+  const totalDepositsAmount =
+    BigInt(Number(orderTotals?.depositSum ?? 0)) + BigInt(Number(invTotals?.depositSum ?? 0));
 
   const [sums] = appointmentWhereSingle
     ? await db
@@ -482,8 +485,8 @@ export async function getWorkspaceDashboardSubaccountSeriesHandler(c: Context<{ 
       bookedAppointments: booked,
       appointmentsWithCollectedPayment: collected,
       depositsCollectedPercentage: pct(collected, booked),
-      depositsCollectedAmountCents: Number(totalMinor),
-      depositsCollectedFormatted: formatMoneyMinor(Number(totalMinor), currRow?.currency ?? null)
+      depositsCollectedAmount: Number(totalDepositsAmount),
+      depositsCollectedFormatted: formatDashboardDeposits(Number(totalDepositsAmount), currRow?.currency ?? null)
     },
     series
   });

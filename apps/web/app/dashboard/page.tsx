@@ -18,7 +18,7 @@ type OverviewRow = {
   bookedAppointments: number;
   appointmentsWithCollectedPayment: number;
   depositsCollectedPercentage: number | null;
-  depositsCollectedAmountCents: number;
+  depositsCollectedAmount: number;
   depositsCollectedFormatted: string;
 };
 
@@ -89,7 +89,7 @@ function compareRows(a: OverviewRow, b: OverviewRow, column: SortColumn, directi
       return tieBreak(a, b);
     }
     case "deposits": {
-      const diff = a.depositsCollectedAmountCents - b.depositsCollectedAmountCents;
+      const diff = a.depositsCollectedAmount - b.depositsCollectedAmount;
       if (diff !== 0) {
         return dir * diff;
       }
