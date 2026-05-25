@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2026-05-12"
 compatibility_flags = ["nodejs_compat"]
 
+# Raised so batched Neon HTTP + outbound GHL fetches avoid "Too many subrequests" mid-handler.
+[limits]
+subrequests = 10000
+
 # Cron runs every 15m; LOCATION_NAME_CRON_BATCH="0" (default below) skips GHL hydration (scheduled handler returns immediately).
 # Set LOCATION_NAME_CRON_BATCH to e.g. 30 in Dashboard or `[vars]` to drain blank `locations.name` over time.
 [[triggers]]

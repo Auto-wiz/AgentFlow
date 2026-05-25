@@ -130,10 +130,10 @@ https://api.agentflow.autowiz.net/oauth/gohighlevel/start
 Bulk OAuth often creates **`locations`** rows before HighLevel payloads include a readable name. Names are persisted when:
 
 1. **`LocationUpdate`/`Contact`/`Appointment`/`Message` webhooks** carry `event.location.name` (upsert uses `COALESCE` — first non-empty sticks).
-2. **`POST /admin/locations/hydrate-missing-names?limit=N`** (admin JWT) sequentially fetches from GHL and updates blank names. Use a **small `limit` (10–15)** per call and repeat until **`backlogRemaining`** is **`0`** — large batches can return **500** on Workers (subrequest / runtime limits).
-3. **`GET /subaccounts/overview?surface=all`** budgets a capped number of on-demand lookups per request (heavy subaccount lists still need (1)/(2)).
+2. **`POST /admin/locations/hydrate-missing-names?limit=N`** (admin JWT) sequentially fetches from GHL and updates blank names. **`limit` is capped at 10** — repeat until **`backlogRemaining`** reaches **`0`** (or **`null`** briefly: see **`rerunHint`** if the backlog tally hit subrequest limits). Every Cloudflare **`fetch`/`Subrequest`** counts (Neon over HTTP + GHL APIs). This repo sets **`[limits] subrequests`** in `apps/api/wrangler.toml` for paid accounts. **Workers Free** still caps external subrequests at **~50** regardless; use small batches, cron, or a paid Workers plan for huge backfills.
+3. **`GET /subaccounts/overview?surface=all`** budgets on-demand lookups per request (heavy lists still need (1)/(2)).
 
-To **eventually drain a large backlog** without manual looping, configure the Worker **`LOCATION_NAME_CRON_BATCH`** to a modest positive integer (e.g. **`30`** is read as “up to **15** lookups per cron tick” internally). The cron in `apps/api/wrangler.toml` runs every **15 minutes**; set the var to **`"0"`** (default in-repo) if you don’t want scheduled outbound GHL calls.
+To **eventually drain a large backlog** without manual looping, configure **`LOCATION_NAME_CRON_BATCH`** > 0 — each cron tick processes up to **10** unnamed locations (see `scheduled` handler).
 
 ## Validation
 

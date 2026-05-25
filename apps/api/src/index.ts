@@ -308,9 +308,9 @@ app.post("/admin/locations/hydrate-missing-names", async (c) => {
       return c.json({ error: "forbidden" }, 403);
     }
 
-    const parsed = Number.parseInt(String(c.req.query("limit") ?? "12"), 10);
-    /** Small batches avoid Worker subrequest/time ceilings (many GHL fetches + Neon per invocation). */
-    const limit = Number.isFinite(parsed) ? Math.min(15, Math.max(1, parsed)) : 12;
+    const parsed = Number.parseInt(String(c.req.query("limit") ?? "8"), 10);
+    /** Small batches: each unnamed location consumes multiple Neon HTTP + GHL fetches (Workers subrequests). */
+    const limit = Number.isFinite(parsed) ? Math.min(10, Math.max(1, parsed)) : 8;
 
     const body = await hydrateUnnamedLocationsCronBatch(c.env, limit);
     return c.json(body);
@@ -322,7 +322,7 @@ app.post("/admin/locations/hydrate-missing-names", async (c) => {
         ok: false as const,
         error: "hydrate_failed",
         message,
-        hint: "If message is a DB error, verify DATABASE_URL / Neon and that `locations.name` is `text`. Otherwise retry with limit=10–15 (Worker subrequest ceiling)."
+        hint: "If message mentions subrequests: batch size is capped; Worker needs [limits].subrequests in wrangler.toml (paid) or a smaller backlog. Hydrate retries are safe."
       },
       500
     );
@@ -3714,9 +3714,13 @@ async function hydrateMissingLocationNames(
   opts?: {
     /** Max distinct on-demand GHL lookups; 0 skips outbound calls. Omit = unlimited (list endpoints with small row counts). */
     maxOutboundLookups?: number;
+    /** Fewer Neon + OAuth subrequests when running cron/admin unnamed-location backlog (do not use for arbitrary single-row hydrate). */
+    hydrateBatchOAuthMode?: boolean;
   }
 ) {
   const locationNameMap = new Map(entries.map((entry) => [entry.locationId, entry.locationName]));
+
+  const hydrateTokenCache = opts?.hydrateBatchOAuthMode ? new Map<string, string[]>() : undefined;
 
   const missingByGhlId = new Map<string, string[]>();
   for (const entry of entries) {
@@ -3742,7 +3746,10 @@ async function hydrateMissingLocationNames(
     }
 
     try {
-      const fetchedName = await fetchLocationNameOnDemand(env, db, ghlLocationId);
+      const fetchedName = await fetchLocationNameOnDemand(env, db, ghlLocationId, {
+        hydrateBatchMode: Boolean(opts?.hydrateBatchOAuthMode),
+        tokenCache: hydrateTokenCache
+      });
       if (!fetchedName) {
         continue;
       }
@@ -3773,8 +3780,8 @@ function whereLocationHasNoDisplayName() {
 
 async function hydrateUnnamedLocationsCronBatch(env: Env, requestedLimit: number) {
   const limit = Number.isFinite(requestedLimit)
-    ? Math.min(80, Math.max(1, Math.floor(requestedLimit)))
-    : 25;
+    ? Math.min(15, Math.max(1, Math.floor(requestedLimit)))
+    : 12;
 
   const db = createDb(env.DATABASE_URL);
 
@@ -3816,7 +3823,7 @@ async function hydrateUnnamedLocationsCronBatch(env: Env, requestedLimit: number
       ghlLocationId: row.ghlLocationId,
       locationName: row.locationName
     })),
-    { maxOutboundLookups: limit }
+    { maxOutboundLookups: limit, hydrateBatchOAuthMode: true }
   );
 
   const hydratedRowsInBatch = candidates.filter((row) => {
@@ -3824,12 +3831,17 @@ async function hydrateUnnamedLocationsCronBatch(env: Env, requestedLimit: number
     return Boolean(resolved && String(resolved).trim());
   }).length;
 
-  const backlogRows = await db
-    .select({ backlogRemaining: sql<number>`count(*)::int` })
-    .from(locations)
-    .where(whereLocationHasNoDisplayName());
-
-  const backlogRemaining = backlogRows[0]?.backlogRemaining ?? 0;
+  let backlogRemaining: number | null = null;
+  try {
+    const backlogRows = await db
+      .select({ backlogRemaining: sql<number>`count(*)::int` })
+      .from(locations)
+      .where(whereLocationHasNoDisplayName());
+    backlogRemaining = backlogRows[0]?.backlogRemaining ?? 0;
+  } catch (err) {
+    console.warn("[hydrateUnnamedLocationsCronBatch] backlog count failed", err);
+    backlogRemaining = null;
+  }
 
   return {
     ok: true as const,
@@ -3840,9 +3852,11 @@ async function hydrateUnnamedLocationsCronBatch(env: Env, requestedLimit: number
     hydratedRowsInBatch,
     backlogRemaining,
     rerunHint:
-      backlogRemaining > 0
-        ? "POST admin/hydrate-missing-names again or raise LOCATION_NAME_CRON_BATCH scheduled backfill until backlogRemaining is 0."
-        : "All locations now have non-empty names in DB."
+      backlogRemaining === null
+        ? "Backlog tally failed mid-flight (often Worker subrequest limits). Raise [limits].subrequests per wrangler.toml, deploy, and rerun."
+        : backlogRemaining > 0
+          ? "POST admin/hydrate-missing-names again or enable LOCATION_NAME_CRON_BATCH scheduled backfill until backlogRemaining is 0."
+          : "All locations now have non-empty names in DB."
   };
 }
 
@@ -4084,8 +4098,15 @@ async function updateContactIdentity(
 async function getAccessTokensForLocation(
   env: Env,
   db: ReturnType<typeof createDb>,
-  ghlLocationId: string
+  ghlLocationId: string,
+  options?: {
+    /**
+     * Batched location-name hydration: skip global company-install scan; return early when Location OAuth rows already yield tokens.
+     */
+    hydrateBatchMode?: boolean;
+  }
 ) {
+  const hydrateBatch = options?.hydrateBatchMode === true;
   const tokenCandidates = new Set<string>();
   const addTokenCandidate = (value: string | null | undefined) => {
     const token = value?.trim();
@@ -4120,9 +4141,14 @@ async function getAccessTokensForLocation(
     }
   }
 
+  if (hydrateBatch && tokenCandidates.size > 0) {
+    addTokenCandidate(env.GHL_API_TOKEN?.trim());
+    return Array.from(tokenCandidates);
+  }
+
   const companyInstallations = [
     ...(await getCompanyOAuthInstallationsForLocation(db, ghlLocationId)),
-    ...(await getRecentCompanyOAuthInstallations(db, 5))
+    ...(hydrateBatch ? [] : await getRecentCompanyOAuthInstallations(db, 5))
   ];
   const seenCompanyTokens = new Set<string>();
   for (const installation of companyInstallations) {
@@ -4164,9 +4190,19 @@ async function getAccessTokensForLocation(
 async function fetchLocationNameOnDemand(
   env: Env,
   db: ReturnType<typeof createDb>,
-  ghlLocationId: string
+  ghlLocationId: string,
+  options?: {
+    hydrateBatchMode?: boolean;
+    tokenCache?: Map<string, string[]>;
+  }
 ): Promise<string | null> {
-  const accessTokens = await getAccessTokensForLocation(env, db, ghlLocationId);
+  let accessTokens = options?.tokenCache?.get(ghlLocationId);
+  if (!accessTokens) {
+    accessTokens = await getAccessTokensForLocation(env, db, ghlLocationId, {
+      hydrateBatchMode: options?.hydrateBatchMode
+    });
+    options?.tokenCache?.set(ghlLocationId, accessTokens);
+  }
   for (const accessToken of accessTokens) {
     const fetchedName = await fetchLocationNameWithToken(env, ghlLocationId, accessToken);
     if (fetchedName) {
@@ -5773,7 +5809,7 @@ export default {
     }
 
     try {
-      const batch = Math.min(15, parsed);
+      const batch = Math.min(10, parsed);
       const summary = await hydrateUnnamedLocationsCronBatch(env, batch);
       console.log("[scheduled.location_names]", summary);
     } catch (error) {
