@@ -130,14 +130,10 @@ https://api.agentflow.autowiz.net/oauth/gohighlevel/start
 Bulk OAuth often creates **`locations`** rows before HighLevel payloads include a readable name. Names are persisted when:
 
 1. **`LocationUpdate`/`Contact`/`Appointment`/`Message` webhooks** carry `event.location.name` (upsert uses `COALESCE` — first non-empty sticks).
-2. **`POST /admin/locations/hydrate-missing-names?limit=N`** (admin JWT) sequentially fetches from GHL and updates blank names; rerun until **`backlogRemaining`** is **`0`**.
+2. **`POST /admin/locations/hydrate-missing-names?limit=N`** (admin JWT) sequentially fetches from GHL and updates blank names. Use a **small `limit` (10–15)** per call and repeat until **`backlogRemaining`** is **`0`** — large batches can return **500** on Workers (subrequest / runtime limits).
 3. **`GET /subaccounts/overview?surface=all`** budgets a capped number of on-demand lookups per request (heavy subaccount lists still need (1)/(2)).
 
-To **eventually drain a large backlog** without manual looping, configure the Worker **`LOCATION_NAME_CRON_BATCH`** to a modest positive integer (e.g. `30`). The cron in `apps/api/wrangler.toml` runs every **15 minutes**; set the var to **`"0"`** (default in-repo) if you don’t want any scheduled outbound GHL calls.
-
-```txt
-LOCATION_NAME_CRON_BATCH=30
-```
+To **eventually drain a large backlog** without manual looping, configure the Worker **`LOCATION_NAME_CRON_BATCH`** to a modest positive integer (e.g. **`30`** is read as “up to **15** lookups per cron tick” internally). The cron in `apps/api/wrangler.toml` runs every **15 minutes**; set the var to **`"0"`** (default in-repo) if you don’t want scheduled outbound GHL calls.
 
 ## Validation
 

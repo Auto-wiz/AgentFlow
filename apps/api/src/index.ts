@@ -289,17 +289,31 @@ app.get("/admin/workspace-users", adminListUsers);
 app.post("/admin/workspace-users", adminPostWorkspaceUser);
 app.get("/admin/workspace-locations", adminListLocations);
 app.post("/admin/locations/hydrate-missing-names", async (c) => {
-  const me = await resolveSessionUser(c, c.env);
-  if (!me || me.role !== "admin") {
-    return c.json({ error: "forbidden" }, 403);
+  try {
+    const me = await resolveSessionUser(c, c.env);
+    if (!me || me.role !== "admin") {
+      return c.json({ error: "forbidden" }, 403);
+    }
+
+    const parsed = Number.parseInt(String(c.req.query("limit") ?? "12"), 10);
+    /** Small batches avoid Worker subrequest/time ceilings (many GHL fetches + Neon per invocation). */
+    const limit = Number.isFinite(parsed) ? Math.min(15, Math.max(1, parsed)) : 12;
+
+    const body = await hydrateUnnamedLocationsCronBatch(c.env, limit);
+    return c.json(body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[admin/locations/hydrate-missing-names]", error);
+    return c.json(
+      {
+        ok: false as const,
+        error: "hydrate_failed",
+        message,
+        hint: "Retry with limit=10–15; Workers free tier allows few outbound subrequests per request."
+      },
+      500
+    );
   }
-
-  const parsed = Number.parseInt(String(c.req.query("limit") ?? "25"), 10);
-  /** Keep each Worker invocation bounded; rerun the POST until backlogRemaining reaches 0. */
-  const limit = Number.isFinite(parsed) ? Math.min(60, Math.max(1, parsed)) : 25;
-
-  const body = await hydrateUnnamedLocationsCronBatch(c.env, limit);
-  return c.json(body);
 });
 app.get("/admin/workspace-users/:id/subaccounts", adminGetUserSubaccounts);
 app.put("/admin/workspace-users/:id/subaccounts", adminPutUserSubaccounts);
@@ -5741,7 +5755,8 @@ export default {
     }
 
     try {
-      const summary = await hydrateUnnamedLocationsCronBatch(env, parsed);
+      const batch = Math.min(15, parsed);
+      const summary = await hydrateUnnamedLocationsCronBatch(env, batch);
       console.log("[scheduled.location_names]", summary);
     } catch (error) {
       console.warn("[scheduled.location_names.failed]", error);
