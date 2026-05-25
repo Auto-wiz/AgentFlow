@@ -3785,31 +3785,38 @@ async function hydrateUnnamedLocationsCronBatch(env: Env, requestedLimit: number
 
   const db = createDb(env.DATABASE_URL);
 
-  const candidates = await db
-    .select({
-      locationId: locations.id,
-      ghlLocationId: locations.ghlLocationId,
-      locationName: locations.name
-    })
-    .from(locations)
-    .where(whereLocationHasNoDisplayName())
-    .orderBy(asc(locations.ghlLocationId))
-    .limit(limit);
+  const blankLocations = whereLocationHasNoDisplayName();
+
+  /** Count + peek candidates *before* GHL work so we don't spend final subrequest budgets on COUNT after heavy fetches. */
+  const [backlogPeek, candidates] = await Promise.all([
+    db.select({ backlog: sql<number>`count(*)::int` }).from(locations).where(blankLocations),
+    db
+      .select({
+        locationId: locations.id,
+        ghlLocationId: locations.ghlLocationId,
+        locationName: locations.name
+      })
+      .from(locations)
+      .where(blankLocations)
+      .orderBy(asc(locations.ghlLocationId))
+      .limit(limit)
+  ]);
+
+  const backlogBefore = backlogPeek[0]?.backlog ?? 0;
 
   if (candidates.length === 0) {
-    const backlogRows = await db
-      .select({ backlog: sql<number>`count(*)::int` })
-      .from(locations)
-      .where(whereLocationHasNoDisplayName());
-    const backlog = backlogRows[0]?.backlog ?? 0;
-
     return {
       ok: true as const,
       message: "no_unnamed_locations_in_batch_scope",
       batchLimit: limit,
-      backlogRemaining: backlog,
+      backlogRemaining: backlogBefore,
       lookupsAttempted: 0,
-      hydratedRowsInBatch: 0
+      hydratedRowsInBatch: 0,
+      backlogMeasure: "exact",
+      rerunHint:
+        backlogBefore <= 0
+          ? "All locations now have non-empty names in DB."
+          : "No rows picked in this batch but COUNT still sees unnamed rows; POST again immediately (race/concurrent writers are rare)."
     };
   }
 
@@ -3831,17 +3838,7 @@ async function hydrateUnnamedLocationsCronBatch(env: Env, requestedLimit: number
     return Boolean(resolved && String(resolved).trim());
   }).length;
 
-  let backlogRemaining: number | null = null;
-  try {
-    const backlogRows = await db
-      .select({ backlogRemaining: sql<number>`count(*)::int` })
-      .from(locations)
-      .where(whereLocationHasNoDisplayName());
-    backlogRemaining = backlogRows[0]?.backlogRemaining ?? 0;
-  } catch (err) {
-    console.warn("[hydrateUnnamedLocationsCronBatch] backlog count failed", err);
-    backlogRemaining = null;
-  }
+  const backlogRemaining = Math.max(0, backlogBefore - hydratedRowsInBatch);
 
   return {
     ok: true as const,
@@ -3851,12 +3848,11 @@ async function hydrateUnnamedLocationsCronBatch(env: Env, requestedLimit: number
     lookupsAttempted: Math.min(limit, beforeMissing || candidates.length),
     hydratedRowsInBatch,
     backlogRemaining,
+    backlogMeasure: "estimated_from_row_hydrates",
     rerunHint:
-      backlogRemaining === null
-        ? "Backlog tally failed mid-flight (often Worker subrequest limits). Raise [limits].subrequests per wrangler.toml, deploy, and rerun."
-        : backlogRemaining > 0
-          ? "POST admin/hydrate-missing-names again or enable LOCATION_NAME_CRON_BATCH scheduled backfill until backlogRemaining is 0."
-          : "All locations now have non-empty names in DB."
+      backlogRemaining > 0
+        ? "POST again until backlogRemaining is 0; estimate uses row-level hydrates vs pre-batch count."
+        : "All locations appear named (per batch estimate)."
   };
 }
 
@@ -4151,12 +4147,20 @@ async function getAccessTokensForLocation(
     ...(hydrateBatch ? [] : await getRecentCompanyOAuthInstallations(db, 5))
   ];
   const seenCompanyTokens = new Set<string>();
+  let hydrateBatchExchangeBudget = hydrateBatch ? 2 : 500;
   for (const installation of companyInstallations) {
+    if (hydrateBatch && hydrateBatchExchangeBudget <= 0) {
+      break;
+    }
     const companyToken = installation.accessToken?.trim();
     if (!companyToken || seenCompanyTokens.has(companyToken)) {
       continue;
     }
     seenCompanyTokens.add(companyToken);
+
+    if (hydrateBatch) {
+      hydrateBatchExchangeBudget -= 1;
+    }
 
     const locationToken = await exchangeLocationAccessTokenFromCompanyToken(env, {
       companyId: installation.companyId,
@@ -4203,7 +4207,11 @@ async function fetchLocationNameOnDemand(
     });
     options?.tokenCache?.set(ghlLocationId, accessTokens);
   }
-  for (const accessToken of accessTokens) {
+  /** Batch hydrates compete for Workers subrequests; Location tokens should usually work within a few tries. */
+  const tryTokens =
+    options?.hydrateBatchMode && accessTokens.length > 4 ? accessTokens.slice(0, 4) : accessTokens;
+
+  for (const accessToken of tryTokens) {
     const fetchedName = await fetchLocationNameWithToken(env, ghlLocationId, accessToken);
     if (fetchedName) {
       return fetchedName;
