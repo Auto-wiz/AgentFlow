@@ -27,13 +27,10 @@ export default function SettingsPage() {
           {isAdmin ? (
             <article className="placeholder-card">
               <strong>GoHighLevel setup</strong>
-              <span className="muted">OAuth, connected locations, and token diagnostics</span>
+              <span className="muted">OAuth and connected locations</span>
               <a className="button" href={goHighLevelConnectUrl}>
                 Connect GoHighLevel
               </a>
-              <Link className="button secondary" href="/debug">
-                Open debug tools
-              </Link>
             </article>
           ) : null}
           <article className="placeholder-card">
