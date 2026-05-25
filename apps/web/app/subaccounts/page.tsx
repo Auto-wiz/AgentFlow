@@ -184,6 +184,16 @@ export default function SubaccountsPage() {
     });
   }, [rowsAfterUserFilter, searchQuery]);
 
+  const filterToolbarActive = useMemo(() => Boolean(searchQuery.trim() || filterWorkspaceUserId), [searchQuery, filterWorkspaceUserId]);
+
+  const subaccountTrackingCounts = useMemo(() => {
+    const inView = filteredForDisplay.length;
+    const trackedInView = filteredForDisplay.reduce((acc, r) => acc + (r.visible ? 1 : 0), 0);
+    const totalLocations = draft.length;
+    const trackedOverall = draft.reduce((acc, r) => acc + (r.visible ? 1 : 0), 0);
+    return { inView, trackedInView, totalLocations, trackedOverall, filterToolbarActive };
+  }, [filteredForDisplay, draft, filterToolbarActive]);
+
   const allFilteredTracked = filteredForDisplay.length > 0 && filteredForDisplay.every((r) => r.visible);
 
   function toggleDraftVisibility(locationId: string, visible: boolean) {
@@ -382,6 +392,20 @@ export default function SubaccountsPage() {
             {saving ? "Saving…" : "Save"}
           </button>
         </div>
+        {!loading && !error && draft.length > 0 ? (
+          <p className="muted" style={{ marginTop: 12, marginBottom: 0 }} aria-live="polite">
+            <strong>{subaccountTrackingCounts.inView}</strong>{" "}
+            {subaccountTrackingCounts.inView === 1 ? "subaccount" : "subaccounts"} in view ·{" "}
+            <strong>{subaccountTrackingCounts.trackedInView}</strong> tracked in view
+            {subaccountTrackingCounts.filterToolbarActive ? (
+              <>
+                {" "}
+                · <strong>{subaccountTrackingCounts.totalLocations}</strong> total ·{" "}
+                <strong>{subaccountTrackingCounts.trackedOverall}</strong> tracked overall
+              </>
+            ) : null}
+          </p>
+        ) : null}
         {matrix?.disclaimer ? <p className="muted">{matrix.disclaimer}</p> : null}
       </div>
 
