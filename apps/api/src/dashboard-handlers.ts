@@ -5,7 +5,9 @@ import {
   invoices,
   locations
 } from "@agentflow/db";
-import { and, asc, inArray, not, notInArray, sql, eq } from "drizzle-orm";
+import { and, asc, eq, inArray, not, notInArray, sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
+import type { Context } from "hono";
 
 import {
   appointmentCancelledOnlySql,
@@ -160,7 +162,7 @@ async function scopedInvoicesWhere(
 ): Promise<SQL | undefined> {
   const preds: SQL[] = [
     eq(invoices.isDeleted, false),
-    invoicePaidSignalSql(),
+    invoicePaidSignalSql() as SQL,
     sql`${invoiceTs} >= ${from}`,
     sql`${invoiceTs} < ${toExclusive}`
   ];
