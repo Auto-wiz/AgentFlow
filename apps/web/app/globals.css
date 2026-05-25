@@ -1598,6 +1598,44 @@ button.appointments-row.active {
   text-transform: uppercase;
 }
 
+.dashboard-table th.dashboard-th-actions {
+  text-align: right;
+}
+
+.dashboard-th-sort {
+  align-items: center;
+  appearance: none;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  gap: 4px;
+  letter-spacing: 0.06em;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.dashboard-th-sort:hover {
+  color: var(--foreground);
+}
+
+.dashboard-th-sort[aria-sort="descending"],
+.dashboard-th-sort[aria-sort="ascending"] {
+  color: var(--foreground);
+}
+
+.dashboard-th-sort-hint {
+  font-size: 11px;
+  font-weight: 800;
+  opacity: 0.55;
+}
+
 .dashboard-table td {
   border-bottom: 1px solid var(--border);
   padding: 10px 12px;

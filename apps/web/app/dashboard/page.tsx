@@ -29,11 +29,103 @@ type OverviewResponse = {
   subaccounts: OverviewRow[];
 };
 
-function pctLabel(v: number | null) {
-  if (v === null || !Number.isFinite(v)) {
+type SortColumn = "subaccount" | "booked" | "paid" | "conversion" | "deposits";
+
+type SortState = {
+  column: SortColumn;
+  direction: "asc" | "desc";
+};
+
+function pctLabel(v: number | null | undefined, fractionDigits = 0): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) {
     return "—";
   }
-  return `${v}%`;
+  if (fractionDigits > 0) {
+    return `${v.toFixed(fractionDigits)}%`;
+  }
+  return `${Math.round(v)}%`;
+}
+
+/** Ratio paid/booked when there are bookings; otherwise null (sorts last). */
+function paidBookedRatio(row: OverviewRow): number | null {
+  if (row.bookedAppointments <= 0) {
+    return null;
+  }
+  return row.appointmentsWithCollectedPayment / row.bookedAppointments;
+}
+
+function locationLabel(row: OverviewRow): string {
+  return formatLocationName(row.locationName, row.ghlLocationId);
+}
+
+function tieBreak(a: OverviewRow, b: OverviewRow): number {
+  return a.locationId.localeCompare(b.locationId);
+}
+
+/** Compare rows for client-side sorting. Null conversion / zero-booked ratios sort last regardless of direction. */
+function compareRows(a: OverviewRow, b: OverviewRow, column: SortColumn, direction: "asc" | "desc"): number {
+  const dir = direction === "asc" ? 1 : -1;
+
+  switch (column) {
+    case "subaccount": {
+      const cmp = locationLabel(a).localeCompare(locationLabel(b), undefined, { sensitivity: "base" });
+      if (cmp !== 0) {
+        return dir * cmp;
+      }
+      return tieBreak(a, b);
+    }
+    case "booked": {
+      const diff = a.bookedAppointments - b.bookedAppointments;
+      if (diff !== 0) {
+        return dir * diff;
+      }
+      return tieBreak(a, b);
+    }
+    case "paid": {
+      const diff = a.appointmentsWithCollectedPayment - b.appointmentsWithCollectedPayment;
+      if (diff !== 0) {
+        return dir * diff;
+      }
+      return tieBreak(a, b);
+    }
+    case "deposits": {
+      const diff = a.depositsCollectedAmountCents - b.depositsCollectedAmountCents;
+      if (diff !== 0) {
+        return dir * diff;
+      }
+      return tieBreak(a, b);
+    }
+    case "conversion": {
+      const ra = paidBookedRatio(a);
+      const rb = paidBookedRatio(b);
+      if (ra === null && rb === null) {
+        return tieBreak(a, b);
+      }
+      if (ra === null) {
+        return 1;
+      }
+      if (rb === null) {
+        return -1;
+      }
+      const diff = ra - rb;
+      if (diff !== 0) {
+        return dir * diff;
+      }
+      return tieBreak(a, b);
+    }
+    default:
+      return tieBreak(a, b);
+  }
+}
+
+/** Simple mean of each location's paid/booked ratio (locations with bookings only). */
+function meanConversionAcrossAccounts(rows: OverviewRow[]): number | null {
+  const ratios = rows.filter((r) => r.bookedAppointments > 0).map((r) => paidBookedRatio(r)!);
+  if (ratios.length === 0) {
+    return null;
+  }
+  const mean = ratios.reduce((s, x) => s + x, 0) / ratios.length;
+  return mean * 100;
 }
 
 export default function DashboardOverviewPage() {
@@ -44,6 +136,7 @@ export default function DashboardOverviewPage() {
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortState>({ column: "booked", direction: "desc" });
 
   const query = useMemo(() => new URLSearchParams({ from: range.fromInclusive, to: range.toInclusive }), [range]);
 
@@ -72,10 +165,27 @@ export default function DashboardOverviewPage() {
     void load();
   }, [load]);
 
-  const sortedRows = useMemo(
-    () => [...(overview?.subaccounts ?? [])].sort((a, b) => b.bookedAppointments - a.bookedAppointments),
-    [overview]
-  );
+  const rowsRaw = overview?.subaccounts ?? [];
+  const accountCount = rowsRaw.length;
+  const meanAcrossAccountsPct = useMemo(() => meanConversionAcrossAccounts(rowsRaw), [rowsRaw]);
+
+  const sortedRows = useMemo(() => [...rowsRaw].sort((a, b) => compareRows(a, b, sort.column, sort.direction)), [rowsRaw, sort]);
+
+  function toggleSort(column: SortColumn) {
+    setSort((prev) =>
+      prev.column === column
+        ? { column, direction: prev.direction === "asc" ? "desc" : "asc" }
+        : { column, direction: column === "subaccount" ? "asc" : "desc" }
+    );
+  }
+
+  function sortAria(column: SortColumn): "ascending" | "descending" | undefined {
+    return sort.column === column ? (sort.direction === "asc" ? "ascending" : "descending") : undefined;
+  }
+
+  function sortCaret(column: SortColumn): string | null {
+    return sort.column === column ? (sort.direction === "desc" ? "↓" : "↑") : null;
+  }
 
   return (
     <div style={{ paddingTop: 8 }}>
@@ -113,13 +223,27 @@ export default function DashboardOverviewPage() {
         <>
           <div className="dashboard-kpi-grid">
             <div className="panel dashboard-kpi-panel">
+              <p className="dashboard-kpi-eyebrow">Subaccounts · period</p>
+              <p className="dashboard-kpi-value">{accountCount}</p>
+              <p className="muted dashboard-kpi-sub">Locations in this ranking · period</p>
+            </div>
+            <div className="panel dashboard-kpi-panel">
+              <p className="dashboard-kpi-eyebrow">Portfolio conversion</p>
+              <p className="dashboard-kpi-value">{pctLabel(overview.totals.depositsCollectedPercentage)}</p>
+              <p className="muted dashboard-kpi-sub">Weighted · all bookings together</p>
+            </div>
+            <div className="panel dashboard-kpi-panel">
+              <p className="dashboard-kpi-eyebrow">Avg. conversion / account</p>
+              <p className="dashboard-kpi-value">{pctLabel(meanAcrossAccountsPct, 1)}</p>
+              <p className="muted dashboard-kpi-sub">Mean of each location&apos;s ratio (booked &gt; 0)</p>
+            </div>
+            <div className="panel dashboard-kpi-panel">
               <p className="dashboard-kpi-eyebrow">Booked appointments</p>
               <p className="dashboard-kpi-value">{overview.totals.bookedAppointments}</p>
             </div>
             <div className="panel dashboard-kpi-panel">
-              <p className="dashboard-kpi-eyebrow">Collected (bookings paid)</p>
+              <p className="dashboard-kpi-eyebrow">Paid bookings</p>
               <p className="dashboard-kpi-value">{overview.totals.appointmentsWithCollectedPayment}</p>
-              <p className="muted dashboard-kpi-sub">{pctLabel(overview.totals.depositsCollectedPercentage)} conversion</p>
             </div>
             <div className="panel dashboard-kpi-panel">
               <p className="dashboard-kpi-eyebrow">Deposits collected</p>
@@ -132,24 +256,96 @@ export default function DashboardOverviewPage() {
               <thead>
                 <tr>
                   <th>#</th>
-                  <th>Subaccount</th>
-                  <th>Booked</th>
-                  <th>Paid bookings</th>
-                  <th>Conversion</th>
-                  <th>Deposits</th>
-                  <th />
+                  <th scope="col">
+                    <button
+                      aria-sort={sortAria("subaccount")}
+                      className="dashboard-th-sort"
+                      onClick={() => toggleSort("subaccount")}
+                      type="button"
+                    >
+                      Subaccount
+                      {sortCaret("subaccount") ? (
+                        <span aria-hidden className="dashboard-th-sort-hint">
+                          {sortCaret("subaccount")}
+                        </span>
+                      ) : null}
+                    </button>
+                  </th>
+                  <th scope="col">
+                    <button
+                      aria-sort={sortAria("booked")}
+                      className="dashboard-th-sort"
+                      onClick={() => toggleSort("booked")}
+                      type="button"
+                    >
+                      Booked
+                      {sortCaret("booked") ? (
+                        <span aria-hidden className="dashboard-th-sort-hint">
+                          {sortCaret("booked")}
+                        </span>
+                      ) : null}
+                    </button>
+                  </th>
+                  <th scope="col">
+                    <button
+                      aria-sort={sortAria("paid")}
+                      className="dashboard-th-sort"
+                      onClick={() => toggleSort("paid")}
+                      type="button"
+                    >
+                      Paid bookings
+                      {sortCaret("paid") ? (
+                        <span aria-hidden className="dashboard-th-sort-hint">
+                          {sortCaret("paid")}
+                        </span>
+                      ) : null}
+                    </button>
+                  </th>
+                  <th scope="col">
+                    <button
+                      aria-sort={sortAria("conversion")}
+                      className="dashboard-th-sort"
+                      onClick={() => toggleSort("conversion")}
+                      type="button"
+                    >
+                      Conversion
+                      {sortCaret("conversion") ? (
+                        <span aria-hidden className="dashboard-th-sort-hint">
+                          {sortCaret("conversion")}
+                        </span>
+                      ) : null}
+                    </button>
+                  </th>
+                  <th scope="col">
+                    <button
+                      aria-sort={sortAria("deposits")}
+                      className="dashboard-th-sort"
+                      onClick={() => toggleSort("deposits")}
+                      type="button"
+                    >
+                      Deposits
+                      {sortCaret("deposits") ? (
+                        <span aria-hidden className="dashboard-th-sort-hint">
+                          {sortCaret("deposits")}
+                        </span>
+                      ) : null}
+                    </button>
+                  </th>
+                  <th className="dashboard-th-actions" scope="col">
+                    Detail
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {sortedRows.map((row, idx) => (
                   <tr key={row.locationId}>
                     <td>{idx + 1}</td>
-                    <td>{formatLocationName(row.locationName, row.ghlLocationId)}</td>
+                    <td>{locationLabel(row)}</td>
                     <td>{row.bookedAppointments}</td>
                     <td>{row.appointmentsWithCollectedPayment}</td>
                     <td>{pctLabel(row.depositsCollectedPercentage)}</td>
                     <td>{row.depositsCollectedFormatted}</td>
-                    <td>
+                    <td className="dashboard-th-actions">
                       <Link
                         className="dashboard-drill-link"
                         href={`/dashboard/subaccount?locationId=${encodeURIComponent(row.locationId)}`}
