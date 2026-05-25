@@ -313,8 +313,11 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
     sumCollected += s.appointmentsWithCollectedPayment;
   }
 
-  /** Sum of invoice + paid order totals in-window for all scoped locations (may include locations without bookings). */
-  const totalsDepositAmount = [...amountByLocation.values()].reduce((a, b) => a + b, 0n);
+  /** Match portfolio KPI to the overview table: sum per-row DEPOSITS (locations with bookings in window only). */
+  const totalsDepositAmount = subaccounts.reduce(
+    (sum, row) => sum + (Number.isFinite(row.depositsCollectedAmount) ? row.depositsCollectedAmount : 0),
+    0
+  );
 
   return c.json({
     fromInclusive: from.toISOString(),
@@ -323,8 +326,8 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
       bookedAppointments: sumBooked,
       appointmentsWithCollectedPayment: sumCollected,
       depositsCollectedPercentage: pct(sumCollected, sumBooked),
-      depositsCollectedAmount: Number(totalsDepositAmount),
-      depositsCollectedFormatted: formatDashboardDeposits(Number(totalsDepositAmount), null)
+      depositsCollectedAmount: totalsDepositAmount,
+      depositsCollectedFormatted: formatDashboardDeposits(totalsDepositAmount, null)
     },
     subaccounts
   });
