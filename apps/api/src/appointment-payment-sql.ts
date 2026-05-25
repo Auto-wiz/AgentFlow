@@ -27,13 +27,13 @@ export function invoicePaidSignalSql() {
 function sqlPaymentTimestampInsideAppointmentBookingWindow(timestampExpr: ReturnType<typeof sql>) {
   const anchorLow = sql`least(coalesce(${appointments.dateAdded}, ${appointments.createdAt}), ${appointments.startTime})`;
   const anchorHigh = sql`greatest(coalesce(${appointments.dateAdded}, ${appointments.createdAt}), ${appointments.startTime})`;
-  /** Payments often settle slightly before booking anchors or shortly after visit; keep lower strict, upper loose. */
-  return sql`${timestampExpr} >= (${anchorLow} - interval '2 days') AND ${timestampExpr} <= (${anchorHigh} + interval '180 days')`;
+  /** Deposits can clear well before anchor times; widen pre-window so dashboards match GHL "paid booking" totals. */
+  return sql`${timestampExpr} >= (${anchorLow} - interval '35 days') AND ${timestampExpr} <= (${anchorHigh} + interval '180 days')`;
 }
 
 /** When GHL never sent a slot time, still allow matching a paid order to the booking row. */
 function sqlPaymentAtOrAfterAppointmentBooking(timestampExpr: ReturnType<typeof sql>) {
-  return sql`${timestampExpr} >= (coalesce(${appointments.dateAdded}, ${appointments.createdAt}) - interval '2 days')`;
+  return sql`${timestampExpr} >= (coalesce(${appointments.dateAdded}, ${appointments.createdAt}) - interval '35 days')`;
 }
 
 /** Some webhooks stash status only under `appointment` in payload — mirror normalized paths we store in `raw`. */
@@ -100,7 +100,8 @@ export function appointmentCancelledOnlySql() {
 /**
  * Appointment↔payment correlation (invoices + GHL orders). Keeps fragments in sync for list queries and /debug traces.
  *
- * Invoice path requires appointments.start_time IS NOT NULL. Order paths add fallbacks without start_time and alt-linkage.
+ * Invoices use the anchor window when `start_time` exists; when webhooks omit it, the same loose booking-time path as
+ * orders applies so paid invoice deposits still surface.
  */
 export function buildAppointmentPaymentCorrelationParts(db: AgentFlowDb) {
   const invoiceTsSql = sql`coalesce(${invoices.ghlUpdatedAt}, ${invoices.issueDate}, ${invoices.dueDate}, ${invoices.updatedAt}, ${invoices.createdAt})`;
@@ -113,6 +114,22 @@ export function buildAppointmentPaymentCorrelationParts(db: AgentFlowDb) {
     sqlPaymentTimestampInsideAppointmentBookingWindow(invoiceTsSql),
     invoicePaidSignalSql()
   );
+
+  /** Parallel to `orderTemporalMatchNoStartTime` — some payloads omit `start_time` on the appointment row. */
+  const invoiceMatchNoStartTime = and(
+    eq(invoices.locationId, appointments.locationId),
+    invoicePaymentTouchesAppointmentPartySql(),
+    eq(invoices.isDeleted, false),
+    sql`${appointments.startTime} is null`,
+    sqlPaymentAtOrAfterAppointmentBooking(invoiceTsSql),
+    sql`${invoiceTsSql} <= coalesce(${appointments.dateUpdated}, ${appointments.updatedAt}) + interval '366 days'`,
+    invoicePaidSignalSql()
+  );
+
+  const invoiceSubq = db
+    .select({ one: sql`1`.as("one") })
+    .from(invoices)
+    .where(or(invoiceMatchWhere, invoiceMatchNoStartTime));
 
   const orderCommon = and(
     eq(ghlPaymentOrders.locationId, appointments.locationId),
@@ -152,7 +169,6 @@ export function buildAppointmentPaymentCorrelationParts(db: AgentFlowDb) {
     sql`strpos(lower(trim(coalesce(${ghlPaymentOrders.altType}, ''))), 'appointment') > 0`
   );
 
-  const invoiceSubq = db.select({ one: sql`1`.as("one") }).from(invoices).where(invoiceMatchWhere);
   const orderCombinedSubq = db
     .select({ one: sql`1`.as("one") })
     .from(ghlPaymentOrders)

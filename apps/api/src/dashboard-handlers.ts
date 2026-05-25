@@ -186,14 +186,17 @@ async function scopedInvoicesWhere(
   return and(...preds);
 }
 
-/** Non-cancelled rows with scheduled start in `[from, toExclusive)` (includes hidden-from-UI). */
+/**
+ * Appointments in the dashboard window by **when they were booked** in HighLevel/GHL ingestion:
+ * `date_added`, else webhook `created_at` — **not** by scheduled visit (`start_time`).
+ */
 function appointmentsBookedDuringRange(from: Date, toExclusive: Date) {
   const cancelledBookingPredicate = appointmentCancelledOnlySql();
+  const bookingCapturedAt = sql`coalesce(${appointments.dateAdded}, ${appointments.createdAt})`;
   return and(
-    sql`${appointments.startTime} is not null`,
-    sql`${appointments.startTime} >= ${from}`,
-    sql`${appointments.startTime} < ${toExclusive}`,
-    not(cancelledBookingPredicate)
+    not(cancelledBookingPredicate),
+    sql`${bookingCapturedAt} >= ${from}`,
+    sql`${bookingCapturedAt} < ${toExclusive}`
   );
 }
 
