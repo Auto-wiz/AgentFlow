@@ -389,7 +389,7 @@ export default function AppointmentsPage() {
             type="button"
             onClick={() => setOverridesOpen(true)}
           >
-            Modify Appointment
+            Edit
           </button>
         </div>
       </div>
@@ -439,40 +439,58 @@ export default function AppointmentsPage() {
           role="dialog"
         >
           <div className="panel appointments-override-modal panel-narrow">
-            <h3 style={{ marginTop: 0 }}>Modify Appointment</h3>
-            <p className="muted" style={{ marginTop: 8 }}>
-              Overrides apply only in AgentFlow (payment label and hiding from this list). They do not change GoHighLevel.
-              Saving requires a workspace sign-in JWT.
-            </p>
-            <p className="muted" style={{ fontSize: 13 }}>
+            <h3 style={{ marginTop: 0 }}>Appointment</h3>
+            <p className="muted" style={{ fontSize: 13, marginBottom: 14 }}>
               {selectedAppointment.contactName} ·{" "}
               {formatLocationName(selectedAppointment.locationName, selectedAppointment.ghlLocationId)}
             </p>
-            <label className="inbox-field-label" htmlFor="appt-override-pay">
-              Payment display
-            </label>
-            <select
-              className="appointments-filter-select"
-              id="appt-override-pay"
-              style={{ marginBottom: 12 }}
-              value={draftManual}
-              onChange={(e) => setDraftManual(e.target.value as ManualPaymentDraft)}
+            <div
+              aria-label="Payment"
+              role="toolbar"
+              style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}
             >
-              <option value="inherit">Use invoices / orders</option>
-              <option value="force_paid">Mark paid manually</option>
-              <option value="force_unpaid">Mark unpaid manually</option>
-            </select>
-            <label className="inbox-field-label" htmlFor="appt-hidden">
-              List visibility
-            </label>
-            <div style={{ alignItems: "center", display: "flex", gap: 10, marginBottom: 14 }}>
-              <input
-                checked={draftHidden}
-                id="appt-hidden"
-                onChange={(e) => setDraftHidden(e.target.checked)}
-                type="checkbox"
-              />
-              <span style={{ fontSize: 14 }}>Hide from appointments list until filters include hidden rows</span>
+              <button
+                aria-pressed={draftManual === "inherit"}
+                className={draftManual === "inherit" ? "button" : "button secondary"}
+                onClick={() => setDraftManual("inherit")}
+                type="button"
+              >
+                Auto
+              </button>
+              <button
+                aria-pressed={draftManual === "force_paid"}
+                className={draftManual === "force_paid" ? "button" : "button secondary"}
+                onClick={() => setDraftManual("force_paid")}
+                type="button"
+              >
+                Paid
+              </button>
+              <button
+                aria-pressed={draftManual === "force_unpaid"}
+                className={draftManual === "force_unpaid" ? "button" : "button secondary"}
+                onClick={() => setDraftManual("force_unpaid")}
+                type="button"
+              >
+                Unpaid
+              </button>
+            </div>
+            <div aria-label="List visibility" role="toolbar" style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+              <button
+                aria-pressed={!draftHidden}
+                className={!draftHidden ? "button" : "button secondary"}
+                onClick={() => setDraftHidden(false)}
+                type="button"
+              >
+                Visible
+              </button>
+              <button
+                aria-pressed={draftHidden}
+                className={draftHidden ? "button" : "button secondary"}
+                onClick={() => setDraftHidden(true)}
+                type="button"
+              >
+                Hidden
+              </button>
             </div>
             {overrideError ? <div className="empty" style={{ marginBottom: 8 }}>{overrideError}</div> : null}
             {!token ? <p className="muted">Sign in to save overrides.</p> : null}
@@ -513,9 +531,13 @@ export default function AppointmentsPage() {
                       <span className="badge">
                         {appointment.paymentStatus === "paid" ? "Paid" : "Unpaid"}
                       </span>
-                      {appointment.manualPaymentOverride ? (
-                        <span className="badge secondary" title="Manual payment rule active">
-                          Manual pay
+                      {appointment.manualPaymentOverride === "force_paid" ? (
+                        <span className="badge secondary" title="Payment forced in AgentFlow">
+                          Paid · manual
+                        </span>
+                      ) : appointment.manualPaymentOverride === "force_unpaid" ? (
+                        <span className="badge secondary" title="Payment forced in AgentFlow">
+                          Unpaid · manual
                         </span>
                       ) : null}
                       {appointment.hiddenFromUi ? (
