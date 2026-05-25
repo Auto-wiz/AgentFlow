@@ -288,6 +288,19 @@ app.get("/workspace/selection-matrix", workspaceSelectionMatrixHandler);
 app.get("/admin/workspace-users", adminListUsers);
 app.post("/admin/workspace-users", adminPostWorkspaceUser);
 app.get("/admin/workspace-locations", adminListLocations);
+function formatErrorDeep(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  const parts: string[] = [error.message];
+  let cursor: unknown = error.cause;
+  for (let i = 0; i < 8 && cursor instanceof Error; i++) {
+    parts.push(`cause: ${cursor.message}`);
+    cursor = cursor.cause;
+  }
+  return parts.join(" | ");
+}
+
 app.post("/admin/locations/hydrate-missing-names", async (c) => {
   try {
     const me = await resolveSessionUser(c, c.env);
@@ -302,14 +315,14 @@ app.post("/admin/locations/hydrate-missing-names", async (c) => {
     const body = await hydrateUnnamedLocationsCronBatch(c.env, limit);
     return c.json(body);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorDeep(error);
     console.error("[admin/locations/hydrate-missing-names]", error);
     return c.json(
       {
         ok: false as const,
         error: "hydrate_failed",
         message,
-        hint: "Retry with limit=10–15; Workers free tier allows few outbound subrequests per request."
+        hint: "If message is a DB error, verify DATABASE_URL / Neon and that `locations.name` is `text`. Otherwise retry with limit=10–15 (Worker subrequest ceiling)."
       },
       500
     );
@@ -3753,6 +3766,11 @@ async function hydrateMissingLocationNames(
   return locationNameMap;
 }
 
+/** `locations.name` absent or whitespace-only (`text` column). Quotes avoid Neon HTTP/driver edge cases embedding column refs inside `trim()`. */
+function whereLocationHasNoDisplayName() {
+  return sql<boolean>`COALESCE(length(btrim(cast("locations"."name" AS text))), 0) = 0`;
+}
+
 async function hydrateUnnamedLocationsCronBatch(env: Env, requestedLimit: number) {
   const limit = Number.isFinite(requestedLimit)
     ? Math.min(80, Math.max(1, Math.floor(requestedLimit)))
@@ -3767,7 +3785,7 @@ async function hydrateUnnamedLocationsCronBatch(env: Env, requestedLimit: number
       locationName: locations.name
     })
     .from(locations)
-    .where(sql`(coalesce(trim(${locations.name}), '') = '')`)
+    .where(whereLocationHasNoDisplayName())
     .orderBy(asc(locations.ghlLocationId))
     .limit(limit);
 
@@ -3775,7 +3793,7 @@ async function hydrateUnnamedLocationsCronBatch(env: Env, requestedLimit: number
     const backlogRows = await db
       .select({ backlog: sql<number>`count(*)::int` })
       .from(locations)
-      .where(sql`(coalesce(trim(${locations.name}), '') = '')`);
+      .where(whereLocationHasNoDisplayName());
     const backlog = backlogRows[0]?.backlog ?? 0;
 
     return {
@@ -3809,7 +3827,7 @@ async function hydrateUnnamedLocationsCronBatch(env: Env, requestedLimit: number
   const backlogRows = await db
     .select({ backlogRemaining: sql<number>`count(*)::int` })
     .from(locations)
-    .where(sql`(coalesce(trim(${locations.name}), '') = '')`);
+    .where(whereLocationHasNoDisplayName());
 
   const backlogRemaining = backlogRows[0]?.backlogRemaining ?? 0;
 
