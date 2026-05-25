@@ -5,6 +5,10 @@ import type { Context } from "hono";
 
 import { parseBearerHeader, signWorkspaceJwt, verifyWorkspaceJwt } from "./auth-lib.js";
 import { getViewerKey } from "./viewer-key.js";
+import {
+  fetchSelectionLocationRows,
+  rowsToNullableSelectionSet
+} from "./workspace-selection-db.js";
 
 export type WorkspaceJwtEnv = {
   DATABASE_URL: string;
@@ -83,7 +87,19 @@ export async function resolveSessionUser(c: Context, env: WorkspaceJwtEnv) {
   }
 }
 
-/** Legacy viewer-key denies (is_visible = false rows). JWT workspace users bypass this entirely. */
+/** JWT workspace: explicit location picks in DB -> restrict reads to those UUIDs. No rows stored => null (implicit all). */
+export async function jwtWorkspaceAllowedLocationUuidList(
+  db: ReturnType<typeof createDb>,
+  policy: AccessPolicy
+): Promise<string[] | null> {
+  if (policy.kind !== "jwt_workspace") {
+    return null;
+  }
+  const rows = await fetchSelectionLocationRows(db, policy.workspaceUserId);
+  const scope = rowsToNullableSelectionSet(rows);
+  return scope === null ? null : [...scope];
+}
+
 export async function getHiddenLocationIdsForPolicy(
   db: ReturnType<typeof createDb>,
   policy: { kind: "legacy"; viewerKey: string }
@@ -100,6 +116,28 @@ export async function getHiddenLocationIdsForPolicy(
       )
     );
   return hiddenRows.map((row) => row.locationId);
+}
+
+export async function canWorkspaceAccessLocationUuid(
+  db: ReturnType<typeof createDb>,
+  policy: AccessPolicy,
+  locationId: string
+): Promise<boolean> {
+  if (policy.kind === "legacy") {
+    const hidden = await getHiddenLocationIdsForPolicy(db, policy);
+    return !hidden.includes(locationId);
+  }
+  if (policy.kind === "jwt_workspace") {
+    if (policy.role === "admin") {
+      return true;
+    }
+    const allowed = await jwtWorkspaceAllowedLocationUuidList(db, policy);
+    if (allowed === null) {
+      return true;
+    }
+    return allowed.includes(locationId);
+  }
+  return false;
 }
 
 // --- GoHighLevel -> workspace user provisioning (OAuth callback only) ---

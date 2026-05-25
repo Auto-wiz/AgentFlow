@@ -15,6 +15,11 @@ type AppointmentPaymentFilter = "unpaid" | "paid" | "all";
 /** Mirrors GET /appointments: `lifecycle` query (active/cancelled/all). */
 type AppointmentLifecycleFilter = "active" | "cancelled" | "all";
 
+/** Mirrors GET /appointments `hidden` query. */
+type AppointmentHiddenFilter = "omit" | "include" | "only";
+
+type ManualPaymentDraft = "inherit" | "force_paid" | "force_unpaid";
+
 function appointmentsEmptyMessage(
   paymentFilter: AppointmentPaymentFilter,
   lifecycleFilter: AppointmentLifecycleFilter
@@ -68,7 +73,7 @@ function appointmentMatchesScheduleFilter(startTimeIso: string | null, filter: A
 
 export default function AppointmentsPage() {
   const setTopbarFilters = useAppointmentsTopbarSlot();
-  const { sessionKey } = useWorkspaceAuth();
+  const { sessionKey, token } = useWorkspaceAuth();
   const apiBaseUrl = getApiBaseUrl();
   const [appointments, setAppointments] = useState<AppointmentSummary[]>([]);
   const [subaccounts, setSubaccounts] = useState<SubaccountOverview[]>([]);
@@ -76,9 +81,17 @@ export default function AppointmentsPage() {
   const [timeFilter, setTimeFilter] = useState<AppointmentTimeFilter>("future");
   const [paymentFilter, setPaymentFilter] = useState<AppointmentPaymentFilter>("unpaid");
   const [lifecycleFilter, setLifecycleFilter] = useState<AppointmentLifecycleFilter>("active");
+  const [hiddenFilter, setHiddenFilter] = useState<AppointmentHiddenFilter>("omit");
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
+
+  const [overridesOpen, setOverridesOpen] = useState(false);
+  const [overrideBusy, setOverrideBusy] = useState(false);
+  const [overrideError, setOverrideError] = useState<string | null>(null);
+  const [draftManual, setDraftManual] = useState<ManualPaymentDraft>("inherit");
+  const [draftHidden, setDraftHidden] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -89,13 +102,10 @@ export default function AppointmentsPage() {
       setAppointments([]);
 
       try {
-        const subaccountsResponse = await fetch(
-          `${apiBaseUrl}/subaccounts/overview?surface=appointments`,
-          {
-            signal: controller.signal,
-            headers: mergeWorkspaceHeaders()
-          }
-        );
+        const subaccountsResponse = await fetch(`${apiBaseUrl}/subaccounts/overview?surface=appointments`, {
+          signal: controller.signal,
+          headers: mergeWorkspaceHeaders()
+        });
         if (!subaccountsResponse.ok) {
           throw new Error("Failed to load subaccounts");
         }
@@ -107,9 +117,7 @@ export default function AppointmentsPage() {
         let nextSelectedLocationId = selectedLocationId;
         if (
           nextSelectedLocationId &&
-          !subaccountsData.subaccounts.some(
-            (subaccount) => subaccount.locationId === nextSelectedLocationId
-          )
+          !subaccountsData.subaccounts.some((subaccount) => subaccount.locationId === nextSelectedLocationId)
         ) {
           nextSelectedLocationId = "";
           setSelectedLocationId("");
@@ -126,10 +134,9 @@ export default function AppointmentsPage() {
           "lifecycle",
           lifecycleFilter === "all" ? "all" : lifecycleFilter === "cancelled" ? "cancelled" : "active"
         );
+        params.set("hidden", hiddenFilter);
 
-        const url = params.toString()
-          ? `${apiBaseUrl}/appointments?${params.toString()}`
-          : `${apiBaseUrl}/appointments`;
+        const url = `${apiBaseUrl}/appointments?${params.toString()}`;
         const response = await fetch(url, {
           signal: controller.signal,
           headers: mergeWorkspaceHeaders(),
@@ -164,9 +171,18 @@ export default function AppointmentsPage() {
       }
     }
 
-    loadAppointments();
+    void loadAppointments();
     return () => controller.abort();
-  }, [apiBaseUrl, selectedLocationId, timeFilter, paymentFilter, lifecycleFilter, sessionKey]);
+  }, [
+    apiBaseUrl,
+    selectedLocationId,
+    timeFilter,
+    paymentFilter,
+    lifecycleFilter,
+    hiddenFilter,
+    sessionKey,
+    reloadTick
+  ]);
 
   useEffect(() => {
     setSelectedAppointmentId((current) => {
@@ -180,15 +196,30 @@ export default function AppointmentsPage() {
     });
   }, [appointments]);
 
-  const totalAppointments = subaccounts.reduce(
-    (sum, subaccount) => sum + subaccount.appointmentCount,
-    0
-  );
+  useEffect(() => {
+    if (!selectedAppointmentId) {
+      setOverridesOpen(false);
+    }
+  }, [selectedAppointmentId]);
 
   const selectedAppointment = useMemo(
     () => appointments.find((appointment) => appointment.id === selectedAppointmentId) ?? null,
     [appointments, selectedAppointmentId]
   );
+
+  useEffect(() => {
+    if (!overridesOpen || !selectedAppointment) {
+      return;
+    }
+    const m = selectedAppointment.manualPaymentOverride;
+    setDraftManual(
+      m === "force_paid" ? "force_paid" : m === "force_unpaid" ? "force_unpaid" : "inherit"
+    );
+    setDraftHidden(selectedAppointment.hiddenFromUi);
+    setOverrideError(null);
+  }, [overridesOpen, selectedAppointment]);
+
+  const totalAppointments = subaccounts.reduce((sum, subaccount) => sum + subaccount.appointmentCount, 0);
 
   const ghlEmbedUrl = useMemo(() => {
     if (!selectedAppointment) {
@@ -196,6 +227,35 @@ export default function AppointmentsPage() {
     }
     return buildGhlContactEmbedUrl(selectedAppointment.ghlLocationId, selectedAppointment.ghlContactId);
   }, [selectedAppointment]);
+
+  async function saveAppointmentOverrides() {
+    if (!selectedAppointment || !token) {
+      setOverrideError("Select an appointment and sign in with a workspace account.");
+      return;
+    }
+    setOverrideBusy(true);
+    setOverrideError(null);
+    try {
+      const res = await fetch(`${apiBaseUrl}/workspace/appointments/${selectedAppointment.id}/overrides`, {
+        method: "PUT",
+        headers: mergeWorkspaceHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          manualPaymentOverride: draftManual,
+          hiddenFromUi: draftHidden
+        })
+      });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string; hint?: string };
+      if (!res.ok) {
+        throw new Error(payload.error ?? payload.hint ?? "Save failed");
+      }
+      setOverridesOpen(false);
+      setReloadTick((n) => n + 1);
+    } catch (caught) {
+      setOverrideError(caught instanceof Error ? caught.message : "Save failed");
+    } finally {
+      setOverrideBusy(false);
+    }
+  }
 
   useEffect(() => {
     setTopbarFilters(
@@ -289,10 +349,66 @@ export default function AppointmentsPage() {
             </button>
           </div>
         </div>
+        <div className="appointments-header-filters-tail">
+          <div className="appointments-filter-field appointments-filter-times appointments-filter-inline">
+            <span className="appointments-filter-label">Hidden</span>
+            <div className="appointments-time-buttons">
+              <button
+                className={`button ${hiddenFilter === "omit" ? "" : "secondary"}`}
+                onClick={() => setHiddenFilter("omit")}
+                title="Exclude appointments marked hidden"
+                type="button"
+              >
+                Default
+              </button>
+              <button
+                className={`button ${hiddenFilter === "include" ? "" : "secondary"}`}
+                onClick={() => setHiddenFilter("include")}
+                title="Include hidden rows alongside normal list"
+                type="button"
+              >
+                Show all
+              </button>
+              <button
+                className={`button ${hiddenFilter === "only" ? "" : "secondary"}`}
+                onClick={() => setHiddenFilter("only")}
+                title="Recover rows hidden by mistake"
+                type="button"
+              >
+                Hidden only
+              </button>
+            </div>
+          </div>
+          <div className="appointments-filter-field appointments-filter-inline">
+            <span className="appointments-filter-label" style={{ visibility: "hidden", userSelect: "none" }}>
+              ·
+            </span>
+            <button
+              type="button"
+              className="button secondary"
+              disabled={!selectedAppointmentId || Boolean(loading && appointments.length === 0)}
+              onClick={() => setOverridesOpen(true)}
+            >
+              Appointment overrides…
+            </button>
+          </div>
+        </div>
       </div>
     );
     return () => setTopbarFilters(null);
-  }, [setTopbarFilters, selectedLocationId, subaccounts, timeFilter, paymentFilter, lifecycleFilter, totalAppointments]);
+  }, [
+    setTopbarFilters,
+    selectedLocationId,
+    subaccounts,
+    timeFilter,
+    paymentFilter,
+    lifecycleFilter,
+    hiddenFilter,
+    totalAppointments,
+    selectedAppointmentId,
+    loading,
+    appointments.length
+  ]);
 
   const emptyListMessage = appointmentsEmptyMessage(paymentFilter, lifecycleFilter);
   const statusScopeLabel =
@@ -307,6 +423,70 @@ export default function AppointmentsPage() {
 
   return (
     <section className="module-shell appointments-module-page">
+      {overridesOpen && selectedAppointment ? (
+        <div
+          aria-modal
+          className="appointments-override-modal-backdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setOverridesOpen(false);
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setOverridesOpen(false);
+            }
+          }}
+          role="dialog"
+        >
+          <div className="panel appointments-override-modal panel-narrow">
+            <h3 style={{ marginTop: 0 }}>Appointment overrides</h3>
+            <p className="muted" style={{ marginTop: 8 }}>
+              Manual rows override GoHighLevel payment correlation for visibility and filters only. Workspace JWT required.
+            </p>
+            <p className="muted" style={{ fontSize: 13 }}>
+              {selectedAppointment.contactName} ·{" "}
+              {formatLocationName(selectedAppointment.locationName, selectedAppointment.ghlLocationId)}
+            </p>
+            <label className="inbox-field-label" htmlFor="appt-override-pay">
+              Payment display
+            </label>
+            <select
+              className="appointments-filter-select"
+              id="appt-override-pay"
+              style={{ marginBottom: 12 }}
+              value={draftManual}
+              onChange={(e) => setDraftManual(e.target.value as ManualPaymentDraft)}
+            >
+              <option value="inherit">Use invoices / orders</option>
+              <option value="force_paid">Mark paid manually</option>
+              <option value="force_unpaid">Mark unpaid manually</option>
+            </select>
+            <label className="inbox-field-label" htmlFor="appt-hidden">
+              List visibility
+            </label>
+            <div style={{ alignItems: "center", display: "flex", gap: 10, marginBottom: 14 }}>
+              <input
+                checked={draftHidden}
+                id="appt-hidden"
+                onChange={(e) => setDraftHidden(e.target.checked)}
+                type="checkbox"
+              />
+              <span style={{ fontSize: 14 }}>Hide from appointments list until filters include hidden rows</span>
+            </div>
+            {overrideError ? <div className="empty" style={{ marginBottom: 8 }}>{overrideError}</div> : null}
+            {!token ? <p className="muted">Sign in to save overrides.</p> : null}
+            <div className="toolbar" style={{ gap: 10, justifyContent: "flex-end" }}>
+              <button className="button secondary" onClick={() => setOverridesOpen(false)} type="button">
+                Cancel
+              </button>
+              <button className="button" disabled={overrideBusy || !token} onClick={() => void saveAppointmentOverrides()} type="button">
+                {overrideBusy ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div className="appointments-workspace-grid">
         <div className="panel appointments-list-panel">
           {loading ? <div className="empty muted">Loading appointments...</div> : null}
@@ -333,10 +513,22 @@ export default function AppointmentsPage() {
                       <span className="badge">
                         {appointment.paymentStatus === "paid" ? "Paid" : "Unpaid"}
                       </span>
+                      {appointment.manualPaymentOverride ? (
+                        <span className="badge secondary" title="Manual payment rule active">
+                          Manual pay
+                        </span>
+                      ) : null}
+                      {appointment.hiddenFromUi ? (
+                        <span className="badge secondary" title="Hidden from default list">
+                          Hidden
+                        </span>
+                      ) : null}
                       <span className="badge">{appointment.status ?? "status"}</span>
                     </div>
                   </div>
-                  <div className="appointments-row-sub muted">{formatLocationName(appointment.locationName, appointment.ghlLocationId)}</div>
+                  <div className="appointments-row-sub muted">
+                    {formatLocationName(appointment.locationName, appointment.ghlLocationId)}
+                  </div>
                   {(appointment.locationName ?? "").trim() ? (
                     <div className="muted" style={{ fontSize: 10, lineHeight: 1.2 }}>
                       Location ID: {appointment.ghlLocationId}

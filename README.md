@@ -129,11 +129,23 @@ https://api.agentflow.autowiz.net/oauth/gohighlevel/start
 
 Bulk OAuth often creates **`locations`** rows before HighLevel payloads include a readable name. Names are persisted when:
 
-1. **`LocationUpdate`/`Contact`/`Appointment`/`Message` webhooks** carry `event.location.name` (upsert uses `COALESCE` — first non-empty sticks).
+1. **`LocationUpdate`/`Contact`/`Appointment`/`Message` webhooks** carry `event.location.name` (upsert uses `COALESCE` — first non-empty sticks). HighLevel does not always emit renames, so long-lived rows can drift.
 2. **`POST /admin/locations/hydrate-missing-names?limit=N`** (admin JWT) sequentially fetches from GHL and updates blank names. **`limit` is capped at 10** — repeat until **`backlogRemaining`** reaches **`0`** (or **`null`** briefly: see **`rerunHint`** if the backlog tally hit subrequest limits). Every Cloudflare **`fetch`/`Subrequest`** counts (Neon over HTTP + GHL APIs). This repo sets **`[limits] subrequests`** in `apps/api/wrangler.toml` for paid accounts. **Workers Free** still caps external subrequests at **~50** regardless; use small batches, cron, or a paid Workers plan for huge backfills.
 3. **`GET /subaccounts/overview?surface=all`** budgets on-demand lookups per request (heavy lists still need (1)/(2)).
+4. **Stale display-name refresh** (after migration `0010_location_name_synced_at`): each successful GHL hydrate records `locations.location_name_synced_at`. Set **`LOCATION_NAMES_REFRESH_BATCH`** > 0 so the Worker `scheduled` handler periodically re-queries GHL for locations whose name is already non-empty but last sync exceeds **`LOCATION_NAMES_REFRESH_STALE_AFTER_DAYS`** (defaults to **2**). Cap per tick is **15** lookups (`Math.min(parsed,15)`); use **`LOCATION_NAMES_REFRESH_HOUR_UTC`** (0–23) to confine refreshes to a single UTC clock hour (“morning window”). **`POST /admin/locations/refresh-stale-names?limit=N`** triggers the same path manually.
 
-To **eventually drain a large backlog** without manual looping, configure **`LOCATION_NAME_CRON_BATCH`** > 0 — each cron tick processes up to **10** unnamed locations (see `scheduled` handler).
+To **eventually drain a large backlog** of blank names without manual looping, configure **`LOCATION_NAME_CRON_BATCH`** > 0 — each cron tick processes up to **15** unnamed locations (batched hydrate; cap matches `scheduled` handler).
+
+## Appointment overrides & workspace audit
+
+Apply migration **`0011_appointment_overrides_and_audit_logs`**.
+
+1. **`PUT /workspace/appointments/:id/overrides`** (workspace JWT — same location access rules as **`GET /appointments`**) persists `{ manualPaymentOverride: inherit | force_paid | force_unpaid, hiddenFromUi }` on **`appointments`**. Overrides change list filtering **`paymentStatus`** and let users hide bookings from default lists (**`hidden_from_ui`**).
+2. **`GET /appointments`** exposes those fields plus query **`hidden=`** **`omit`** (default, drops hidden rows) | **`include`** | **`only`** for recovery workflows.
+3. **`GET /admin/workspace-audit-logs`** returns recent **`workspace_audit_logs`** (`from` / `to` ISO timestamps, **`actionKind`**, **`locationId`**, **`actorWorkspaceUserId`**, **`limit`**). Rows are capped to the trailing **90**-day retention window enforced by **`pruneWorkspaceAuditLogs`** inside the Worker `scheduled` handler.
+4. Audit rows are written today for overrides, provisioning users, admin sub-account seeds, personal picker saves, and legacy viewer-key **`POST /subaccounts/visibility`**.
+
+Appointment counts shown on **`/subaccounts/overview?surface=appointments`** omit hidden-only tallies (**`WHERE hidden_from_ui = false`**).
 
 ## Validation
 

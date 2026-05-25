@@ -36,7 +36,11 @@ import {
   userSubaccountVisibilities,
   webhookEvents
 } from "@agentflow/db";
-import { DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE, normalizeGhlMarketplaceOAuthScope } from "@agentflow/shared";
+import {
+  AUDIT_ACTION_KINDS,
+  DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE,
+  normalizeGhlMarketplaceOAuthScope
+} from "@agentflow/shared";
 import type {
   ContactOnDemandDetails,
   MessageChannel,
@@ -50,7 +54,21 @@ import type {
   NormalizedGhlWebhookEvent,
   ThreadOpportunity
 } from "@agentflow/shared";
-import { and, asc, desc, eq, exists, inArray, not, notExists, notInArray, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  inArray,
+  isNull,
+  lt,
+  not,
+  notExists,
+  notInArray,
+  or,
+  sql
+} from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { Context } from "hono";
 import { Hono } from "hono";
@@ -66,6 +84,7 @@ import {
 } from "./workspace-admin.js";
 import {
   getHiddenLocationIdsForPolicy,
+  jwtWorkspaceAllowedLocationUuidList,
   meHandler,
   provisionWorkspaceUserFromGhlAccount,
   resolveAccessPolicy,
@@ -77,23 +96,17 @@ import {
   mePutLocationSelectionsHandler,
   workspaceSelectionMatrixHandler
 } from "./workspace-selection-handlers.js";
+import { putWorkspaceAppointmentOverridesHandler } from "./appointment-overrides-handler.js";
 import { fetchSelectionLocationRows, rowsToNullableSelectionSet } from "./workspace-selection-db.js";
+import {
+  WORKSPACE_AUDIT_RETENTION_DAYS,
+  insertWorkspaceAuditLog,
+  listWorkspaceAuditLogsForAdmin,
+  pruneWorkspaceAuditLogs
+} from "./workspace-audit.js";
 
 function jwtConfiguredForWorkspace(env: Env) {
   return Boolean(env.JWT_SECRET?.trim());
-}
-
-/** JWT workspace: explicit location picks in DB -> restrict reads to those UUIDs. No rows stored => null (implicit all). */
-async function jwtWorkspaceAllowedLocationUuidList(
-  db: ReturnType<typeof createDb>,
-  policy: AccessPolicy
-): Promise<string[] | null> {
-  if (policy.kind !== "jwt_workspace") {
-    return null;
-  }
-  const rows = await fetchSelectionLocationRows(db, policy.workspaceUserId);
-  const scope = rowsToNullableSelectionSet(rows);
-  return scope === null ? null : [...scope];
 }
 
 function appendJwtWorkspaceLocationConstraint(
@@ -135,6 +148,21 @@ type Env = {
    * `locations` per cron tick via GoHighLevel. `"0"` or unset disables scheduled hydration.
    */
   LOCATION_NAME_CRON_BATCH?: string;
+  /**
+   * Re-fetch display names from GHL for rows that already have a non-empty `locations.name` but
+   * `location_name_synced_at` is older than LOCATION_NAMES_REFRESH_STALE_AFTER_DAYS (or unset).
+   * Each cron tick performs at most this many API-backed lookups (`"0"` or unset disables).
+   */
+  LOCATION_NAMES_REFRESH_BATCH?: string;
+  /**
+   * Minimum days since `location_name_synced_at` before a location becomes eligible again (default 2).
+   */
+  LOCATION_NAMES_REFRESH_STALE_AFTER_DAYS?: string;
+  /**
+   * When set (0–23), only LOCATION_NAMES_REFRESH_* runs during that UTC clock hour — useful so
+   * sweeps cluster in morning / off-peak windows. Blank = every cron tick.
+   */
+  LOCATION_NAMES_REFRESH_HOUR_UTC?: string;
 };
 
 type HonoBindings = {
@@ -328,6 +356,96 @@ app.post("/admin/locations/hydrate-missing-names", async (c) => {
     );
   }
 });
+
+app.post("/admin/locations/refresh-stale-names", async (c) => {
+  try {
+    const me = await resolveSessionUser(c, c.env);
+    if (!me || me.role !== "admin") {
+      return c.json({ error: "forbidden" }, 403);
+    }
+
+    const parsed = Number.parseInt(String(c.req.query("limit") ?? "8"), 10);
+    const limit = Number.isFinite(parsed) ? Math.min(15, Math.max(1, parsed)) : 8;
+    const staleDays = parseLocationNamesStaleAfterDays(c.env.LOCATION_NAMES_REFRESH_STALE_AFTER_DAYS);
+
+    const body = await refreshStaleLocationNamesCronBatch(c.env, limit, staleDays);
+    return c.json(body);
+  } catch (error) {
+    const message = formatErrorDeep(error);
+    console.error("[admin/locations/refresh-stale-names]", error);
+    return c.json({ ok: false as const, error: "refresh_failed", message }, 500);
+  }
+});
+
+app.get("/admin/workspace-audit-logs", async (c) => {
+  try {
+    const me = await resolveSessionUser(c, c.env);
+    if (!me || me.role !== "admin") {
+      return c.json({ error: "forbidden" }, 403);
+    }
+    const db = createDb(c.env.DATABASE_URL);
+
+    function parseIsoDate(q: string | undefined): Date | null {
+      if (!q?.trim()) {
+        return null;
+      }
+      const d = new Date(q.trim());
+      return Number.isFinite(d.getTime()) ? d : null;
+    }
+
+    const nowMs = Date.now();
+    const retentionFloor = nowMs - WORKSPACE_AUDIT_RETENTION_DAYS * 86400000;
+
+    const toCandidate = parseIsoDate(c.req.query("to")) ?? new Date(nowMs);
+    let fromCandidate = parseIsoDate(c.req.query("from")) ?? new Date(nowMs - 7 * 86400000);
+
+    let toMs = Math.min(nowMs, toCandidate.getTime());
+    let fromMs = fromCandidate.getTime();
+    if (fromMs < retentionFloor) {
+      fromMs = retentionFloor;
+    }
+    if (fromMs > toMs) {
+      fromMs = Math.max(retentionFloor, toMs - 86400000);
+    }
+
+    const limitRaw = Number.parseInt(String(c.req.query("limit") ?? "80"), 10);
+
+    const rows = await listWorkspaceAuditLogsForAdmin(db, {
+      from: new Date(fromMs),
+      to: new Date(toMs),
+      actionKind: c.req.query("actionKind") ?? undefined,
+      locationId: c.req.query("locationId") ?? undefined,
+      actorWorkspaceUserId: c.req.query("actorWorkspaceUserId") ?? undefined,
+      limit: Number.isFinite(limitRaw) ? limitRaw : 80
+    });
+
+    return c.json({
+      from: new Date(fromMs).toISOString(),
+      to: new Date(toMs).toISOString(),
+      retentionDays: WORKSPACE_AUDIT_RETENTION_DAYS,
+      logs: rows.map((row) => ({
+        id: row.id,
+        createdAt: row.createdAt.toISOString(),
+        actionKind: row.actionKind,
+        entityType: row.entityType ?? null,
+        entityId: row.entityId ?? null,
+        locationId: row.locationId ?? null,
+        summary: row.summary,
+        details: row.details ?? {},
+        actorWorkspaceUserId: row.actorWorkspaceUserId ?? null,
+        actorEmail: row.actorEmail ?? null,
+        actorDisplayName: row.actorDisplayName ?? null
+      }))
+    });
+  } catch (error) {
+    const message = formatErrorDeep(error);
+    console.error("[admin/workspace-audit-logs]", error);
+    return c.json({ error: "audit_list_failed", message }, 500);
+  }
+});
+
+app.put("/workspace/appointments/:id/overrides", putWorkspaceAppointmentOverridesHandler);
+
 app.get("/admin/workspace-users/:id/subaccounts", adminGetUserSubaccounts);
 app.put("/admin/workspace-users/:id/subaccounts", adminPutUserSubaccounts);
 
@@ -728,6 +846,18 @@ function pickScheduleQueryParam(scheduleRaw: string | undefined, legacyTimeRaw: 
   return t !== "" ? legacyTimeRaw : undefined;
 }
 
+/** Default list hides appointments marked hidden; `include|all` merges them in; `only` shows hidden rows for recovery. */
+function normalizeAppointmentHiddenFilter(raw: string | undefined): "omit" | "include" | "only" {
+  const v = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (v === "only" || v === "hidden_only") {
+    return "only";
+  }
+  if (v === "include" || v === "all") {
+    return "include";
+  }
+  return "omit";
+}
+
 app.get("/appointments", async (c) => {
   const db = createDb(c.env.DATABASE_URL);
   const policy = await resolveAccessPolicy(c, c.env);
@@ -742,9 +872,10 @@ app.get("/appointments", async (c) => {
   const appointmentLifecycle = normalizeAppointmentLifecycleQuery(
     pickAppointmentLifecycleQueryParam(c.req.query("lifecycle"), c.req.query("appointmentStatus"))
   );
+  const hiddenFilter = normalizeAppointmentHiddenFilter(c.req.query("hidden"));
 
   /** One fragment for SELECT + WHERE so correlation/aliases cannot diverge across duplicate builder calls. */
-  const appointmentIsPaid = buildAppointmentPaidSubquery(db);
+  const appointmentIsPaid = buildAppointmentEffectivePaidSql(db);
   const cancelledBookingPredicate = appointmentCancelledOnlySql();
   const filters = [];
 
@@ -781,7 +912,9 @@ app.get("/appointments", async (c) => {
       appointmentCreatedAt: sql<Date>`COALESCE(${appointments.dateAdded}, ${appointments.createdAt})`,
       isPaid: appointmentIsPaid,
       cancelledAppointment: cancelledBookingPredicate,
-      updatedAt: appointments.updatedAt
+      updatedAt: appointments.updatedAt,
+      manualPaymentOverride: appointments.manualPaymentOverride,
+      hiddenFromUi: appointments.hiddenFromUi
     })
     .from(appointments)
     .innerJoin(locations, eq(appointments.locationId, locations.id))
@@ -813,6 +946,12 @@ app.get("/appointments", async (c) => {
     filters.push(cancelledBookingPredicate);
   } else if (appointmentLifecycle === "active") {
     filters.push(not(cancelledBookingPredicate));
+  }
+
+  if (hiddenFilter === "omit") {
+    filters.push(eq(appointments.hiddenFromUi, false));
+  } else if (hiddenFilter === "only") {
+    filters.push(eq(appointments.hiddenFromUi, true));
   }
 
   if (filters.length > 0) {
@@ -848,7 +987,12 @@ app.get("/appointments", async (c) => {
       appointmentCreatedAt: toMaybeIso(row.appointmentCreatedAt),
       paymentStatus: coerceSqlBoolean(row.isPaid) ? "paid" : "unpaid",
       cancelledBooking: coerceSqlBoolean(row.cancelledAppointment),
-      updatedAt: row.updatedAt.toISOString()
+      updatedAt: row.updatedAt.toISOString(),
+      manualPaymentOverride:
+        row.manualPaymentOverride === "force_paid" || row.manualPaymentOverride === "force_unpaid"
+          ? row.manualPaymentOverride
+          : null,
+      hiddenFromUi: Boolean(row.hiddenFromUi)
     }))
   });
 });
@@ -1100,9 +1244,19 @@ function buildAppointmentPaymentCorrelationParts(db: ReturnType<typeof createDb>
   };
 }
 
-function buildAppointmentPaidSubquery(db: ReturnType<typeof createDb>) {
+function buildAppointmentComputedPaidSql(db: ReturnType<typeof createDb>) {
   const p = buildAppointmentPaymentCorrelationParts(db);
   return sql<boolean>`(${p.invoicePaidExists}) OR (${p.orderPaidExists})`;
+}
+
+/** Manual HighLevel payout overrides win over invoice/order correlation until cleared to inheriting computed state. */
+function buildAppointmentEffectivePaidSql(db: ReturnType<typeof createDb>) {
+  const computedPaid = buildAppointmentComputedPaidSql(db);
+  return sql<boolean>`CASE
+    WHEN ${appointments.manualPaymentOverride} = 'force_paid' THEN true
+    WHEN ${appointments.manualPaymentOverride} = 'force_unpaid' THEN false
+    ELSE (${computedPaid})
+  END`;
 }
 
 function toMaybeIso(value: unknown): string | null {
@@ -1212,6 +1366,7 @@ app.get("/subaccounts/overview", async (c) => {
         count: sql<number>`count(*)::int`
       })
       .from(appointments)
+      .where(eq(appointments.hiddenFromUi, false))
       .groupBy(appointments.locationId),
     visibilityLegacyPromise,
     jwtSelectionPromise
@@ -1321,6 +1476,15 @@ app.post("/subaccounts/visibility", async (c) => {
         updatedAt: now
       }
     });
+
+  await insertWorkspaceAuditLog(db, {
+    actorWorkspaceUserId: null,
+    actionKind: AUDIT_ACTION_KINDS.SUBACCOUNT_VISIBILITY_LEGACY,
+    entityType: "subaccount_visibility",
+    locationId,
+    summary: `Legacy subaccount ${visible ? "shown" : "hidden"} (viewer key)`,
+    details: { viewerKey, locationId, visible }
+  });
 
   return c.json({
     ok: true,
@@ -3759,7 +3923,7 @@ async function hydrateMissingLocationNames(
         try {
           await db
             .update(locations)
-            .set({ name: fetchedName, updatedAt: new Date() })
+            .set({ name: fetchedName, updatedAt: new Date(), locationNameSyncedAt: new Date() })
             .where(eq(locations.id, locationId));
         } catch (dbErr) {
           console.warn("[hydrateMissingLocationNames] db.update failed", { locationId, ghlLocationId, dbErr });
@@ -3776,6 +3940,130 @@ async function hydrateMissingLocationNames(
 /** `locations.name` absent or whitespace-only (`text` column). Quotes avoid Neon HTTP/driver edge cases embedding column refs inside `trim()`. */
 function whereLocationHasNoDisplayName() {
   return sql<boolean>`COALESCE(length(btrim(cast("locations"."name" AS text))), 0) = 0`;
+}
+
+function whereLocationHasDisplayName() {
+  return sql<boolean>`COALESCE(length(btrim(cast("locations"."name" AS text))), 0) > 0`;
+}
+
+function parseLocationNamesStaleAfterDays(raw: string | undefined): number {
+  const n = Number.parseFloat(String(raw ?? "2").trim());
+  if (!Number.isFinite(n) || n < 1) {
+    return 2;
+  }
+  return Math.min(365, n);
+}
+
+/** When unset or invalid hour, refreshes run on every eligible cron tick. */
+function passesLocationRefreshHourUtcGate(env: Env, scheduledTimeMs: number): boolean {
+  const trimmed = env.LOCATION_NAMES_REFRESH_HOUR_UTC?.trim();
+  if (!trimmed) {
+    return true;
+  }
+  const hour = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(hour) || hour < 0 || hour > 23) {
+    return true;
+  }
+  return new Date(scheduledTimeMs).getUTCHours() === hour;
+}
+
+/**
+ * Re-confirms friendly names via GHL for locations that already have a display label.
+ * Depends on DB column `locations.location_name_synced_at`; updates it even when text is unchanged,
+ * so renames propagate slowly according to LOCATION_NAMES_REFRESH_STALE_AFTER_DAYS.
+ */
+async function refreshStaleLocationNamesCronBatch(env: Env, requestedLimit: number, staleAfterDays: number) {
+  const batchLimit = Number.isFinite(requestedLimit)
+    ? Math.min(15, Math.max(1, Math.floor(requestedLimit)))
+    : 12;
+
+  const safeDays = staleAfterDays;
+  const staleMs = safeDays * 86_400_000;
+  const cutoff = Number.isFinite(staleMs) ? new Date(Date.now() - staleMs) : new Date(0);
+
+  const db = createDb(env.DATABASE_URL);
+
+  const hasDisplayName = whereLocationHasDisplayName();
+  const stalePredicate = or(isNull(locations.locationNameSyncedAt), lt(locations.locationNameSyncedAt, cutoff));
+
+  const candidates = await db
+    .select({
+      locationId: locations.id,
+      ghlLocationId: locations.ghlLocationId,
+      locationName: locations.name,
+      syncedAt: locations.locationNameSyncedAt
+    })
+    .from(locations)
+    .where(and(hasDisplayName, stalePredicate))
+    .orderBy(asc(locations.locationNameSyncedAt), asc(locations.id))
+    .limit(batchLimit);
+
+  if (candidates.length === 0) {
+    return {
+      ok: true as const,
+      skipReason: "no_stale_named_locations_in_batch_scope" as const,
+      staleAfterDays: safeDays,
+      batchLimit,
+      lookupsAttempted: 0,
+      fetchedOkCount: 0,
+      renamedCount: 0,
+      unchangedNameCount: 0,
+      failedLookupCount: 0
+    };
+  }
+
+  const hydrateTokenCache = new Map<string, string[]>();
+
+  let lookupsAttempted = 0;
+  let fetchedOkCount = 0;
+  let renamedCount = 0;
+  let unchangedNameCount = 0;
+  let failedLookupCount = 0;
+
+  for (const row of candidates) {
+    lookupsAttempted += 1;
+    try {
+      const fetchedName = await fetchLocationNameOnDemand(env, db, row.ghlLocationId, {
+        hydrateBatchMode: true,
+        tokenCache: hydrateTokenCache
+      });
+
+      const priorTrimmed = typeof row.locationName === "string" ? row.locationName.trim() : "";
+
+      if (!fetchedName || !String(fetchedName).trim()) {
+        failedLookupCount += 1;
+        continue;
+      }
+
+      const nextTrimmed = String(fetchedName).trim();
+      fetchedOkCount += 1;
+      if (nextTrimmed !== priorTrimmed) {
+        renamedCount += 1;
+      } else {
+        unchangedNameCount += 1;
+      }
+
+      await db
+        .update(locations)
+        .set({ name: nextTrimmed, updatedAt: new Date(), locationNameSyncedAt: new Date() })
+        .where(eq(locations.id, row.locationId));
+    } catch (caught) {
+      failedLookupCount += 1;
+      console.warn("[refreshStaleLocationNamesCronBatch.lookup_failed]", { locationId: row.locationId, caught });
+    }
+  }
+
+  return {
+    ok: true as const,
+    staleAfterDays: safeDays,
+    batchLimit,
+    candidatesQueued: candidates.length,
+    lookupsAttempted,
+    fetchedOkCount,
+    renamedCount,
+    unchangedNameCount,
+    failedLookupCount
+  };
 }
 
 async function hydrateUnnamedLocationsCronBatch(env: Env, requestedLimit: number) {
@@ -5805,23 +6093,43 @@ function toCustomFields(value: unknown): ContactOnDemandDetails["customFields"] 
 
 export default {
   fetch: app.fetch,
-  async scheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext) {
-    const raw = env.LOCATION_NAME_CRON_BATCH?.trim();
-    if (!raw || raw === "0") {
-      return;
-    }
-
-    const parsed = Number.parseInt(raw, 10);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      return;
+  async scheduled(event: { scheduledTime: number }, env: Env, _ctx: ExecutionContext) {
+    try {
+      const raw = env.LOCATION_NAME_CRON_BATCH?.trim();
+      if (raw && raw !== "0") {
+        const parsed = Number.parseInt(raw, 10);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          const batch = Math.min(15, parsed);
+          const summary = await hydrateUnnamedLocationsCronBatch(env, batch);
+          console.log("[scheduled.location_names.blank_hydrate]", summary);
+        }
+      }
+    } catch (error) {
+      console.warn("[scheduled.location_names.blank_hydrate.failed]", error);
     }
 
     try {
-      const batch = Math.min(10, parsed);
-      const summary = await hydrateUnnamedLocationsCronBatch(env, batch);
-      console.log("[scheduled.location_names]", summary);
+      const refreshRaw = env.LOCATION_NAMES_REFRESH_BATCH?.trim();
+      if (refreshRaw && refreshRaw !== "0") {
+        const pb = Number.parseInt(refreshRaw, 10);
+        if (Number.isFinite(pb) && pb > 0) {
+          if (passesLocationRefreshHourUtcGate(env, event.scheduledTime)) {
+            const batch = Math.min(15, pb);
+            const staleDays = parseLocationNamesStaleAfterDays(env.LOCATION_NAMES_REFRESH_STALE_AFTER_DAYS);
+            const summary = await refreshStaleLocationNamesCronBatch(env, batch, staleDays);
+            console.log("[scheduled.location_names.stale_refresh]", summary);
+          }
+        }
+      }
     } catch (error) {
-      console.warn("[scheduled.location_names.failed]", error);
+      console.warn("[scheduled.location_names.stale_refresh.failed]", error);
+    }
+
+    try {
+      const adb = createDb(env.DATABASE_URL);
+      await pruneWorkspaceAuditLogs(adb, WORKSPACE_AUDIT_RETENTION_DAYS);
+    } catch (error) {
+      console.warn("[scheduled.workspace_audit_prune.failed]", error);
     }
   },
   async queue(batch: MessageBatch<NormalizedGhlWebhookEvent>, env: Env) {

@@ -266,6 +266,8 @@ export type AppointmentSummary = {
   /** True when status matches cancelled / invalid / no-show / deleted heuristic (aligned with GET /appointments filters). */
   cancelledBooking: boolean;
   updatedAt: string;
+  manualPaymentOverride: "force_paid" | "force_unpaid" | null;
+  hiddenFromUi: boolean;
 };
 
 export type AppointmentsResponse = {
@@ -306,3 +308,9 @@ export function normalizeGhlMarketplaceOAuthScope(raw: string): string {
     .filter(Boolean)
     .join(" ");
 }
+
+export {
+  AUDIT_ACTION_KINDS,
+  WORKSPACE_AUDIT_ACTION_OPTIONS
+} from "./audit-constants";
+export type { WorkspaceAuditActionKind } from "./audit-constants";

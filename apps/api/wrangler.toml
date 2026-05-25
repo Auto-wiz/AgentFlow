@@ -7,8 +7,13 @@ compatibility_flags = ["nodejs_compat"]
 [limits]
 subrequests = 10000
 
-# Cron runs every 15m; LOCATION_NAME_CRON_BATCH="0" (default below) skips GHL hydration (scheduled handler returns immediately).
-# Set LOCATION_NAME_CRON_BATCH to e.g. 30 in Dashboard or `[vars]` to drain blank `locations.name` over time.
+# Cron runs every 15m; LOCATION_NAME_CRON_BATCH="0" (default below) skips GHL hydration for unnamed locations.
+# Set LOCATION_NAME_CRON_BATCH to e.g. 8 in Dashboard or `[vars]` to drain blank `locations.name` over time.
+#
+# Optional rename drift sweeps (requires DB migration `0010_location_name_synced_at`):
+#   LOCATION_NAMES_REFRESH_BATCH — max GHL lookups per tick for rows that already have a display name (e.g. "4").
+#   LOCATION_NAMES_REFRESH_STALE_AFTER_DAYS — eligibility window (default "2").
+#   LOCATION_NAMES_REFRESH_HOUR_UTC — if set ("0"-"23"), only run refresh batches during that UTC hour.
 [[triggers]]
 crons = ["*/15 * * * *"]
 

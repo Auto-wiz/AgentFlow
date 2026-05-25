@@ -13,6 +13,11 @@ const tabs = [
     href: "/settings/admin/create-users",
     match: (path: string) => path.startsWith("/settings/admin/create-users"),
     label: "Create users"
+  },
+  {
+    href: "/settings/admin/logs",
+    match: (path: string) => path.startsWith("/settings/admin/logs"),
+    label: "Logs"
   }
 ] as const;
 

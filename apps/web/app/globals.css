@@ -454,6 +454,32 @@ button.appointments-row.active {
   justify-content: flex-start;
 }
 
+.appointments-header-filters-tail {
+  align-items: flex-end;
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-left: auto;
+}
+
+.appointments-override-modal-backdrop {
+  align-items: center;
+  backdrop-filter: blur(3px);
+  background: rgb(2 12 34 / 0.45);
+  display: grid;
+  inset: 0;
+  justify-content: center;
+  padding: 20px;
+  position: fixed;
+  z-index: 60;
+}
+
+.appointments-override-modal.panel-narrow {
+  max-width: 440px;
+  width: min(440px, 100%);
+}
+
 .appointments-filter-field {
   display: grid;
   gap: 4px;
@@ -830,6 +856,11 @@ button.appointments-row.active {
   font-weight: 700;
   padding: 4px 8px;
   text-transform: uppercase;
+}
+
+.badge.secondary {
+  border: 1px dashed var(--border);
+  text-transform: none;
 }
 
 .messages {

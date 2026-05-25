@@ -71,7 +71,9 @@ export const locations = pgTable(
     ghlLocationId: text("ghl_location_id").notNull(),
     name: text("name"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Last successful GHL-backed fetch of location display name (cron hydrate / stale refresh); webhooks-only updates may leave null. */
+    locationNameSyncedAt: timestamp("location_name_synced_at", { withTimezone: true })
   },
   (table) => ({
     ghlLocationUnique: uniqueIndex("locations_ghl_location_id_unique").on(
@@ -398,6 +400,35 @@ export const workspaceUserLocationSelection = pgTable(
   })
 );
 
+/** Append-only workspace audit trail (manual retention pruning in Worker cron). */
+export const workspaceAuditLogs = pgTable(
+  "workspace_audit_logs",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    actorWorkspaceUserId: uuid("actor_workspace_user_id").references(() => workspaceUsers.id, {
+      onDelete: "set null"
+    }),
+    actionKind: text("action_kind").notNull(),
+    entityType: text("entity_type"),
+    entityId: uuid("entity_id"),
+    locationId: uuid("location_id").references(() => locations.id, { onDelete: "set null" }),
+    summary: text("summary").notNull(),
+    details: jsonb("details")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`)
+  },
+  (table) => ({
+    createdIdx: index("workspace_audit_logs_created_at_idx").on(table.createdAt),
+    actionIdx: index("workspace_audit_logs_action_kind_idx").on(table.actionKind),
+    actorIdx: index("workspace_audit_logs_actor_idx").on(table.actorWorkspaceUserId),
+    locIdx: index("workspace_audit_logs_location_id_idx").on(table.locationId)
+  })
+);
+
 export const appointments = pgTable(
   "appointments",
   {
@@ -424,7 +455,15 @@ export const appointments = pgTable(
     dateUpdated: timestamp("date_updated", { withTimezone: true }),
     raw: jsonb("raw").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Nullable: inherit computed payment (`force_paid` / `force_unpaid`). */
+    manualPaymentOverride: text("manual_payment_override"),
+    hiddenFromUi: boolean("hidden_from_ui").notNull().default(false),
+    appointmentOverrideUpdatedAt: timestamp("appointment_override_updated_at", { withTimezone: true }),
+    appointmentOverrideWorkspaceUserId: uuid("appointment_override_workspace_user_id").references(
+      () => workspaceUsers.id,
+      { onDelete: "set null" }
+    )
   },
   (table) => ({
     appointmentPerLocationUnique: uniqueIndex(

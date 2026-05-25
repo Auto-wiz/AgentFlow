@@ -53,6 +53,20 @@
       "when": 1737158400000,
       "tag": "0009_ghl_payment_orders",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1747622400000,
+      "tag": "0010_location_name_synced_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1747708800000,
+      "tag": "0011_appointment_overrides_and_audit_logs",
+      "breakpoints": true
     }
   ]
 }

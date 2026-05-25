@@ -1,5 +1,6 @@
 import { createDb } from "@agentflow/db";
 import { locations, workspaceUsers } from "@agentflow/db";
+import { AUDIT_ACTION_KINDS } from "@agentflow/shared";
 import { asc, eq } from "drizzle-orm";
 import type { Context } from "hono";
 
@@ -11,6 +12,7 @@ import {
   replaceWorkspaceSelections,
   rowsToNullableSelectionSet
 } from "./workspace-selection-db.js";
+import { insertWorkspaceAuditLog } from "./workspace-audit.js";
 
 type HonoBindings = { Bindings: WorkspaceJwtEnv };
 
@@ -110,6 +112,19 @@ export async function adminPostWorkspaceUser(c: Context<HonoBindings>) {
   if (!inserted) {
     return c.json({ error: "insert_failed" }, 500);
   }
+
+  await insertWorkspaceAuditLog(db, {
+    actorWorkspaceUserId: admin.id,
+    actionKind: AUDIT_ACTION_KINDS.WORKSPACE_USER_CREATED,
+    entityType: "workspace_user",
+    entityId: inserted.id,
+    summary: `Created workspace user (${inserted.role}): ${inserted.email ?? inserted.id.slice(0, 8)}…`,
+    details: {
+      targetUserId: inserted.id,
+      email: inserted.email,
+      role: inserted.role
+    }
+  });
 
   return c.json({ user: inserted }, 201);
 }
@@ -216,6 +231,18 @@ export async function adminPutUserSubaccounts(c: Context<HonoBindings>) {
   }
 
   await replaceWorkspaceSelections(db, userId, locationIds);
+
+  await insertWorkspaceAuditLog(db, {
+    actorWorkspaceUserId: admin.id,
+    actionKind: AUDIT_ACTION_KINDS.WORKSPACE_ADMIN_SUBACCOUNTS,
+    entityType: "workspace_user",
+    entityId: userId,
+    summary: `Admin set subaccount picker for user ${userId.slice(0, 8)}… (${locationIds.length} locations)`,
+    details: {
+      targetWorkspaceUserId: userId,
+      locationIds
+    }
+  });
 
   return c.json({ ok: true, userId, count: locationIds.length });
 }

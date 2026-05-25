@@ -1,9 +1,11 @@
 import { createDb, workspaceUserLocationSelection, workspaceUsers } from "@agentflow/db";
+import { AUDIT_ACTION_KINDS } from "@agentflow/shared";
 import { asc, sql } from "drizzle-orm";
 import type { Context } from "hono";
 
 import { fetchSelectionLocationRows, replaceWorkspaceSelections, assertAllLocationIdsExist } from "./workspace-selection-db.js";
 import { resolveSessionUser, type WorkspaceJwtEnv } from "./workspace-access.js";
+import { insertWorkspaceAuditLog } from "./workspace-audit.js";
 
 type HonoBindings = { Bindings: WorkspaceJwtEnv };
 
@@ -38,6 +40,15 @@ export async function mePutLocationSelectionsHandler(c: Context<HonoBindings>) {
   }
 
   await replaceWorkspaceSelections(db, me.id, locationIds, new Date());
+
+  await insertWorkspaceAuditLog(db, {
+    actorWorkspaceUserId: me.id,
+    actionKind: AUDIT_ACTION_KINDS.WORKSPACE_SELF_SUBACCOUNT_SELECTION,
+    entityType: "workspace_user",
+    entityId: me.id,
+    summary: `Personal subaccount selection saved (${locationIds.length} rows)`,
+    details: { workspaceUserId: me.id, locationIds }
+  });
 
   return c.json({ ok: true, workspaceUserId: me.id, count: locationIds.length });
 }
