@@ -10,6 +10,8 @@ import { mergeWorkspaceHeaders } from "../../../../lib/workspace-api-headers";
 import { DashboardRangeControl, type DateRangeStrings, utcInclusiveRange } from "../../dashboard-date-range";
 import { DashboardSubnav } from "../../dashboard-subnav";
 
+export const runtime = "edge";
+
 type PresetKey = "7" | "30" | "90" | "custom";
 
 type SeriesBucket = {
