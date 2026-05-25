@@ -1,16 +1,21 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { getApiBaseUrl } from "../../../../lib/api-base-url";
+import { getApiBaseUrl } from "../../../lib/api-base-url";
 import type { SubaccountOverview } from "@agentflow/shared";
-import { formatLocationName } from "../../../../lib/location-display";
-import { mergeWorkspaceHeaders } from "../../../../lib/workspace-api-headers";
-import { DashboardRangeControl, type DateRangeStrings, utcInclusiveRange } from "../../dashboard-date-range";
-import { DashboardSubnav } from "../../dashboard-subnav";
+import { formatLocationName } from "../../../lib/location-display";
+import { mergeWorkspaceHeaders } from "../../../lib/workspace-api-headers";
+import { DashboardRangeControl, type DateRangeStrings, utcInclusiveRange } from "../dashboard-date-range";
+import { DashboardSubnav } from "../dashboard-subnav";
 
-export const runtime = "edge";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isLocationUuid(raw: string | null): raw is string {
+  return typeof raw === "string" && UUID_RE.test(raw.trim());
+}
 
 type PresetKey = "7" | "30" | "90" | "custom";
 
@@ -46,42 +51,62 @@ function pctLabel(v: number | null) {
   return `${v}%`;
 }
 
-export default function DashboardSubaccountDetailPage({ params }: { params: { locationId: string } }) {
+function subaccountHref(locationId: string) {
+  const q = new URLSearchParams({ locationId });
+  return `/dashboard/subaccount?${q.toString()}`;
+}
+
+export default function DashboardSubaccountClient() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const apiBaseUrl = useMemo(() => getApiBaseUrl(), []);
-  const locationId = params.locationId;
+
+  const locationIdParam = searchParams.get("locationId");
+  const locationId = isLocationUuid(locationIdParam) ? locationIdParam.trim() : null;
+
   const [subs, setSubs] = useState<SubaccountOverview[]>([]);
+  const [subsLoading, setSubsLoading] = useState(true);
+  const [subsError, setSubsError] = useState<string | null>(null);
 
   const [preset, setPreset] = useState<Exclude<PresetKey, "custom"> | "custom">("30");
   const [range, setRange] = useState(() => utcInclusiveRange(30));
   const [customDraft, setCustomDraft] = useState<DateRangeStrings>(() => utcInclusiveRange(30));
   const [granularity, setGranularity] = useState<"day" | "week">("day");
   const [data, setData] = useState<SeriesResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   useEffect(() => {
     const ac = new AbortController();
     async function run() {
+      setSubsLoading(true);
+      setSubsError(null);
       try {
         const res = await fetch(`${apiBaseUrl}/subaccounts/overview?surface=appointments`, {
           signal: ac.signal,
           headers: mergeWorkspaceHeaders(),
           cache: "no-store"
         });
-        const payload = (await res.json().catch(() => ({}))) as { subaccounts?: SubaccountOverview[] };
-        if (res.ok && payload.subaccounts) {
-          setSubs(payload.subaccounts);
+        const payload = (await res.json().catch(() => ({}))) as { subaccounts?: SubaccountOverview[]; error?: string };
+        if (!res.ok) {
+          throw new Error(payload.error ?? "Failed to load locations");
         }
-      } catch {
-        /* optional */
+        setSubs(payload.subaccounts ?? []);
+      } catch (e) {
+        if (!ac.signal.aborted) {
+          setSubsError(e instanceof Error ? e.message : "Failed to load");
+        }
+      } finally {
+        if (!ac.signal.aborted) {
+          setSubsLoading(false);
+        }
       }
     }
     void run();
     return () => ac.abort();
   }, [apiBaseUrl]);
 
-  const query = useMemo(
+  const seriesQuery = useMemo(
     () =>
       new URLSearchParams({
         from: range.fromInclusive,
@@ -91,12 +116,15 @@ export default function DashboardSubaccountDetailPage({ params }: { params: { lo
     [granularity, range]
   );
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const loadSeries = useCallback(async () => {
+    if (!locationId) {
+      return;
+    }
+    setDetailLoading(true);
+    setDetailError(null);
     try {
       const res = await fetch(
-        `${apiBaseUrl}/workspace/dashboard/locations/${encodeURIComponent(locationId)}/series?${query}`,
+        `${apiBaseUrl}/workspace/dashboard/locations/${encodeURIComponent(locationId)}/series?${seriesQuery}`,
         { headers: mergeWorkspaceHeaders(), cache: "no-store" }
       );
       const payload = (await res.json().catch(() => ({}))) as SeriesResponse & { error?: string };
@@ -105,21 +133,67 @@ export default function DashboardSubaccountDetailPage({ params }: { params: { lo
       }
       setData(payload);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load");
+      setDetailError(e instanceof Error ? e.message : "Failed to load");
       setData(null);
     } finally {
-      setLoading(false);
+      setDetailLoading(false);
     }
-  }, [apiBaseUrl, locationId, query]);
+  }, [apiBaseUrl, locationId, seriesQuery]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (locationId) {
+      void loadSeries();
+    } else {
+      setData(null);
+      setDetailError(null);
+      setDetailLoading(false);
+    }
+  }, [loadSeries, locationId]);
 
   const bookedSeries = (data?.series ?? []).map((b) => b.bookedAppointments);
   const maxBooked = Math.max(1, ...bookedSeries, 0);
-
   const locationHeading = formatLocationName(data?.locationName ?? null, data?.ghlLocationId ?? "");
+
+  const invalidQuery = Boolean(locationIdParam && !locationId);
+
+  /** Picker only (no scoped subaccount selected). */
+  if (!locationId) {
+    return (
+      <div style={{ paddingTop: 8 }}>
+        <DashboardSubnav />
+        {invalidQuery ? <p className="empty">Invalid location id in URL.</p> : null}
+        {subsLoading ? <p className="muted">Loading locations…</p> : null}
+        {subsError ? <p className="empty">{subsError}</p> : null}
+        {!subsLoading && subs.length === 0 ? <p className="muted">No subaccounts available.</p> : null}
+        {!subsLoading && subs.length > 0 ? (
+          <div className="panel" style={{ padding: 16 }}>
+            <label className="appointments-filter-label" htmlFor="dashboard-loc-pick">
+              Select subaccount
+            </label>
+            <select
+              className="appointments-filter-select"
+              id="dashboard-loc-pick"
+              onChange={(e) => {
+                const id = e.target.value;
+                if (id) {
+                  router.push(subaccountHref(id));
+                }
+              }}
+              style={{ display: "block", marginTop: 8, maxWidth: 400 }}
+              value=""
+            >
+              <option value="">Choose…</option>
+              {subs.map((s) => (
+                <option key={s.locationId} value={s.locationId}>
+                  {formatLocationName(s.locationName, s.ghlLocationId)}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div style={{ paddingTop: 8 }}>
@@ -132,10 +206,10 @@ export default function DashboardSubaccountDetailPage({ params }: { params: { lo
               onChange={(e) => {
                 const id = e.target.value;
                 if (id) {
-                  router.push(`/dashboard/subaccount/${id}`);
+                  router.push(subaccountHref(id));
                 }
               }}
-              value={subs.some((s) => s.locationId === locationId) ? locationId : subs[0]?.locationId}
+              value={locationId}
             >
               {subs.map((s) => (
                 <option key={s.locationId} value={s.locationId}>
@@ -143,7 +217,15 @@ export default function DashboardSubaccountDetailPage({ params }: { params: { lo
                 </option>
               ))}
             </select>
-          ) : null
+          ) : subsLoading ? (
+            <span className="muted" style={{ fontSize: 12 }}>
+              Locations…
+            </span>
+          ) : (
+            <Link className="dashboard-drill-link" href="/dashboard/subaccount">
+              Pick location
+            </Link>
+          )
         }
       />
 
@@ -153,19 +235,19 @@ export default function DashboardSubaccountDetailPage({ params }: { params: { lo
           const f = Date.parse(customDraft.fromInclusive.slice(0, 10));
           const t = Date.parse(customDraft.toInclusive.slice(0, 10));
           if (!Number.isFinite(f) || !Number.isFinite(t) || f > t) {
-            setError("Invalid custom range.");
+            setDetailError("Invalid custom range.");
             return;
           }
           setPreset("custom");
           setRange({ fromInclusive: customDraft.fromInclusive.slice(0, 10), toInclusive: customDraft.toInclusive.slice(0, 10) });
-          setError(null);
+          setDetailError(null);
         }}
         onCustomDraft={setCustomDraft}
         onPresetChange={(p) => {
           if (p === "7" || p === "30" || p === "90") {
             setPreset(p);
             setRange(utcInclusiveRange(Number(p)));
-            setError(null);
+            setDetailError(null);
             return;
           }
           setPreset("custom");
@@ -188,10 +270,10 @@ export default function DashboardSubaccountDetailPage({ params }: { params: { lo
         </select>
       </div>
 
-      {loading ? <p className="muted">Loading…</p> : null}
-      {error ? <p className="empty">{error}</p> : null}
+      {detailLoading ? <p className="muted">Loading…</p> : null}
+      {detailError ? <p className="empty">{detailError}</p> : null}
 
-      {!loading && data ? (
+      {!detailLoading && data ? (
         <>
           <h2 className="dashboard-sub-heading">{locationHeading}</h2>
           <div className="dashboard-kpi-grid">

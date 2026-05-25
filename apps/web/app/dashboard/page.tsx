@@ -150,7 +150,10 @@ export default function DashboardOverviewPage() {
                     <td>{pctLabel(row.depositsCollectedPercentage)}</td>
                     <td>{row.depositsCollectedFormatted}</td>
                     <td>
-                      <Link className="dashboard-drill-link" href={`/dashboard/subaccount/${row.locationId}`}>
+                      <Link
+                        className="dashboard-drill-link"
+                        href={`/dashboard/subaccount?locationId=${encodeURIComponent(row.locationId)}`}
+                      >
                         View
                       </Link>
                     </td>
