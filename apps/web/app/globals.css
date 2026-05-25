@@ -1481,3 +1481,192 @@ button.appointments-row.active {
     grid-template-columns: 1fr;
   }
 }
+
+/* --- Dashboard --- */
+
+.dashboard-module-page .dashboard-lede {
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0 0 14px;
+}
+
+.dashboard-subnav-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.dashboard-subaccount-inline-select {
+  flex: 1 1 240px;
+  margin-left: auto;
+  max-width: 340px;
+}
+
+.dashboard-range-bar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.dashboard-range-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dashboard-range-select {
+  font-size: 13px;
+}
+
+.dashboard-range-reading {
+  font-size: 13px;
+}
+
+.dashboard-custom-range {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dashboard-date-input {
+  font-size: 13px;
+  max-width: 160px;
+  min-width: 120px;
+}
+
+.dashboard-kpi-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.dashboard-kpi-panel {
+  padding: 16px 18px;
+}
+
+.dashboard-kpi-eyebrow {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+}
+
+.dashboard-kpi-value {
+  font-size: 1.75rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.dashboard-kpi-sub {
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+
+.dashboard-sub-heading {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 16px 0 8px;
+}
+
+.dashboard-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 100%;
+  width: 100%;
+}
+
+.dashboard-table th {
+  background: var(--panel-soft);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 10px 12px;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.dashboard-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px;
+  vertical-align: middle;
+}
+
+.dashboard-table tbody tr:hover td {
+  background: var(--accent-soft);
+}
+
+.dashboard-drill-link {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.dashboard-drill-link:hover {
+  text-decoration: underline;
+}
+
+.dashboard-chart-panel {
+  min-width: 0;
+}
+
+.dashboard-bar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dashboard-bar-row {
+  align-items: center;
+  column-gap: 10px;
+  display: grid;
+  grid-template-columns: 88px 1fr 1fr minmax(140px, auto);
+  row-gap: 4px;
+}
+
+.dashboard-bar-label {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.dashboard-bar-track {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  height: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.dashboard-bar-row .dashboard-bar-fill {
+  border-radius: 4px;
+  height: 100%;
+  transition: width 0.18s ease;
+}
+
+.dashboard-bar-booked {
+  background: linear-gradient(90deg, rgb(56 87 255 / 45%), var(--accent));
+}
+
+.dashboard-bar-paid {
+  background: linear-gradient(90deg, rgb(16 185 129 / 55%), rgb(16 185 129 / 92%));
+}
+
+.dashboard-bar-meta {
+  font-size: 11px;
+  grid-column: 4;
+  text-align: right;
+}

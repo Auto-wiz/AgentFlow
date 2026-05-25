@@ -12,6 +12,7 @@ import { AppUserMenu } from "./app-user-menu";
 import { useWorkspaceAuth } from "./workspace-auth-provider";
 
 const navItems = [
+  { href: "/dashboard", label: "Dashboard", icon: "📊" },
   { href: "/appointments", label: "Appointments", icon: "⌚" },
   { href: "/settings", label: "Settings", icon: "⚙" }
 ];
