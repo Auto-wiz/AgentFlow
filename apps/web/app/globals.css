@@ -467,8 +467,66 @@ button.appointments-row.active {
 }
 
 .appointments-override-modal.panel-narrow {
-  max-width: 440px;
-  width: min(440px, 100%);
+  box-shadow:
+    var(--shadow),
+    0 24px 48px rgb(15 26 53 / 10%);
+  max-width: 460px;
+  padding: 22px 24px;
+  width: min(460px, 100%);
+}
+
+.appointments-override-modal-title {
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 4px;
+}
+
+.appointments-override-subheader {
+  font-size: 13px;
+  line-height: 1.4;
+  margin: 0 0 18px;
+}
+
+.appointments-override-section {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  margin-bottom: 12px;
+  padding: 14px 16px;
+}
+
+.appointments-override-section:last-of-type {
+  margin-bottom: 16px;
+}
+
+.appointments-override-section-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  margin: 0 0 12px;
+  text-transform: uppercase;
+}
+
+.appointments-override-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.appointments-override-footnote-mark {
+  font-weight: 800;
+  margin-left: 1px;
+  opacity: 0.75;
+}
+
+.appointments-override-disclaimer {
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 12px 0 0;
+  padding-top: 10px;
 }
 
 .appointments-filter-field {

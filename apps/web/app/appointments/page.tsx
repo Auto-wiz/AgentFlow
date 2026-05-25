@@ -439,59 +439,74 @@ export default function AppointmentsPage() {
           role="dialog"
         >
           <div className="panel appointments-override-modal panel-narrow">
-            <h3 style={{ marginTop: 0 }}>Appointment</h3>
-            <p className="muted" style={{ fontSize: 13, marginBottom: 14 }}>
+            <h3 className="appointments-override-modal-title">Appointment</h3>
+            <p className="muted appointments-override-subheader">
               {selectedAppointment.contactName} ·{" "}
               {formatLocationName(selectedAppointment.locationName, selectedAppointment.ghlLocationId)}
             </p>
-            <div
-              aria-label="Payment"
-              role="toolbar"
-              style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}
-            >
-              <button
-                aria-pressed={draftManual === "inherit"}
-                className={draftManual === "inherit" ? "button" : "button secondary"}
-                onClick={() => setDraftManual("inherit")}
-                type="button"
-              >
-                Auto
-              </button>
-              <button
-                aria-pressed={draftManual === "force_paid"}
-                className={draftManual === "force_paid" ? "button" : "button secondary"}
-                onClick={() => setDraftManual("force_paid")}
-                type="button"
-              >
-                Paid
-              </button>
-              <button
-                aria-pressed={draftManual === "force_unpaid"}
-                className={draftManual === "force_unpaid" ? "button" : "button secondary"}
-                onClick={() => setDraftManual("force_unpaid")}
-                type="button"
-              >
-                Unpaid
-              </button>
-            </div>
-            <div aria-label="List visibility" role="toolbar" style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-              <button
-                aria-pressed={!draftHidden}
-                className={!draftHidden ? "button" : "button secondary"}
-                onClick={() => setDraftHidden(false)}
-                type="button"
-              >
-                Visible
-              </button>
-              <button
-                aria-pressed={draftHidden}
-                className={draftHidden ? "button" : "button secondary"}
-                onClick={() => setDraftHidden(true)}
-                type="button"
-              >
-                Hidden
-              </button>
-            </div>
+            <section className="appointments-override-section" aria-labelledby="appt-override-payment-heading">
+              <h4 className="appointments-override-section-label" id="appt-override-payment-heading">
+                Payment
+              </h4>
+              <div aria-label="Payment" className="appointments-override-toolbar" role="toolbar">
+                <button
+                  aria-describedby="appt-override-auto-disclaimer"
+                  aria-pressed={draftManual === "inherit"}
+                  className={draftManual === "inherit" ? "button" : "button secondary"}
+                  onClick={() => setDraftManual("inherit")}
+                  type="button"
+                >
+                  Auto
+                  <span aria-hidden="true" className="appointments-override-footnote-mark">
+                    *
+                  </span>
+                </button>
+                <button
+                  aria-pressed={draftManual === "force_paid"}
+                  className={draftManual === "force_paid" ? "button" : "button secondary"}
+                  onClick={() => setDraftManual("force_paid")}
+                  type="button"
+                >
+                  Paid
+                </button>
+                <button
+                  aria-pressed={draftManual === "force_unpaid"}
+                  className={draftManual === "force_unpaid" ? "button" : "button secondary"}
+                  onClick={() => setDraftManual("force_unpaid")}
+                  type="button"
+                >
+                  Unpaid
+                </button>
+              </div>
+              <p className="muted appointments-override-disclaimer" id="appt-override-auto-disclaimer">
+                <span className="appointments-override-footnote-mark">*</span>{" "}
+                <strong>Auto:</strong> let the system decide paid vs unpaid from synced invoices and orders—no manual
+                override.
+              </p>
+            </section>
+            <section className="appointments-override-section" aria-labelledby="appt-override-list-heading">
+              <h4 className="appointments-override-section-label" id="appt-override-list-heading">
+                In this list
+              </h4>
+              <div aria-label="List visibility" className="appointments-override-toolbar" role="toolbar">
+                <button
+                  aria-pressed={!draftHidden}
+                  className={!draftHidden ? "button" : "button secondary"}
+                  onClick={() => setDraftHidden(false)}
+                  type="button"
+                >
+                  Visible
+                </button>
+                <button
+                  aria-pressed={draftHidden}
+                  className={draftHidden ? "button" : "button secondary"}
+                  onClick={() => setDraftHidden(true)}
+                  type="button"
+                >
+                  Hidden
+                </button>
+              </div>
+            </section>
             {overrideError ? <div className="empty" style={{ marginBottom: 8 }}>{overrideError}</div> : null}
             {!token ? <p className="muted">Sign in to save overrides.</p> : null}
             <div className="toolbar" style={{ gap: 10, justifyContent: "flex-end" }}>
