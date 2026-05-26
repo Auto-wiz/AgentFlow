@@ -24,6 +24,7 @@ export default function DashboardPortfolioAdminPage() {
   const [portfolioLoading, setPortfolioLoading] = useState(false);
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
   const [portfolioBusyLocationId, setPortfolioBusyLocationId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     if (!hydrated) {
@@ -115,6 +116,24 @@ export default function DashboardPortfolioAdminPage() {
     return null;
   }, [hydrated, user?.role]);
 
+  const filteredSortedLocs = useMemo(() => {
+    const needle = searchQuery.trim().toLowerCase();
+    const sorted = [...portfolioLocs].sort((a, b) => {
+      const na = (a.name ?? a.ghlLocationId).toLowerCase();
+      const nb = (b.name ?? b.ghlLocationId).toLowerCase();
+      return na.localeCompare(nb);
+    });
+    if (!needle) {
+      return sorted;
+    }
+    return sorted.filter((loc) => {
+      const name = (loc.name ?? "").toLowerCase();
+      const gid = loc.ghlLocationId.toLowerCase();
+      const uuid = loc.locationId.toLowerCase();
+      return name.includes(needle) || gid.includes(needle) || uuid.includes(needle);
+    });
+  }, [portfolioLocs, searchQuery]);
+
   return (
     <div style={{ paddingTop: 8 }}>
       <DashboardSubnav />
@@ -132,15 +151,41 @@ export default function DashboardPortfolioAdminPage() {
           {portfolioLoading ? <p className="muted" style={{ marginTop: 14 }}>Loading locations…</p> : null}
           {portfolioError ? <div className="empty" style={{ marginTop: 12 }}>{portfolioError}</div> : null}
 
+          {portfolioLoading ? <p className="muted" style={{ marginTop: 14 }}>Loading locations…</p> : null}
+          {portfolioError ? <div className="empty" style={{ marginTop: 12 }}>{portfolioError}</div> : null}
+
+          {!portfolioLoading && !portfolioError && portfolioLocs.length > 0 ? (
+            <div style={{ marginTop: 16 }}>
+              <label className="inbox-field-label" htmlFor="portfolio-admin-search">
+                Search subaccounts
+              </label>
+              <input
+                autoCapitalize="off"
+                autoComplete="off"
+                className="appointments-filter-select"
+                id="portfolio-admin-search"
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Name, GHL id, or uuid…"
+                spellCheck={false}
+                style={{ display: "block", marginTop: 6, maxWidth: 400, width: "100%" }}
+                type="search"
+                value={searchQuery}
+              />
+              <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>
+                Showing {filteredSortedLocs.length} of {portfolioLocs.length}
+                {searchQuery.trim() ? ` · filter: "${searchQuery.trim()}"` : ""}.
+              </p>
+            </div>
+          ) : null}
+
           {!portfolioLoading && !portfolioError && portfolioLocs.length > 0 ? (
             <div className="subaccounts-config-list" style={{ marginTop: 16 }}>
-              {[...portfolioLocs]
-                .sort((a, b) => {
-                  const na = (a.name ?? a.ghlLocationId).toLowerCase();
-                  const nb = (b.name ?? b.ghlLocationId).toLowerCase();
-                  return na.localeCompare(nb);
-                })
-                .map((loc) => (
+              {filteredSortedLocs.length === 0 ? (
+                <p className="muted" style={{ margin: "8px 0 0" }}>
+                  No subaccounts match your search.
+                </p>
+              ) : (
+                filteredSortedLocs.map((loc) => (
                   <label className="subaccount-config-row" key={loc.locationId}>
                     <div>
                       <strong>{loc.name ?? loc.ghlLocationId}</strong>
@@ -157,7 +202,8 @@ export default function DashboardPortfolioAdminPage() {
                       }
                     />
                   </label>
-                ))}
+                ))
+              )}
             </div>
           ) : null}
 
