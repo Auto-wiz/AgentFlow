@@ -132,7 +132,7 @@ export default function DashboardSubaccountClient() {
         const code = payload.error;
         const readable =
           code === "location_excluded_from_dashboard"
-            ? "This subaccount was excluded from the portfolio dashboard under Workspace → Admin settings."
+            ? "This subaccount was excluded from the portfolio dashboard (Dashboard → Portfolio admin)."
             : code ?? "Failed to load subaccount metrics";
         throw new Error(readable);
       }

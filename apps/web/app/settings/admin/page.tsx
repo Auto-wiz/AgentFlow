@@ -23,13 +23,6 @@ type LocationOption = {
   implicitAll?: boolean;
 };
 
-type PortfolioDashboardLocation = {
-  locationId: string;
-  ghlLocationId: string;
-  name: string | null;
-  excludeFromDashboard: boolean;
-};
-
 export default function WorkspaceAdminSettingsPage() {
   const apiBaseUrl = getApiBaseUrl();
   const { replaceGuarded } = useGuardedNavigate();
@@ -47,11 +40,6 @@ export default function WorkspaceAdminSettingsPage() {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-
-  const [portfolioLocs, setPortfolioLocs] = useState<PortfolioDashboardLocation[]>([]);
-  const [portfolioLoading, setPortfolioLoading] = useState(false);
-  const [portfolioError, setPortfolioError] = useState<string | null>(null);
-  const [portfolioBusyLocationId, setPortfolioBusyLocationId] = useState<string | null>(null);
 
   const sortedUsers = useMemo(() => {
     return [...users].sort((a, b) => {
@@ -163,48 +151,6 @@ export default function WorkspaceAdminSettingsPage() {
     };
   }, [apiBaseUrl, selectedUserId, users]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadPortfolioLocations() {
-      if (!hydrated || user?.role !== "admin") {
-        setPortfolioLocs([]);
-        return;
-      }
-      setPortfolioLoading(true);
-      setPortfolioError(null);
-      try {
-        const res = await fetch(`${apiBaseUrl}/admin/workspace-locations`, {
-          headers: mergeWorkspaceHeaders()
-        });
-        const payload = (await res.json().catch(() => ({}))) as {
-          locations?: PortfolioDashboardLocation[];
-          error?: string;
-        };
-        if (!res.ok) {
-          throw new Error(payload.error ?? "Unable to load locations");
-        }
-        if (!cancelled) {
-          setPortfolioLocs(payload.locations ?? []);
-        }
-      } catch (caught) {
-        if (!cancelled) {
-          setPortfolioError(caught instanceof Error ? caught.message : "Unable to load locations");
-          setPortfolioLocs([]);
-        }
-      } finally {
-        if (!cancelled) {
-          setPortfolioLoading(false);
-        }
-      }
-    }
-
-    void loadPortfolioLocations();
-    return () => {
-      cancelled = true;
-    };
-  }, [apiBaseUrl, hydrated, sessionKey, user?.role]);
-
   function toggleLocation(locationId: string, checked: boolean) {
     setLocations((rows) =>
       rows.map((row) => (row.locationId === locationId ? { ...row, selected: checked } : row))
@@ -244,35 +190,6 @@ export default function WorkspaceAdminSettingsPage() {
     }
   }
 
-  async function toggleDashboardExclusion(locationId: string, excludeFromDashboard: boolean) {
-    if (user?.role !== "admin") {
-      return;
-    }
-    setPortfolioBusyLocationId(locationId);
-    setPortfolioError(null);
-    try {
-      const res = await fetch(
-        `${apiBaseUrl}/admin/workspace-locations/${locationId}/dashboard-exclusion`,
-        {
-          method: "PATCH",
-          headers: mergeWorkspaceHeaders({ "Content-Type": "application/json" }),
-          body: JSON.stringify({ excludeFromDashboard })
-        }
-      );
-      const payload = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) {
-        throw new Error(payload.error ?? "Update failed");
-      }
-      setPortfolioLocs((rows) =>
-        rows.map((r) => (r.locationId === locationId ? { ...r, excludeFromDashboard } : r))
-      );
-    } catch (caught) {
-      setPortfolioError(caught instanceof Error ? caught.message : "Update failed");
-    } finally {
-      setPortfolioBusyLocationId(null);
-    }
-  }
-
   const headerNote = useMemo(() => {
     if (!hydrated) {
       return "Loading workspace session…";
@@ -294,51 +211,6 @@ export default function WorkspaceAdminSettingsPage() {
           (<code className="muted">role=user</code>) can see until they personalize their picker.
         </p>
         {headerNote ? <p className="muted" style={{ marginTop: 10 }}>{headerNote}</p> : null}
-      </div>
-
-      <div className="panel" style={{ padding: 18, marginTop: 12 }}>
-        <h3 style={{ marginTop: 0 }}>Portfolio dashboard</h3>
-        <p className="muted">
-          Mark subaccounts to hide from workspace dashboard KPIs and the rollup (internal test locations,
-          departed clients). They remain in the rest of the app unless you hide them elsewhere.
-          Subaccount drill-down returns 403 for excluded locations.
-        </p>
-
-        {user?.role === "admin" && portfolioLoading ? <p className="muted">Loading locations…</p> : null}
-        {portfolioError ? <div className="empty" style={{ marginTop: 10 }}>{portfolioError}</div> : null}
-
-        {user?.role === "admin" && !portfolioLoading && !portfolioError && portfolioLocs.length > 0 ? (
-          <div className="subaccounts-config-list" style={{ marginTop: 14 }}>
-            {[...portfolioLocs]
-              .sort((a, b) => {
-                const na = (a.name ?? a.ghlLocationId).toLowerCase();
-                const nb = (b.name ?? b.ghlLocationId).toLowerCase();
-                return na.localeCompare(nb);
-              })
-              .map((loc) => (
-                <label className="subaccount-config-row" key={loc.locationId}>
-                  <div>
-                    <strong>{loc.name ?? loc.ghlLocationId}</strong>
-                    <div className="muted">GHL: {loc.ghlLocationId}</div>
-                    <div className="muted">uuid: {loc.locationId}</div>
-                  </div>
-                  <input
-                    aria-label={`Exclude ${loc.ghlLocationId} from portfolio dashboard`}
-                    checked={Boolean(loc.excludeFromDashboard)}
-                    disabled={portfolioBusyLocationId === loc.locationId || user?.role !== "admin"}
-                    type="checkbox"
-                    onChange={(event) =>
-                      void toggleDashboardExclusion(loc.locationId, event.target.checked)
-                    }
-                  />
-                </label>
-              ))}
-          </div>
-        ) : null}
-
-        {user?.role === "admin" && !portfolioLoading && !portfolioError && portfolioLocs.length === 0 ? (
-          <p className="muted" style={{ marginTop: 12 }}>No locations synced yet.</p>
-        ) : null}
       </div>
 
       <div className="panel" style={{ padding: 18, marginTop: 12 }}>
