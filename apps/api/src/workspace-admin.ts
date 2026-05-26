@@ -139,12 +139,74 @@ export async function adminListLocations(c: Context<HonoBindings>) {
     .select({
       locationId: locations.id,
       ghlLocationId: locations.ghlLocationId,
-      name: locations.name
+      name: locations.name,
+      excludeFromDashboard: locations.excludeFromDashboard
     })
     .from(locations)
     .orderBy(asc(locations.ghlLocationId));
 
   return c.json({ locations: rows });
+}
+
+/** Toggle whether a location is omitted from workspace portfolio dashboard aggregates (admin JWT only). */
+export async function adminPatchLocationDashboardExclusion(c: Context<HonoBindings>) {
+  const admin = await assertAdminSession(c);
+  if (!admin) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+
+  const locationIdRaw = c.req.param("locationId");
+  if (!isUuid(locationIdRaw ?? "")) {
+    return c.json({ error: "invalid_location" }, 400);
+  }
+  const locationId = locationIdRaw as string;
+
+  const body = asRecord(await c.req.json().catch(() => ({})));
+  const ex = body.excludeFromDashboard;
+  if (typeof ex !== "boolean") {
+    return c.json(
+      {
+        error: "invalid_body",
+        message: "excludeFromDashboard (boolean) is required"
+      },
+      400
+    );
+  }
+
+  const db = createDb(c.env.DATABASE_URL);
+  const now = new Date();
+  const [row] = await db
+    .update(locations)
+    .set({ excludeFromDashboard: ex, updatedAt: now })
+    .where(eq(locations.id, locationId))
+    .returning({
+      locationId: locations.id,
+      ghlLocationId: locations.ghlLocationId,
+      excludeFromDashboard: locations.excludeFromDashboard
+    });
+
+  if (!row) {
+    return c.json({ error: "location_not_found" }, 404);
+  }
+
+  await insertWorkspaceAuditLog(db, {
+    actorWorkspaceUserId: admin.id,
+    actionKind: AUDIT_ACTION_KINDS.LOCATION_DASHBOARD_EXCLUSION,
+    entityType: "location",
+    entityId: row.locationId,
+    locationId: row.locationId,
+    summary: ex
+      ? "Location excluded from portfolio dashboard"
+      : "Location included in portfolio dashboard again",
+    details: { locationId: row.locationId, ghlLocationId: row.ghlLocationId, excludeFromDashboard: ex }
+  });
+
+  return c.json({
+    ok: true as const,
+    locationId: row.locationId,
+    ghlLocationId: row.ghlLocationId,
+    excludeFromDashboard: row.excludeFromDashboard
+  });
 }
 
 export async function adminGetUserSubaccounts(c: Context<HonoBindings>) {

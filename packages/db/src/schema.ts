@@ -73,7 +73,9 @@ export const locations = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     /** Last successful GHL-backed fetch of location display name (cron hydrate / stale refresh); webhooks-only updates may leave null. */
-    locationNameSyncedAt: timestamp("location_name_synced_at", { withTimezone: true })
+    locationNameSyncedAt: timestamp("location_name_synced_at", { withTimezone: true }),
+    /** Omit from workspace portfolio dashboard KPIs and subaccount rollup (still visible elsewhere unless legacy-hidden). */
+    excludeFromDashboard: boolean("exclude_from_dashboard").notNull().default(false)
   },
   (table) => ({
     ghlLocationUnique: uniqueIndex("locations_ghl_location_id_unique").on(

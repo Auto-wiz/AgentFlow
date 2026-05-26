@@ -248,7 +248,7 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
         })
         .from(appointments)
         .innerJoin(locations, eq(appointments.locationId, locations.id))
-        .where(appointmentWhere)
+        .where(and(appointmentWhere, eq(locations.excludeFromDashboard, false)))
         .groupBy(appointments.locationId, locations.ghlLocationId, locations.name)
     : [];
 
@@ -266,7 +266,8 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
           depositSum: sql<number>`coalesce(sum(cast(${ghlPaymentOrders.amount} as bigint)), 0)::bigint`.as("depositSum")
         })
         .from(ghlPaymentOrders)
-        .where(orderWhereCombined)
+        .innerJoin(locations, eq(ghlPaymentOrders.locationId, locations.id))
+        .where(and(orderWhereCombined, eq(locations.excludeFromDashboard, false)))
         .groupBy(ghlPaymentOrders.locationId)
     : [];
 
@@ -277,7 +278,8 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
           depositSum: sql<number>`coalesce(sum(cast(${invoices.amountPaid} as bigint)), 0)::bigint`.as("depositSum")
         })
         .from(invoices)
-        .where(invoiceWhereCombined)
+        .innerJoin(locations, eq(invoices.locationId, locations.id))
+        .where(and(invoiceWhereCombined, eq(locations.excludeFromDashboard, false)))
         .groupBy(invoices.locationId)
     : [];
 
@@ -364,6 +366,23 @@ export async function getWorkspaceDashboardSubaccountSeriesHandler(c: Context<{ 
   const ok = await canWorkspaceAccessLocationUuid(dbProbe, policy, rawId);
   if (!ok) {
     return c.json({ error: "forbidden_location" }, 403);
+  }
+
+  const [dashboardLoc] = await dbProbe
+    .select({
+      locationName: locations.name,
+      ghlLocationId: locations.ghlLocationId,
+      excludeFromDashboard: locations.excludeFromDashboard
+    })
+    .from(locations)
+    .where(eq(locations.id, rawId))
+    .limit(1);
+
+  if (!dashboardLoc) {
+    return c.json({ error: "forbidden_location" }, 403);
+  }
+  if (dashboardLoc.excludeFromDashboard) {
+    return c.json({ error: "location_excluded_from_dashboard" }, 403);
   }
 
   const granularityRaw = (c.req.query("granularity") ?? "day").trim().toLowerCase();
@@ -471,22 +490,13 @@ export async function getWorkspaceDashboardSubaccountSeriesHandler(c: Context<{ 
     };
   });
 
-  const [meta] = await db
-    .select({
-      locationName: locations.name,
-      ghlLocationId: locations.ghlLocationId
-    })
-    .from(locations)
-    .where(eq(locations.id, rawId))
-    .limit(1);
-
   return c.json({
     fromInclusive: from.toISOString(),
     toExclusive: toExclusive.toISOString(),
     granularity: truncation,
     locationId: rawId,
-    ghlLocationId: meta?.ghlLocationId ?? null,
-    locationName: meta?.locationName ?? null,
+    ghlLocationId: dashboardLoc.ghlLocationId ?? null,
+    locationName: dashboardLoc.locationName ?? null,
     summary: {
       bookedAppointments: booked,
       appointmentsWithCollectedPayment: collected,

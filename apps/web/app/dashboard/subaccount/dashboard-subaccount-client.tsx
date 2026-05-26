@@ -82,7 +82,7 @@ export default function DashboardSubaccountClient() {
       setSubsLoading(true);
       setSubsError(null);
       try {
-        const res = await fetch(`${apiBaseUrl}/subaccounts/overview?surface=appointments`, {
+        const res = await fetch(`${apiBaseUrl}/subaccounts/overview?surface=dashboard`, {
           signal: ac.signal,
           headers: mergeWorkspaceHeaders(),
           cache: "no-store"
@@ -129,7 +129,12 @@ export default function DashboardSubaccountClient() {
       );
       const payload = (await res.json().catch(() => ({}))) as SeriesResponse & { error?: string };
       if (!res.ok) {
-        throw new Error(payload.error ?? "Failed to load subaccount metrics");
+        const code = payload.error;
+        const readable =
+          code === "location_excluded_from_dashboard"
+            ? "This subaccount was excluded from the portfolio dashboard under Workspace → Admin settings."
+            : code ?? "Failed to load subaccount metrics";
+        throw new Error(readable);
       }
       setData(payload);
     } catch (e) {

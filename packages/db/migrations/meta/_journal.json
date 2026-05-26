@@ -67,6 +67,13 @@
       "when": 1747708800000,
       "tag": "0011_appointment_overrides_and_audit_logs",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1747795200000,
+      "tag": "0012_locations_exclude_from_dashboard",
+      "breakpoints": true
     }
   ]
 }

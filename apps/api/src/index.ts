@@ -79,6 +79,7 @@ import {
   adminGetUserSubaccounts,
   adminListLocations,
   adminListUsers,
+  adminPatchLocationDashboardExclusion,
   adminPostWorkspaceUser,
   adminPutUserSubaccounts
 } from "./workspace-admin.js";
@@ -325,6 +326,7 @@ app.get("/workspace/selection-matrix", workspaceSelectionMatrixHandler);
 app.get("/admin/workspace-users", adminListUsers);
 app.post("/admin/workspace-users", adminPostWorkspaceUser);
 app.get("/admin/workspace-locations", adminListLocations);
+app.patch("/admin/workspace-locations/:locationId/dashboard-exclusion", adminPatchLocationDashboardExclusion);
 function formatErrorDeep(error: unknown): string {
   if (!(error instanceof Error)) {
     return String(error);
@@ -1125,7 +1127,8 @@ app.get("/subaccounts/overview", async (c) => {
       ghlLocationId: locations.ghlLocationId,
       locationName: locations.name,
       agencyId: locations.agencyId,
-      agencyName: agencies.name
+      agencyName: agencies.name,
+      excludeFromDashboard: locations.excludeFromDashboard
     })
     .from(locations)
     .leftJoin(agencies, eq(locations.agencyId, agencies.id))
@@ -1145,7 +1148,8 @@ app.get("/subaccounts/overview", async (c) => {
   const jwtSelectionPromise =
     policy.kind === "jwt_workspace" ? fetchSelectionLocationRows(db, policy.workspaceUserId) : Promise.resolve([]);
 
-  const includeConversationCounts = surface !== "appointments";
+  const includeConversationCounts =
+    surface !== "appointments" && surface !== "dashboard";
 
   const [
     locationRows,
@@ -1199,7 +1203,7 @@ app.get("/subaccounts/overview", async (c) => {
 
   /** Heavier surface: drain more missing GHL names per request (still capped vs hundreds of sequential API calls per Worker invocation). */
   const hydrateNameBudget =
-    surface === "threads" || surface === "appointments" ? 0 : 60;
+    surface === "threads" || surface === "appointments" || surface === "dashboard" ? 0 : 60;
 
   const locationNameMap = await hydrateMissingLocationNames(
     c.env,
@@ -1211,6 +1215,13 @@ app.get("/subaccounts/overview", async (c) => {
     })),
     { maxOutboundLookups: hydrateNameBudget }
   );
+
+  const dashboardEligibleIds =
+    surface === "dashboard"
+      ? new Set(
+          locationRows.filter((raw) => !raw.excludeFromDashboard).map((raw) => raw.locationId)
+        )
+      : null;
 
   const subaccounts = locationRows
     .map((row) => ({
@@ -1236,6 +1247,9 @@ app.get("/subaccounts/overview", async (c) => {
       }
       if (surface === "appointments") {
         return row.visible && row.appointmentCount > 0;
+      }
+      if (dashboardEligibleIds !== null) {
+        return dashboardEligibleIds.has(row.locationId) && row.visible && row.appointmentCount > 0;
       }
       return true;
     });
