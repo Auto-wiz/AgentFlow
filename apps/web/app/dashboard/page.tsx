@@ -179,6 +179,8 @@ export default function DashboardOverviewPage() {
   detailsByLocRef.current = detailsByLoc;
 
   const prefetchDetailInFlightRef = useRef(new Set<string>());
+  /** Aborts low-priority background detail prefetch when the user expands a row (priority fetch). */
+  const backgroundPrefetchAbortRef = useRef<AbortController | null>(null);
 
   const query = useMemo(() => new URLSearchParams({ from: range.fromInclusive, to: range.toInclusive }), [range]);
 
@@ -270,67 +272,81 @@ export default function DashboardOverviewPage() {
     setDetailErrors({});
     detailFetchAbortRef.current?.abort();
     detailFetchAbortRef.current = null;
+    backgroundPrefetchAbortRef.current?.abort();
+    backgroundPrefetchAbortRef.current = null;
   }, [range.fromInclusive, range.toInclusive]);
 
   useEffect(() => {
-    if (!overview?.subaccounts.length || loading) {
+    if (!overview?.subaccounts.length || loading || detailLoadingId !== null) {
+      if (detailLoadingId !== null) {
+        backgroundPrefetchAbortRef.current?.abort();
+        backgroundPrefetchAbortRef.current = null;
+      }
       return;
     }
-    const ac = new AbortController();
-    const ids = overview.subaccounts.map((r) => r.locationId);
+
+    backgroundPrefetchAbortRef.current?.abort();
+    const bg = new AbortController();
+    backgroundPrefetchAbortRef.current = bg;
+    const signal = bg.signal;
+
     void (async () => {
-      const chunk = 3;
-      for (let i = 0; i < ids.length; i += chunk) {
-        if (ac.signal.aborted) {
+      const missingOnPage = overview.subaccounts
+        .map((r) => r.locationId)
+        .filter((id) => !detailsByLocRef.current[id]);
+      const chunkSize = 2;
+      for (let i = 0; i < missingOnPage.length; i += chunkSize) {
+        if (signal.aborted) {
           return;
         }
-        await Promise.all(ids.slice(i, i + chunk).map((id) => prefetchDashboardDetail(id, ac.signal)));
+        await Promise.all(
+          missingOnPage.slice(i, i + chunkSize).map((id) => prefetchDashboardDetail(id, signal))
+        );
       }
-    })();
-    return () => ac.abort();
-  }, [overview, loading, prefetchDashboardDetail]);
 
-  useEffect(() => {
-    if (!overview?.pagination || loading) {
-      return;
-    }
-    const ac = new AbortController();
-    const { page: curPage, totalPages } = overview.pagination;
-    const run = async () => {
-      if (curPage >= totalPages) {
+      const { page: curPage, totalPages } = overview.pagination ?? { page: 1, totalPages: 1 };
+      if (curPage >= totalPages || signal.aborted) {
         return;
       }
-      await new Promise((r) => setTimeout(r, 500));
-      if (ac.signal.aborted) {
+
+      await new Promise((r) => setTimeout(r, 400));
+      if (signal.aborted) {
         return;
       }
-      const p = buildOverviewParams();
-      p.set("page", String(curPage + 1));
+
+      const nextParams = buildOverviewParams();
+      nextParams.set("page", String(curPage + 1));
       try {
-        const res = await fetch(`${apiBaseUrl}/workspace/dashboard/overview?${p}`, {
+        const res = await fetch(`${apiBaseUrl}/workspace/dashboard/overview?${nextParams}`, {
           headers: mergeWorkspaceHeaders(),
           cache: "no-store",
-          signal: ac.signal
+          signal
         });
-        if (!res.ok) {
+        if (!res.ok || signal.aborted) {
           return;
         }
         const data = (await res.json()) as OverviewResponse;
-        const ids = (data.subaccounts ?? []).map((r) => r.locationId);
-        const chunk = 3;
-        for (let i = 0; i < ids.length; i += chunk) {
-          if (ac.signal.aborted) {
+        const missingNext = (data.subaccounts ?? [])
+          .map((r) => r.locationId)
+          .filter((id) => !detailsByLocRef.current[id]);
+
+        for (let i = 0; i < missingNext.length; i += chunkSize) {
+          if (signal.aborted) {
             return;
           }
-          await Promise.all(ids.slice(i, i + chunk).map((id) => prefetchDashboardDetail(id, ac.signal)));
+          await Promise.all(
+            missingNext.slice(i, i + chunkSize).map((id) => prefetchDashboardDetail(id, signal))
+          );
         }
       } catch {
         /* aborted */
       }
+    })();
+
+    return () => {
+      bg.abort();
     };
-    void run();
-    return () => ac.abort();
-  }, [overview, loading, apiBaseUrl, buildOverviewParams, prefetchDashboardDetail]);
+  }, [overview, loading, prefetchDashboardDetail, detailLoadingId, apiBaseUrl, buildOverviewParams]);
 
   const tableRows = overview?.subaccounts ?? [];
   const pagination = overview?.pagination;
@@ -348,6 +364,9 @@ export default function DashboardOverviewPage() {
       });
       return;
     }
+
+    backgroundPrefetchAbortRef.current?.abort();
+    backgroundPrefetchAbortRef.current = null;
 
     detailFetchAbortRef.current?.abort();
     const controller = new AbortController();

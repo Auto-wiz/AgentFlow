@@ -59,7 +59,7 @@ function mergeCalendarEntries(map: Map<string, string>, entries: unknown[]) {
       continue;
     }
     const id = stringOrNull(r.id ?? r._id ?? r.calendarId);
-    const name = stringOrNull(r.name ?? r.calendarName);
+    const name = stringOrNull(r.name ?? r.calendarName ?? r.displayName ?? r.label);
     if (id && name) {
       map.set(id, name);
     }
@@ -191,7 +191,9 @@ export async function fetchGhlCalendarNameLookup(
         if (!rec) {
           continue;
         }
-        const name = stringOrNull(rec.name ?? rec.calendarName);
+        const name = stringOrNull(
+          rec.name ?? rec.calendarName ?? rec.displayName ?? rec.label ?? rec.title
+        );
         if (name) {
           out.set(calendarId, name);
           break;

@@ -27,7 +27,11 @@ import {
 } from "./workspace-access.js";
 
 import type { GhlOAuthTokenEnv } from "./ghl-oauth-location-token.js";
-import { hydrateDashboardCalendarBucketsWithGhlCanonicalNames, hydrateLocationCalendarCatalogFromGhlIntoDb } from "./dashboard-calendar-ghl-names.js";
+import {
+  hydrateDashboardCalendarBucketsWithGhlCanonicalNames,
+  hydrateLocationCalendarCatalogFromGhlIntoDb,
+  reconcileCalendarBucketsWithStoredLocationCalendarNames
+} from "./dashboard-calendar-ghl-names.js";
 
 type Env = WorkspaceJwtEnv & GhlOAuthTokenEnv;
 
@@ -738,7 +742,7 @@ export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bi
           locationCalendars,
           and(
             eq(locationCalendars.locationId, appointments.locationId),
-            sql`trim(both from coalesce(${appointments.calendarId}, '')) = trim(both from coalesce(${locationCalendars.ghlCalendarId}, ''))`
+            sql`lower(trim(both from coalesce(${appointments.calendarId}, ''))) = lower(trim(both from coalesce(${locationCalendars.ghlCalendarId}, '')))`
           )
         )
         .where(appointmentWhere)
@@ -765,6 +769,7 @@ export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bi
     dashboardLoc.ghlLocationId,
     calendars
   );
+  calendarsHydrated = await reconcileCalendarBucketsWithStoredLocationCalendarNames(db, rawId, calendarsHydrated);
 
   const orderTs = sql`coalesce(${ghlPaymentOrders.ghlUpdatedAt}, ${ghlPaymentOrders.ghlCreatedAt}, ${ghlPaymentOrders.updatedAt}, ${ghlPaymentOrders.createdAt})`;
   const orderWhereBase = await scopedPaymentOrdersWhere(db, policy, orderTs, from, toExclusive);
