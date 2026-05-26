@@ -26,7 +26,10 @@ import {
   type WorkspaceJwtEnv
 } from "./workspace-access.js";
 
-type Env = WorkspaceJwtEnv;
+import type { GhlOAuthTokenEnv } from "./ghl-oauth-location-token.js";
+import { hydrateDashboardCalendarBucketsWithGhlCanonicalNames } from "./dashboard-calendar-ghl-names.js";
+
+type Env = WorkspaceJwtEnv & GhlOAuthTokenEnv;
 
 /**
  * Dashboard deposit sums use the same integer storage as webhooks (`normalizeMoneyAmount` → rounded major
@@ -533,7 +536,10 @@ export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bi
   }
 
   const [dashboardLoc] = await dbProbe
-    .select({ excludeFromDashboard: locations.excludeFromDashboard })
+    .select({
+      excludeFromDashboard: locations.excludeFromDashboard,
+      ghlLocationId: locations.ghlLocationId
+    })
     .from(locations)
     .where(eq(locations.id, rawId))
     .limit(1);
@@ -606,6 +612,14 @@ export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bi
       };
     });
 
+  let calendarsHydrated = await hydrateDashboardCalendarBucketsWithGhlCanonicalNames(
+    c.env,
+    db,
+    rawId,
+    dashboardLoc.ghlLocationId,
+    calendars
+  );
+
   const orderTs = sql`coalesce(${ghlPaymentOrders.ghlUpdatedAt}, ${ghlPaymentOrders.ghlCreatedAt}, ${ghlPaymentOrders.updatedAt}, ${ghlPaymentOrders.createdAt})`;
   const orderWhereBase = await scopedPaymentOrdersWhere(db, policy, orderTs, from, toExclusive);
   const orderWhere = orderWhereBase ? and(orderWhereBase, eq(ghlPaymentOrders.locationId, rawId)) : undefined;
@@ -666,7 +680,7 @@ export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bi
     fromInclusive: from.toISOString(),
     toExclusive: toExclusive.toISOString(),
     locationId: rawId,
-    calendars,
+    calendars: calendarsHydrated,
     orderPaymentsBySource,
     invoiceDepositsCollectedAmount: invoiceDepositNum,
     invoiceDepositsCollectedFormatted: formatDashboardDeposits(

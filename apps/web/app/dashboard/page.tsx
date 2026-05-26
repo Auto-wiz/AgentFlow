@@ -156,24 +156,26 @@ function DashboardOverviewLocationDetailPanels({ detail }: { detail: LocationDet
         {detail.calendars.length === 0 ? (
           <p className="muted">No calendar breakdown for this window.</p>
         ) : (
-          <table className="dashboard-table">
-            <thead>
-              <tr>
-                <th scope="col">Calendar / service label</th>
-                <th className="dashboard-th-actions" scope="col">
-                  Booked
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {detail.calendars.map((c, i) => (
-                <tr key={c.ghlCalendarId ?? `cal-${i}`}>
-                  <td>{c.name}</td>
-                  <td className="dashboard-th-actions">{c.bookedCount}</td>
+          <div className="dashboard-overview-detail-metrics-scroll">
+            <table className="dashboard-table dashboard-table-nested-compact">
+              <thead>
+                <tr>
+                  <th scope="col">Calendar / service label</th>
+                  <th className="dashboard-th-actions" scope="col">
+                    Booked
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {detail.calendars.map((c, i) => (
+                  <tr key={c.ghlCalendarId ?? `cal-${i}`}>
+                    <td>{c.name}</td>
+                    <td className="dashboard-th-actions">{c.bookedCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
       <div>
@@ -183,28 +185,30 @@ function DashboardOverviewLocationDetailPanels({ detail }: { detail: LocationDet
         {detail.orderPaymentsBySource.length === 0 ? (
           <p className="muted">No paid-order deposits matched this dashboard window.</p>
         ) : (
-          <table className="dashboard-table">
-            <thead>
-              <tr>
-                <th scope="col">Source</th>
-                <th className="dashboard-th-actions" scope="col">
-                  Orders
-                </th>
-                <th className="dashboard-th-actions" scope="col">
-                  Amount
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {detail.orderPaymentsBySource.map((p, i) => (
-                <tr key={p.paymentSourceId ?? `psrc-${i}-${p.displayName}`}>
-                  <td>{p.displayName}</td>
-                  <td className="dashboard-th-actions">{p.paidOrderCount}</td>
-                  <td className="dashboard-th-actions">{p.depositsCollectedFormatted}</td>
+          <div className="dashboard-overview-detail-metrics-scroll">
+            <table className="dashboard-table dashboard-table-nested-compact">
+              <thead>
+                <tr>
+                  <th scope="col">Source</th>
+                  <th className="dashboard-th-actions" scope="col">
+                    Orders
+                  </th>
+                  <th className="dashboard-th-actions" scope="col">
+                    Amount
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {detail.orderPaymentsBySource.map((p, i) => (
+                  <tr key={p.paymentSourceId ?? `psrc-${i}-${p.displayName}`}>
+                    <td>{p.displayName}</td>
+                    <td className="dashboard-th-actions">{p.paidOrderCount}</td>
+                    <td className="dashboard-th-actions">{p.depositsCollectedFormatted}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
         {hasInvoice ? (
           <p className="muted" style={{ marginTop: 12 }}>

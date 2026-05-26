@@ -15,6 +15,24 @@ type PortfolioDashboardLocation = {
   excludeFromDashboard: boolean;
 };
 
+async function fetchAdminWorkspaceLocations(
+  apiBaseUrl: string,
+  headers: HeadersInit
+): Promise<PortfolioDashboardLocation[]> {
+  const res = await fetch(`${apiBaseUrl}/admin/workspace-locations`, {
+    cache: "no-store",
+    headers
+  });
+  const payload = (await res.json().catch(() => ({}))) as {
+    locations?: PortfolioDashboardLocation[];
+    error?: string;
+  };
+  if (!res.ok) {
+    throw new Error(payload.error ?? "Unable to load locations");
+  }
+  return payload.locations ?? [];
+}
+
 export default function DashboardPortfolioAdminPage() {
   const apiBaseUrl = getApiBaseUrl();
   const { replaceGuarded } = useGuardedNavigate();
@@ -46,18 +64,9 @@ export default function DashboardPortfolioAdminPage() {
       setPortfolioLoading(true);
       setPortfolioError(null);
       try {
-        const res = await fetch(`${apiBaseUrl}/admin/workspace-locations`, {
-          headers: mergeWorkspaceHeaders()
-        });
-        const payload = (await res.json().catch(() => ({}))) as {
-          locations?: PortfolioDashboardLocation[];
-          error?: string;
-        };
-        if (!res.ok) {
-          throw new Error(payload.error ?? "Unable to load locations");
-        }
+        const rows = await fetchAdminWorkspaceLocations(apiBaseUrl, mergeWorkspaceHeaders());
         if (!cancelled) {
-          setPortfolioLocs(payload.locations ?? []);
+          setPortfolioLocs(rows);
         }
       } catch (caught) {
         if (!cancelled) {
@@ -88,6 +97,7 @@ export default function DashboardPortfolioAdminPage() {
         `${apiBaseUrl}/admin/workspace-locations/${locationId}/dashboard-exclusion`,
         {
           method: "PATCH",
+          cache: "no-store",
           headers: mergeWorkspaceHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({ excludeFromDashboard })
         }
@@ -96,9 +106,9 @@ export default function DashboardPortfolioAdminPage() {
       if (!res.ok) {
         throw new Error(payload.error ?? "Update failed");
       }
-      setPortfolioLocs((rows) =>
-        rows.map((r) => (r.locationId === locationId ? { ...r, excludeFromDashboard } : r))
-      );
+      /** Re-fetch so every admin/session sees the same DB truth (avoids stale HTTP cache + optimistic drift). */
+      const rows = await fetchAdminWorkspaceLocations(apiBaseUrl, mergeWorkspaceHeaders());
+      setPortfolioLocs(rows);
     } catch (caught) {
       setPortfolioError(caught instanceof Error ? caught.message : "Update failed");
     } finally {
@@ -147,9 +157,6 @@ export default function DashboardPortfolioAdminPage() {
             Check a subaccount to hide it from dashboard KPIs and the overview table (internal or churned clients). It
             stays available in the rest of AgentFlow. Subaccount drill-down returns an error for excluded locations.
           </p>
-
-          {portfolioLoading ? <p className="muted" style={{ marginTop: 14 }}>Loading locations…</p> : null}
-          {portfolioError ? <div className="empty" style={{ marginTop: 12 }}>{portfolioError}</div> : null}
 
           {portfolioLoading ? <p className="muted" style={{ marginTop: 14 }}>Loading locations…</p> : null}
           {portfolioError ? <div className="empty" style={{ marginTop: 12 }}>{portfolioError}</div> : null}

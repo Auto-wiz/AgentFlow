@@ -77,7 +77,10 @@ export default function WorkspaceAuditLogsPage() {
     async function loadFiltersCatalog() {
       try {
         const [locRes, userRes] = await Promise.all([
-          fetch(`${apiBaseUrl}/admin/workspace-locations`, { headers: mergeWorkspaceHeaders() }),
+          fetch(`${apiBaseUrl}/admin/workspace-locations`, {
+            cache: "no-store",
+            headers: mergeWorkspaceHeaders()
+          }),
           fetch(`${apiBaseUrl}/admin/workspace-users`, { headers: mergeWorkspaceHeaders() })
         ]);
         const locPayload = (await locRes.json().catch(() => ({}))) as {

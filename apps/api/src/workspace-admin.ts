@@ -130,6 +130,8 @@ export async function adminPostWorkspaceUser(c: Context<HonoBindings>) {
 }
 
 export async function adminListLocations(c: Context<HonoBindings>) {
+  /** Row flags are workspace-global; disallow caching so admins always see consistent state across sessions. */
+  c.header("Cache-Control", "private, no-store, max-age=0, must-revalidate");
   const admin = await assertAdminSession(c);
   if (!admin) {
     return c.json({ error: "forbidden" }, 403);
@@ -150,6 +152,7 @@ export async function adminListLocations(c: Context<HonoBindings>) {
 
 /** Toggle whether a location is omitted from workspace portfolio dashboard aggregates (admin JWT only). */
 export async function adminPatchLocationDashboardExclusion(c: Context<HonoBindings>) {
+  c.header("Cache-Control", "private, no-store, max-age=0, must-revalidate");
   const admin = await assertAdminSession(c);
   if (!admin) {
     return c.json({ error: "forbidden" }, 403);

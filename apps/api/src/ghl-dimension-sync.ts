@@ -85,6 +85,32 @@ export async function upsertLocationCalendarRow(
     });
 }
 
+/** Authoritative calendar label from GET /calendars — overwrites heuristic webhook/title guesses. */
+export async function upsertLocationCalendarCanonicalNameFromGhlApi(
+  db: AgentFlowDb,
+  params: { locationId: string; ghlCalendarId: string; canonicalName: string; now: Date }
+): Promise<void> {
+  const name = params.canonicalName.trim();
+  if (!name) {
+    return;
+  }
+  await db
+    .insert(locationCalendars)
+    .values({
+      locationId: params.locationId,
+      ghlCalendarId: params.ghlCalendarId,
+      name,
+      updatedAt: params.now
+    })
+    .onConflictDoUpdate({
+      target: [locationCalendars.locationId, locationCalendars.ghlCalendarId],
+      set: {
+        name,
+        updatedAt: params.now
+      }
+    });
+}
+
 export async function upsertPaymentSourceFromOrder(
   db: AgentFlowDb,
   locationId: string,

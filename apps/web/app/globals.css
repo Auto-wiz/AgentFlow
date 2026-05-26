@@ -1586,6 +1586,31 @@ button.appointments-row.active {
   width: 100%;
 }
 
+/**
+ * Drill-down metric tables inside the overview expandable row — do not stretch to the full panel width
+ * (avoids labels and numeric columns drifting far apart).
+ */
+.dashboard-overview-detail-metrics-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.dashboard-table.dashboard-table-nested-compact {
+  display: inline-table;
+  margin-right: auto;
+  max-width: 100%;
+  min-width: 0;
+  table-layout: auto;
+  vertical-align: top;
+  width: auto;
+}
+
+.dashboard-table.dashboard-table-nested-compact th.dashboard-th-actions,
+.dashboard-table.dashboard-table-nested-compact td.dashboard-th-actions {
+  padding-left: 28px;
+  white-space: nowrap;
+}
+
 .dashboard-table th {
   background: var(--panel-soft);
   border-bottom: 1px solid var(--border);
