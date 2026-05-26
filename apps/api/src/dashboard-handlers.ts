@@ -401,7 +401,9 @@ export async function getWorkspaceDashboardSubaccountSeriesHandler(c: Context<{ 
 
   const effectivePaid = buildAppointmentEffectivePaidSql(db);
 
-  const bucketExpr = sql`date_trunc(${sql.raw(`'${truncation}'`)}, (${appointments.startTime}) AT TIME ZONE 'UTC')`;
+  /** Align chart buckets with overview: day/week of GHL booking capture (`date_added`, else webhook `created_at`). */
+  const bookingCapturedAt = sql`coalesce(${appointments.dateAdded}, ${appointments.createdAt})`;
+  const bucketExpr = sql`date_trunc(${sql.raw(`'${truncation}'`)}, (${bookingCapturedAt}) AT TIME ZONE 'UTC')`;
 
   const seriesRows = appointmentWhereSingle
     ? await db

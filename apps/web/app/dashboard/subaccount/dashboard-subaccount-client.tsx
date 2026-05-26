@@ -270,8 +270,8 @@ export default function DashboardSubaccountClient() {
           style={{ maxWidth: 200 }}
           value={granularity}
         >
-          <option value="day">By day</option>
-          <option value="week">By week</option>
+          <option value="day">By booking day (UTC)</option>
+          <option value="week">By booking week (UTC)</option>
         </select>
       </div>
 
@@ -299,7 +299,10 @@ export default function DashboardSubaccountClient() {
 
           <div className="panel dashboard-chart-panel" style={{ marginTop: 16, padding: 16 }}>
             <p className="appointments-filter-label" style={{ marginBottom: 12 }}>
-              Booked vs paid (by {data.granularity})
+              Booked vs paid — by booking date ({data.granularity}, UTC)
+            </p>
+            <p className="muted" style={{ marginTop: -6, marginBottom: 12, fontSize: 12 }}>
+              Bars use when the booking was captured in AgentFlow/GHL metadata, not the scheduled visit slot.
             </p>
             <div className="dashboard-bar-list">
               {(data.series ?? []).map((b) => (
@@ -334,7 +337,7 @@ export default function DashboardSubaccountClient() {
               ))}
             </div>
             {(data.series ?? []).length === 0 ? (
-              <p className="muted">No appointment starts in this window.</p>
+              <p className="muted">No bookings captured in this window.</p>
             ) : null}
           </div>
         </>
