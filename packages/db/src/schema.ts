@@ -477,6 +477,62 @@ export const appointments = pgTable(
   })
 );
 
+/** GHL calendars seen via appointment webhooks (display names for drill-down). */
+export const locationCalendars = pgTable(
+  "location_calendars",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => locations.id, { onDelete: "cascade" }),
+    ghlCalendarId: text("ghl_calendar_id").notNull(),
+    name: text("name").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    locationGhlCalendarUnique: uniqueIndex("location_calendars_location_ghl_calendar_unique").on(
+      table.locationId,
+      table.ghlCalendarId
+    ),
+    locationIdx: index("location_calendars_location_id_idx").on(table.locationId)
+  })
+);
+
+/** Order webhook `source` objects (Deposit Link labels, etc.) for drill-down grouping. */
+export const paymentSources = pgTable(
+  "payment_sources",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => locations.id, { onDelete: "cascade" }),
+    sourceType: text("source_type").notNull().default(""),
+    sourceSubType: text("source_sub_type").notNull().default(""),
+    externalId: text("external_id").notNull().default(""),
+    displayName: text("display_name").notNull(),
+    meta: jsonb("meta")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    locationSourceKeyUnique: uniqueIndex("payment_sources_location_source_key_unique").on(
+      table.locationId,
+      table.sourceType,
+      table.sourceSubType,
+      table.externalId
+    ),
+    locationIdx: index("payment_sources_location_id_idx").on(table.locationId)
+  })
+);
+
 /** GoHighLevel payment orders from OrderCreate / OrderStatusUpdate webhooks. */
 export const ghlPaymentOrders = pgTable(
   "ghl_payment_orders",
@@ -488,6 +544,8 @@ export const ghlPaymentOrders = pgTable(
       .notNull()
       .references(() => locations.id, { onDelete: "cascade" }),
     contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    /** Populated when order payload includes `source` (joined for dashboard drill-down). */
+    paymentSourceId: uuid("payment_source_id").references(() => paymentSources.id, { onDelete: "set null" }),
     ghlOrderId: text("ghl_order_id").notNull(),
     status: text("status"),
     fulfillmentStatus: text("fulfillment_status"),
@@ -511,7 +569,8 @@ export const ghlPaymentOrders = pgTable(
     ),
     locationIdx: index("ghl_payment_orders_location_id_idx").on(table.locationId),
     contactIdx: index("ghl_payment_orders_contact_id_idx").on(table.contactId),
-    statusIdx: index("ghl_payment_orders_status_idx").on(table.status)
+    statusIdx: index("ghl_payment_orders_status_idx").on(table.status),
+    paymentSourceIdx: index("ghl_payment_orders_payment_source_id_idx").on(table.paymentSourceId)
   })
 );
 
@@ -575,6 +634,8 @@ export const locationsRelations = relations(locations, ({ one, many }) => ({
   threads: many(threads),
   messages: many(messages),
   appointments: many(appointments),
+  locationCalendars: many(locationCalendars),
+  paymentSources: many(paymentSources),
   invoices: many(invoices),
   ghlPaymentOrders: many(ghlPaymentOrders)
 }));
@@ -657,6 +718,21 @@ export const appointmentsRelations = relations(appointments, ({ one }) => ({
   })
 }));
 
+export const locationCalendarsRelations = relations(locationCalendars, ({ one }) => ({
+  location: one(locations, {
+    fields: [locationCalendars.locationId],
+    references: [locations.id]
+  })
+}));
+
+export const paymentSourcesRelations = relations(paymentSources, ({ one, many }) => ({
+  location: one(locations, {
+    fields: [paymentSources.locationId],
+    references: [locations.id]
+  }),
+  ghlPaymentOrders: many(ghlPaymentOrders)
+}));
+
 export const invoicesRelations = relations(invoices, ({ one }) => ({
   location: one(locations, {
     fields: [invoices.locationId],
@@ -676,5 +752,9 @@ export const ghlPaymentOrdersRelations = relations(ghlPaymentOrders, ({ one }) =
   contact: one(contacts, {
     fields: [ghlPaymentOrders.contactId],
     references: [contacts.id]
+  }),
+  paymentSource: one(paymentSources, {
+    fields: [ghlPaymentOrders.paymentSourceId],
+    references: [paymentSources.id]
   })
 }));

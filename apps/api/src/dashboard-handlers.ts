@@ -3,7 +3,9 @@ import {
   appointments,
   ghlPaymentOrders,
   invoices,
-  locations
+  locationCalendars,
+  locations,
+  paymentSources
 } from "@agentflow/db";
 import { and, asc, eq, inArray, not, notInArray, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
@@ -507,5 +509,163 @@ export async function getWorkspaceDashboardSubaccountSeriesHandler(c: Context<{ 
       depositsCollectedFormatted: formatDashboardDeposits(Number(totalDepositsAmount), currRow?.currency ?? null)
     },
     series
+  });
+}
+
+/**
+ * Drill-down for a location: calendars booked-in-window breakdown and paid-order deposits grouped by webhook `source`.
+ */
+export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bindings: Env }>) {
+  const policy = await resolveAccessPolicy(c, c.env);
+  if (!policy) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  const rawId = (c.req.param("locationId") ?? "").trim();
+  if (!isUuid(rawId)) {
+    return c.json({ error: "invalid_location_id" }, 400);
+  }
+
+  const dbProbe = createDb(c.env.DATABASE_URL);
+  const ok = await canWorkspaceAccessLocationUuid(dbProbe, policy, rawId);
+  if (!ok) {
+    return c.json({ error: "forbidden_location" }, 403);
+  }
+
+  const [dashboardLoc] = await dbProbe
+    .select({ excludeFromDashboard: locations.excludeFromDashboard })
+    .from(locations)
+    .where(eq(locations.id, rawId))
+    .limit(1);
+
+  if (!dashboardLoc) {
+    return c.json({ error: "forbidden_location" }, 403);
+  }
+  if (dashboardLoc.excludeFromDashboard) {
+    return c.json({ error: "location_excluded_from_dashboard" }, 403);
+  }
+
+  const bounds = resolveDashboardBounds(c.req.query("from"), c.req.query("to"));
+  if ("error" in bounds) {
+    return c.json({ error: bounds.error }, 400);
+  }
+  const { from, toExclusive } = bounds;
+  const db = dbProbe;
+
+  const scope = await scopedAppointmentPredicates(db, policy);
+  const bookedDuring = appointmentsBookedDuringRange(from, toExclusive);
+
+  let appointmentWhere: SQL | undefined;
+  if (!bookedDuring) {
+    appointmentWhere = undefined;
+  } else if (scope.length === 0) {
+    appointmentWhere = and(bookedDuring, eq(appointments.locationId, rawId));
+  } else {
+    appointmentWhere = and(bookedDuring, eq(appointments.locationId, rawId), ...scope);
+  }
+
+  const appointmentCalendarBucketExpr = sql`coalesce(${appointments.calendarId}, '')`;
+
+  const calendarRowsRaw =
+    appointmentWhere ?
+      await db
+        .select({
+          bookedCount: sql<number>`cast(count(*) as int)`.as("bookedCount"),
+          displayLabel: sql<string>`coalesce(
+            max(${locationCalendars.name}),
+            max(${appointments.title}),
+            case when ${appointmentCalendarBucketExpr} = ''
+            then 'No calendar'
+            else 'Calendar'
+            end
+          )`.as("displayLabel"),
+          sampleGhlCalendarId: sql<string | null>`max(${appointments.calendarId})`.as("sampleGhlCalendarId")
+        })
+        .from(appointments)
+        .leftJoin(
+          locationCalendars,
+          and(
+            eq(locationCalendars.locationId, appointments.locationId),
+            eq(locationCalendars.ghlCalendarId, appointments.calendarId)
+          )
+        )
+        .where(appointmentWhere)
+        .groupBy(appointmentCalendarBucketExpr)
+    : [];
+
+  const calendars = [...calendarRowsRaw]
+    .sort((a, b) => Number(b.bookedCount) - Number(a.bookedCount))
+    .map((row) => {
+      const cid = row.sampleGhlCalendarId;
+      const ghlCalendarId =
+        cid !== null && typeof cid === "string" && cid.trim() !== "" ? cid.trim() : null;
+      return {
+        ghlCalendarId,
+        name: row.displayLabel ?? "",
+        bookedCount: Number(row.bookedCount ?? 0)
+      };
+    });
+
+  const orderTs = sql`coalesce(${ghlPaymentOrders.ghlUpdatedAt}, ${ghlPaymentOrders.ghlCreatedAt}, ${ghlPaymentOrders.updatedAt}, ${ghlPaymentOrders.createdAt})`;
+  const orderWhereBase = await scopedPaymentOrdersWhere(db, policy, orderTs, from, toExclusive);
+  const orderWhere = orderWhereBase ? and(orderWhereBase, eq(ghlPaymentOrders.locationId, rawId)) : undefined;
+
+  const orderPaymentRowsRaw =
+    orderWhere ?
+      await db
+        .select({
+          paymentSourceId: ghlPaymentOrders.paymentSourceId,
+          displayName: sql<string>`coalesce(max(${paymentSources.displayName}), 'Unknown source')`.as("displayName"),
+          paidOrderCount: sql<number>`cast(count(*) as int)`.as("paidOrderCount"),
+          amountSum: sql<number>`coalesce(sum(cast(${ghlPaymentOrders.amount} as bigint)), 0)::bigint`.as("amountSum"),
+          sampleCurrency: sql<string | null>`max(${ghlPaymentOrders.currency})`.as("sampleCurrency")
+        })
+        .from(ghlPaymentOrders)
+        .leftJoin(paymentSources, eq(ghlPaymentOrders.paymentSourceId, paymentSources.id))
+        .where(orderWhere)
+        .groupBy(ghlPaymentOrders.paymentSourceId)
+    : [];
+
+  const orderPaymentsBySource = [...orderPaymentRowsRaw]
+    .sort((a, b) => Number(b.amountSum) - Number(a.amountSum))
+    .map((row) => {
+      const amt = Number(row.amountSum ?? 0);
+      return {
+        paymentSourceId: row.paymentSourceId,
+        displayName: row.displayName,
+        paidOrderCount: Number(row.paidOrderCount ?? 0),
+        depositsCollectedAmount: amt,
+        depositsCollectedFormatted: formatDashboardDeposits(amt, row.sampleCurrency ?? null)
+      };
+    });
+
+  const invoiceTs = sql`coalesce(${invoices.ghlUpdatedAt}, ${invoices.issueDate}, ${invoices.dueDate}, ${invoices.updatedAt}, ${invoices.createdAt})`;
+  const invWhereBase = await scopedInvoicesWhere(db, policy, invoiceTs, from, toExclusive);
+  const invoiceWhere = invWhereBase ? and(invWhereBase, eq(invoices.locationId, rawId)) : undefined;
+
+  const [invoiceAgg] =
+    invoiceWhere ?
+      await db
+        .select({
+          depositSum: sql<number>`coalesce(sum(cast(${invoices.amountPaid} as bigint)), 0)::bigint`.as("depositSum"),
+          sampleCurrency: sql<string | null>`max(${invoices.currency})`.as("sampleCurrency")
+        })
+        .from(invoices)
+        .where(invoiceWhere)
+    : [];
+
+  const invoiceDepositNum = invoiceAgg ? Number(invoiceAgg.depositSum ?? 0) : 0;
+
+  return c.json({
+    fromInclusive: from.toISOString(),
+    toExclusive: toExclusive.toISOString(),
+    locationId: rawId,
+    calendars,
+    orderPaymentsBySource,
+    invoiceDepositsCollectedAmount: invoiceDepositNum,
+    invoiceDepositsCollectedFormatted: formatDashboardDeposits(
+      invoiceDepositNum,
+      invoiceAgg?.sampleCurrency ?? null
+    )
   });
 }

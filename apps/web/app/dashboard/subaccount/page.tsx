@@ -1,17 +1,18 @@
-import { Suspense } from "react";
+"use client";
 
-import DashboardSubaccountClient from "./dashboard-subaccount-client";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 
-export default function DashboardSubaccountRoutePage() {
+export default function DashboardSubaccountLegacyRedirectPage() {
+  const router = useRouter();
+
+  useEffect(() => {
+    router.replace("/dashboard");
+  }, [router]);
+
   return (
-    <Suspense
-      fallback={
-        <div className="muted" style={{ paddingTop: 8 }}>
-          Loading…
-        </div>
-      }
-    >
-      <DashboardSubaccountClient />
-    </Suspense>
+    <p className="muted" style={{ paddingTop: 8 }}>
+      Redirecting…
+    </p>
   );
 }

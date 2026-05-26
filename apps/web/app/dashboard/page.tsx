@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getApiBaseUrl } from "../../lib/api-base-url";
 import { formatLocationName } from "../../lib/location-display";
@@ -27,6 +26,22 @@ type OverviewResponse = {
   toExclusive: string;
   totals: Omit<OverviewRow, "locationId" | "ghlLocationId" | "locationName">;
   subaccounts: OverviewRow[];
+};
+
+type LocationDetailResponse = {
+  fromInclusive: string;
+  toExclusive: string;
+  locationId: string;
+  calendars: Array<{ ghlCalendarId: string | null; name: string; bookedCount: number }>;
+  orderPaymentsBySource: Array<{
+    paymentSourceId: string | null;
+    displayName: string;
+    paidOrderCount: number;
+    depositsCollectedAmount: number;
+    depositsCollectedFormatted: string;
+  }>;
+  invoiceDepositsCollectedAmount: number;
+  invoiceDepositsCollectedFormatted: string;
 };
 
 type SortColumn = "subaccount" | "booked" | "paid" | "conversion" | "deposits";
@@ -128,6 +143,81 @@ function meanConversionAcrossAccounts(rows: OverviewRow[]): number | null {
   return mean * 100;
 }
 
+function DashboardOverviewLocationDetailPanels({ detail }: { detail: LocationDetailResponse }) {
+  const hasInvoice =
+    Number.isFinite(detail.invoiceDepositsCollectedAmount) &&
+    Number(detail.invoiceDepositsCollectedAmount ?? 0) > 0;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div>
+        <p className="dashboard-kpi-eyebrow" style={{ marginBottom: 10 }}>
+          Calendars · bookings in window
+        </p>
+        {detail.calendars.length === 0 ? (
+          <p className="muted">No calendar breakdown for this window.</p>
+        ) : (
+          <table className="dashboard-table">
+            <thead>
+              <tr>
+                <th scope="col">Calendar / service label</th>
+                <th className="dashboard-th-actions" scope="col">
+                  Booked
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {detail.calendars.map((c, i) => (
+                <tr key={c.ghlCalendarId ?? `cal-${i}`}>
+                  <td>{c.name}</td>
+                  <td className="dashboard-th-actions">{c.bookedCount}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <div>
+        <p className="dashboard-kpi-eyebrow" style={{ marginBottom: 10 }}>
+          Paid orders · by payment source
+        </p>
+        {detail.orderPaymentsBySource.length === 0 ? (
+          <p className="muted">No paid-order deposits matched this dashboard window.</p>
+        ) : (
+          <table className="dashboard-table">
+            <thead>
+              <tr>
+                <th scope="col">Source</th>
+                <th className="dashboard-th-actions" scope="col">
+                  Orders
+                </th>
+                <th className="dashboard-th-actions" scope="col">
+                  Amount
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {detail.orderPaymentsBySource.map((p, i) => (
+                <tr key={p.paymentSourceId ?? `psrc-${i}-${p.displayName}`}>
+                  <td>{p.displayName}</td>
+                  <td className="dashboard-th-actions">{p.paidOrderCount}</td>
+                  <td className="dashboard-th-actions">{p.depositsCollectedFormatted}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {hasInvoice ? (
+          <p className="muted" style={{ marginTop: 12 }}>
+            Invoices paid in window (combined):{" "}
+            <strong>{detail.invoiceDepositsCollectedFormatted}</strong> — totals are grouped separately from order
+            sources.
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export default function DashboardOverviewPage() {
   const apiBaseUrl = useMemo(() => getApiBaseUrl(), []);
   const [preset, setPreset] = useState<Exclude<PresetKey, "custom"> | "custom">("30");
@@ -137,8 +227,15 @@ export default function DashboardOverviewPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sort, setSort] = useState<SortState>({ column: "booked", direction: "desc" });
+  const [overviewSearch, setOverviewSearch] = useState("");
+  const [expandedLocationId, setExpandedLocationId] = useState<string | null>(null);
+  const [detailsByLoc, setDetailsByLoc] = useState<Record<string, LocationDetailResponse>>({});
+  const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
+  const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
 
   const query = useMemo(() => new URLSearchParams({ from: range.fromInclusive, to: range.toInclusive }), [range]);
+
+  const detailFetchAbortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -165,11 +262,80 @@ export default function DashboardOverviewPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    setExpandedLocationId(null);
+    setDetailsByLoc({});
+    setDetailErrors({});
+    detailFetchAbortRef.current?.abort();
+    detailFetchAbortRef.current = null;
+  }, [range.fromInclusive, range.toInclusive]);
+
   const rowsRaw = overview?.subaccounts ?? [];
   const accountCount = rowsRaw.length;
   const meanAcrossAccountsPct = useMemo(() => meanConversionAcrossAccounts(rowsRaw), [rowsRaw]);
 
   const sortedRows = useMemo(() => [...rowsRaw].sort((a, b) => compareRows(a, b, sort.column, sort.direction)), [rowsRaw, sort]);
+
+  const overviewSearchTrimmed = overviewSearch.trim().toLowerCase();
+  const filteredSortedRows = useMemo(() => {
+    if (!overviewSearchTrimmed) {
+      return sortedRows;
+    }
+    return sortedRows.filter((row) => {
+      const label = locationLabel(row).toLowerCase();
+      return (
+        label.includes(overviewSearchTrimmed) ||
+        row.ghlLocationId.toLowerCase().includes(overviewSearchTrimmed) ||
+        row.locationId.toLowerCase().includes(overviewSearchTrimmed)
+      );
+    });
+  }, [sortedRows, overviewSearchTrimmed]);
+
+  async function toggleRowDetail(locationId: string) {
+    if (expandedLocationId === locationId) {
+      setExpandedLocationId(null);
+      setDetailErrors((prev) => {
+        const next = { ...prev };
+        delete next[locationId];
+        return next;
+      });
+      return;
+    }
+
+    detailFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    detailFetchAbortRef.current = controller;
+
+    setExpandedLocationId(locationId);
+    setDetailErrors((prev) => {
+      const next = { ...prev };
+      delete next[locationId];
+      return next;
+    });
+    if (detailsByLoc[locationId]) {
+      return;
+    }
+    setDetailLoadingId(locationId);
+    try {
+      const res = await fetch(
+        `${apiBaseUrl}/workspace/dashboard/locations/${encodeURIComponent(locationId)}/detail?${query}`,
+        { headers: mergeWorkspaceHeaders(), cache: "no-store", signal: controller.signal }
+      );
+      const payload = (await res.json().catch(() => ({}))) as LocationDetailResponse & { error?: string };
+      if (!res.ok) {
+        throw new Error(payload.error ?? "Failed to load detail");
+      }
+      setDetailsByLoc((prev) => ({ ...prev, [locationId]: payload as LocationDetailResponse }));
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") {
+        return;
+      }
+      const message = e instanceof Error ? e.message : "Failed to load detail";
+      setDetailErrors((prev) => ({ ...prev, [locationId]: message }));
+    } finally {
+      setDetailLoadingId(null);
+    }
+  }
 
   function toggleSort(column: SortColumn) {
     setSort((prev) =>
@@ -225,7 +391,10 @@ export default function DashboardOverviewPage() {
             <div className="panel dashboard-kpi-panel">
               <p className="dashboard-kpi-eyebrow">Subaccounts · period</p>
               <p className="dashboard-kpi-value">{accountCount}</p>
-              <p className="muted dashboard-kpi-sub">Locations in this ranking · period</p>
+              <p className="muted dashboard-kpi-sub">
+                Locations in this ranking · period
+                {overviewSearchTrimmed ? ` · showing ${filteredSortedRows.length}` : ""}
+              </p>
             </div>
             <div className="panel dashboard-kpi-panel">
               <p className="dashboard-kpi-eyebrow">Portfolio conversion</p>
@@ -250,6 +419,21 @@ export default function DashboardOverviewPage() {
               <p className="dashboard-kpi-value">{overview.totals.depositsCollectedFormatted}</p>
               <p className="muted dashboard-kpi-sub">Invoices + paid orders · period</p>
             </div>
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <label className="inbox-field-label" htmlFor="dashboard-overview-search">
+              Search overview
+            </label>
+            <input
+              autoComplete="off"
+              aria-label="Filter dashboard overview rows"
+              id="dashboard-overview-search"
+              onChange={(e) => setOverviewSearch(e.target.value)}
+              placeholder="Name, HighLevel location id, or UUID"
+              style={{ display: "block", marginBottom: 2, marginTop: 8, maxWidth: 460, padding: "8px 12px", width: "100%" }}
+              type="search"
+              value={overviewSearch}
+            />
           </div>
           <div className="panel" style={{ marginTop: 16, overflow: "auto", padding: 0 }}>
             <table className="dashboard-table">
@@ -337,29 +521,52 @@ export default function DashboardOverviewPage() {
                 </tr>
               </thead>
               <tbody>
-                {sortedRows.map((row, idx) => (
-                  <tr key={row.locationId}>
-                    <td>{idx + 1}</td>
-                    <td>{locationLabel(row)}</td>
-                    <td>{row.bookedAppointments}</td>
-                    <td>{row.appointmentsWithCollectedPayment}</td>
-                    <td>{pctLabel(row.depositsCollectedPercentage)}</td>
-                    <td>{row.depositsCollectedFormatted}</td>
-                    <td className="dashboard-th-actions">
-                      <Link
-                        className="dashboard-drill-link"
-                        href={`/dashboard/subaccount?locationId=${encodeURIComponent(row.locationId)}`}
-                      >
-                        View
-                      </Link>
-                    </td>
-                  </tr>
+                {filteredSortedRows.map((row, idx) => (
+                  <Fragment key={row.locationId}>
+                    <tr>
+                      <td>{idx + 1}</td>
+                      <td>{locationLabel(row)}</td>
+                      <td>{row.bookedAppointments}</td>
+                      <td>{row.appointmentsWithCollectedPayment}</td>
+                      <td>{pctLabel(row.depositsCollectedPercentage)}</td>
+                      <td>{row.depositsCollectedFormatted}</td>
+                      <td className="dashboard-th-actions">
+                        <button
+                          aria-expanded={expandedLocationId === row.locationId}
+                          className="dashboard-drill-link"
+                          type="button"
+                          onClick={() => void toggleRowDetail(row.locationId)}
+                        >
+                          {expandedLocationId === row.locationId ? "Hide" : "Show"}
+                        </button>
+                      </td>
+                    </tr>
+                    {expandedLocationId === row.locationId ? (
+                      <tr>
+                        <td colSpan={7} style={{ background: "var(--muted-bg, rgba(0, 0, 0, 0.032))", padding: "18px 20px" }}>
+                          {detailLoadingId === row.locationId ? (
+                            <p className="muted">Loading breakdown…</p>
+                          ) : null}
+                          {detailErrors[row.locationId] ? (
+                            <p className="empty">{detailErrors[row.locationId]}</p>
+                          ) : null}
+                          {detailsByLoc[row.locationId] ? (
+                            <DashboardOverviewLocationDetailPanels detail={detailsByLoc[row.locationId]!} />
+                          ) : null}
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
             {sortedRows.length === 0 ? (
               <p className="empty muted" style={{ padding: 16 }}>
                 No booked appointments in this window for visible locations.
+              </p>
+            ) : filteredSortedRows.length === 0 ? (
+              <p className="empty muted" style={{ padding: 16 }}>
+                No subaccounts match your search.
               </p>
             ) : null}
           </div>

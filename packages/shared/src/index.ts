@@ -150,6 +150,14 @@ export type NormalizedGhlOrderWebhookEvent = NormalizedGhlBaseWebhookEvent & {
     altType: string | null;
     createdAt: string | null;
     updatedAt: string | null;
+    /** GoHighLevel `source` from the order webhook when present (`id`, `name`, `type`, `subType`, `meta`). */
+    paymentSource: {
+      type: string;
+      subType: string;
+      externalId: string;
+      name: string;
+      meta: Record<string, unknown>;
+    } | null;
   };
 };
 

@@ -11,7 +11,6 @@ export function DashboardSubnav({ locationTail }: { locationTail?: ReactNode }) 
   const { user, hydrated } = useWorkspaceAuth();
 
   const onOverview = pathname === "/dashboard";
-  const onSubaccount = pathname.startsWith("/dashboard/subaccount");
   const onPortfolioAdmin = pathname.startsWith("/dashboard/portfolio-admin");
   const showAdminTab = hydrated && user?.role === "admin";
 
@@ -19,13 +18,6 @@ export function DashboardSubnav({ locationTail }: { locationTail?: ReactNode }) 
     <div className="dashboard-subnav-toolbar">
       <Link className={`app-nav-pill ${onOverview ? "active" : ""}`} href="/dashboard" style={{ padding: "8px 14px" }}>
         Overview
-      </Link>
-      <Link
-        className={`app-nav-pill ${onSubaccount ? "active" : ""}`}
-        href="/dashboard/subaccount"
-        style={{ padding: "8px 14px" }}
-      >
-        Subaccount
       </Link>
       {showAdminTab ? (
         <Link

@@ -104,7 +104,14 @@ import {
 } from "./appointment-payment-sql.js";
 import { putWorkspaceAppointmentOverridesHandler } from "./appointment-overrides-handler.js";
 import {
+  deriveAppointmentCalendarDisplayName,
+  parsePaymentSourceFromOrderPayload,
+  upsertLocationCalendarRow,
+  upsertPaymentSourceFromOrder
+} from "./ghl-dimension-sync.js";
+import {
   getWorkspaceDashboardOverviewHandler,
+  getWorkspaceDashboardLocationDetailHandler,
   getWorkspaceDashboardSubaccountSeriesHandler
 } from "./dashboard-handlers.js";
 import { fetchSelectionLocationRows, rowsToNullableSelectionSet } from "./workspace-selection-db.js";
@@ -458,6 +465,7 @@ app.get("/admin/workspace-audit-logs", async (c) => {
 app.put("/workspace/appointments/:id/overrides", putWorkspaceAppointmentOverridesHandler);
 
 app.get("/workspace/dashboard/overview", getWorkspaceDashboardOverviewHandler);
+app.get("/workspace/dashboard/locations/:locationId/detail", getWorkspaceDashboardLocationDetailHandler);
 app.get("/workspace/dashboard/locations/:locationId/series", getWorkspaceDashboardSubaccountSeriesHandler);
 
 app.get("/admin/workspace-users/:id/subaccounts", adminGetUserSubaccounts);
@@ -2957,6 +2965,19 @@ async function processAppointmentWebhookEvent(
       }
     });
 
+  const ghlCalendarId = event.appointment.calendarId?.trim();
+  if (ghlCalendarId) {
+    const displayName =
+      deriveAppointmentCalendarDisplayName(event.raw as Record<string, unknown>, event.appointment.title) ??
+      `Calendar ${ghlCalendarId}`;
+    await upsertLocationCalendarRow(db, {
+      locationId: location.id,
+      ghlCalendarId,
+      displayName,
+      now
+    });
+  }
+
   await db
     .update(webhookEvents)
     .set({ status: "processed", processedAt: now, error: null })
@@ -3287,11 +3308,17 @@ async function processOrderWebhookEvent(env: Env, event: NormalizedGhlOrderWebho
     contactId = contact?.id ?? null;
   }
 
+  let paymentSourceId: string | null = null;
+  if (event.order.paymentSource) {
+    paymentSourceId = await upsertPaymentSourceFromOrder(db, location.id, event.order.paymentSource, now);
+  }
+
   await db
     .insert(ghlPaymentOrders)
     .values({
       locationId: location.id,
       contactId,
+      paymentSourceId,
       ghlOrderId: event.order.ghlOrderId,
       status: event.order.status,
       fulfillmentStatus: event.order.fulfillmentStatus,
@@ -3311,6 +3338,7 @@ async function processOrderWebhookEvent(env: Env, event: NormalizedGhlOrderWebho
       target: [ghlPaymentOrders.locationId, ghlPaymentOrders.ghlOrderId],
       set: {
         contactId,
+        paymentSourceId,
         status: event.order.status,
         fulfillmentStatus: event.order.fulfillmentStatus,
         liveMode: event.order.liveMode,
@@ -5629,7 +5657,8 @@ async function normalizeOrderWebhook(
       altId: stringOrNull(root.altId),
       altType: stringOrNull(root.altType),
       createdAt: stringOrNull(root.createdAt),
-      updatedAt: stringOrNull(root.updatedAt)
+      updatedAt: stringOrNull(root.updatedAt),
+      paymentSource: parsePaymentSourceFromOrderPayload(root as Record<string, unknown>)
     },
     raw: root
   };

@@ -74,6 +74,13 @@
       "when": 1747795200000,
       "tag": "0012_locations_exclude_from_dashboard",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1747881600000,
+      "tag": "0013_location_calendars_and_payment_sources",
+      "breakpoints": true
     }
   ]
 }
