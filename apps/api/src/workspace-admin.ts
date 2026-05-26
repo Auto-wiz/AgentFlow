@@ -1,7 +1,7 @@
 import { createDb } from "@agentflow/db";
 import { locations, workspaceUsers } from "@agentflow/db";
 import { AUDIT_ACTION_KINDS } from "@agentflow/shared";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, inArray } from "drizzle-orm";
 import type { Context } from "hono";
 
 import { hashPassword, normalizeEmail } from "./auth-lib.js";
@@ -32,6 +32,12 @@ async function assertAdminSession(c: Context<HonoBindings>) {
     return null;
   }
   return me;
+}
+
+/** No saved rows ⇒ implicit “all locations”; otherwise only IDs in workspace_user_location_selection. */
+async function portfolioAdminLocationSelectionScope(db: ReturnType<typeof createDb>, adminWorkspaceUserId: string) {
+  const selectionRows = await fetchSelectionLocationRows(db, adminWorkspaceUserId);
+  return rowsToNullableSelectionSet(selectionRows);
 }
 
 export async function adminListUsers(c: Context<HonoBindings>) {
@@ -137,15 +143,35 @@ export async function adminListLocations(c: Context<HonoBindings>) {
     return c.json({ error: "forbidden" }, 403);
   }
   const db = createDb(c.env.DATABASE_URL);
-  const rows = await db
-    .select({
-      locationId: locations.id,
-      ghlLocationId: locations.ghlLocationId,
-      name: locations.name,
-      excludeFromDashboard: locations.excludeFromDashboard
-    })
-    .from(locations)
-    .orderBy(asc(locations.ghlLocationId));
+  const scope = await portfolioAdminLocationSelectionScope(db, admin.id);
+
+  let rows;
+  if (scope === null) {
+    rows = await db
+      .select({
+        locationId: locations.id,
+        ghlLocationId: locations.ghlLocationId,
+        name: locations.name,
+        excludeFromDashboard: locations.excludeFromDashboard
+      })
+      .from(locations)
+      .orderBy(asc(locations.ghlLocationId));
+  } else {
+    const ids = [...scope];
+    rows =
+      ids.length === 0
+        ? []
+        : await db
+            .select({
+              locationId: locations.id,
+              ghlLocationId: locations.ghlLocationId,
+              name: locations.name,
+              excludeFromDashboard: locations.excludeFromDashboard
+            })
+            .from(locations)
+            .where(inArray(locations.id, ids))
+            .orderBy(asc(locations.ghlLocationId));
+  }
 
   return c.json({ locations: rows });
 }
@@ -177,6 +203,19 @@ export async function adminPatchLocationDashboardExclusion(c: Context<HonoBindin
   }
 
   const db = createDb(c.env.DATABASE_URL);
+
+  const scope = await portfolioAdminLocationSelectionScope(db, admin.id);
+  if (scope !== null && !scope.has(locationId)) {
+    return c.json(
+      {
+        error: "location_not_in_selection",
+        message:
+          "This subaccount is not in your account's selected locations. Add it under Manage subaccounts, then retry."
+      },
+      403
+    );
+  }
+
   const now = new Date();
   const [row] = await db
     .update(locations)

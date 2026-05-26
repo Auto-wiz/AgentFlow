@@ -128,9 +128,6 @@ export async function canWorkspaceAccessLocationUuid(
     return !hidden.includes(locationId);
   }
   if (policy.kind === "jwt_workspace") {
-    if (policy.role === "admin") {
-      return true;
-    }
     const allowed = await jwtWorkspaceAllowedLocationUuidList(db, policy);
     if (allowed === null) {
       return true;

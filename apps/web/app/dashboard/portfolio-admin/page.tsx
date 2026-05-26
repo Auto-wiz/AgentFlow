@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { getApiBaseUrl } from "../../../lib/api-base-url";
@@ -26,9 +27,10 @@ async function fetchAdminWorkspaceLocations(
   const payload = (await res.json().catch(() => ({}))) as {
     locations?: PortfolioDashboardLocation[];
     error?: string;
+    message?: string;
   };
   if (!res.ok) {
-    throw new Error(payload.error ?? "Unable to load locations");
+    throw new Error(payload.message ?? payload.error ?? "Unable to load locations");
   }
   return payload.locations ?? [];
 }
@@ -102,9 +104,9 @@ export default function DashboardPortfolioAdminPage() {
           body: JSON.stringify({ excludeFromDashboard })
         }
       );
-      const payload = (await res.json().catch(() => ({}))) as { error?: string };
+      const payload = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
       if (!res.ok) {
-        throw new Error(payload.error ?? "Update failed");
+        throw new Error(payload.message ?? payload.error ?? "Update failed");
       }
       /** Re-fetch so every admin/session sees the same DB truth (avoids stale HTTP cache + optimistic drift). */
       const rows = await fetchAdminWorkspaceLocations(apiBaseUrl, mergeWorkspaceHeaders());
@@ -154,8 +156,11 @@ export default function DashboardPortfolioAdminPage() {
         <div className="panel" style={{ padding: 18, marginTop: 12 }}>
           <h2 style={{ marginTop: 0 }}>Portfolio exclusions</h2>
           <p className="muted">
-            Check a subaccount to hide it from dashboard KPIs and the overview table (internal or churned clients). It
-            stays available in the rest of AgentFlow. Subaccount drill-down returns an error for excluded locations.
+            Only subaccounts you have enabled for your account appear here—same scope as Dashboard and Appointments. Add
+            or remove locations on{" "}
+            <Link href="/subaccounts">Manage subaccounts</Link>
+            . Checked rows are hidden from portfolio KPIs and the overview table (they stay available elsewhere);
+            drilling into an excluded subaccount shows an error.
           </p>
 
           {portfolioLoading ? <p className="muted" style={{ marginTop: 14 }}>Loading locations…</p> : null}
