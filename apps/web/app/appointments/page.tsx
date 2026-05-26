@@ -71,6 +71,50 @@ function appointmentMatchesScheduleFilter(startTimeIso: string | null, filter: A
   return filter === "future" ? t >= now : t < now;
 }
 
+/** Extra client-side alignment with the list UI (server already applies most filters). */
+function applyAppointmentListClientFilters(
+  rows: AppointmentSummary[],
+  timeFilter: AppointmentTimeFilter,
+  paymentFilter: AppointmentPaymentFilter,
+  lifecycleFilter: AppointmentLifecycleFilter
+): AppointmentSummary[] {
+  let out = rows;
+  if (lifecycleFilter !== "all") {
+    out =
+      lifecycleFilter === "cancelled"
+        ? out.filter((appointment) => appointment.cancelledBooking)
+        : out.filter((appointment) => !appointment.cancelledBooking);
+  }
+  if (paymentFilter !== "all") {
+    out = out.filter((appointment) => appointment.paymentStatus === paymentFilter);
+  }
+  if (timeFilter !== "all") {
+    out = out.filter((appointment) => appointmentMatchesScheduleFilter(appointment.startTime, timeFilter));
+  }
+  return out;
+}
+
+function buildAppointmentsQueryParams(
+  locationId: string | undefined,
+  timeFilter: AppointmentTimeFilter,
+  paymentFilter: AppointmentPaymentFilter,
+  lifecycleFilter: AppointmentLifecycleFilter,
+  hiddenFilter: AppointmentHiddenFilter
+) {
+  const params = new URLSearchParams();
+  if (locationId) {
+    params.set("locationId", locationId);
+  }
+  params.set("schedule", timeFilter);
+  params.set("paymentStatus", paymentFilter === "all" ? "all" : paymentFilter);
+  params.set(
+    "lifecycle",
+    lifecycleFilter === "all" ? "all" : lifecycleFilter === "cancelled" ? "cancelled" : "active"
+  );
+  params.set("hidden", hiddenFilter);
+  return params;
+}
+
 export default function AppointmentsPage() {
   const setTopbarFilters = useAppointmentsTopbarSlot();
   const { sessionKey, token } = useWorkspaceAuth();
@@ -87,6 +131,10 @@ export default function AppointmentsPage() {
   const [error, setError] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
 
+  /** Rows matching current filters across all subs (bounded by API limit) — drives Subaccount dropdown counts. */
+  const [appointmentsForSubaccountTotals, setAppointmentsForSubaccountTotals] = useState<AppointmentSummary[]>([]);
+  const [subaccountSelectSearch, setSubaccountSelectSearch] = useState("");
+
   const [overridesOpen, setOverridesOpen] = useState(false);
   const [overrideBusy, setOverrideBusy] = useState(false);
   const [overrideError, setOverrideError] = useState<string | null>(null);
@@ -100,6 +148,7 @@ export default function AppointmentsPage() {
       setLoading(true);
       setError(null);
       setAppointments([]);
+      setAppointmentsForSubaccountTotals([]);
 
       try {
         const subaccountsResponse = await fetch(`${apiBaseUrl}/subaccounts/overview?surface=appointments`, {
@@ -123,43 +172,59 @@ export default function AppointmentsPage() {
           setSelectedLocationId("");
         }
 
-        const params = new URLSearchParams();
-        if (nextSelectedLocationId) {
-          params.set("locationId", nextSelectedLocationId);
-        }
-        params.set("schedule", timeFilter);
-
-        params.set("paymentStatus", paymentFilter === "all" ? "all" : paymentFilter);
-        params.set(
-          "lifecycle",
-          lifecycleFilter === "all" ? "all" : lifecycleFilter === "cancelled" ? "cancelled" : "active"
+        const allParams = buildAppointmentsQueryParams(
+          undefined,
+          timeFilter,
+          paymentFilter,
+          lifecycleFilter,
+          hiddenFilter
         );
-        params.set("hidden", hiddenFilter);
-
-        const url = `${apiBaseUrl}/appointments?${params.toString()}`;
-        const response = await fetch(url, {
+        const allUrl = `${apiBaseUrl}/appointments?${allParams.toString()}`;
+        const allResponse = await fetch(allUrl, {
           signal: controller.signal,
           headers: mergeWorkspaceHeaders(),
           cache: "no-store"
         });
-        if (!response.ok) {
+        if (!allResponse.ok) {
           throw new Error("Failed to load appointments");
         }
-        const data = (await response.json()) as { appointments: AppointmentSummary[] };
-        let rows = data.appointments;
-        if (lifecycleFilter !== "all") {
-          rows =
-            lifecycleFilter === "cancelled"
-              ? rows.filter((appointment) => appointment.cancelledBooking)
-              : rows.filter((appointment) => !appointment.cancelledBooking);
+        const allData = (await allResponse.json()) as { appointments: AppointmentSummary[] };
+        const totalsFiltered = applyAppointmentListClientFilters(
+          allData.appointments,
+          timeFilter,
+          paymentFilter,
+          lifecycleFilter
+        );
+
+        let displayFiltered = totalsFiltered;
+        if (nextSelectedLocationId) {
+          const scopedParams = buildAppointmentsQueryParams(
+            nextSelectedLocationId,
+            timeFilter,
+            paymentFilter,
+            lifecycleFilter,
+            hiddenFilter
+          );
+          const scopedUrl = `${apiBaseUrl}/appointments?${scopedParams.toString()}`;
+          const scopedResponse = await fetch(scopedUrl, {
+            signal: controller.signal,
+            headers: mergeWorkspaceHeaders(),
+            cache: "no-store"
+          });
+          if (!scopedResponse.ok) {
+            throw new Error("Failed to load appointments");
+          }
+          const scopedData = (await scopedResponse.json()) as { appointments: AppointmentSummary[] };
+          displayFiltered = applyAppointmentListClientFilters(
+            scopedData.appointments,
+            timeFilter,
+            paymentFilter,
+            lifecycleFilter
+          );
         }
-        if (paymentFilter !== "all") {
-          rows = rows.filter((appointment) => appointment.paymentStatus === paymentFilter);
-        }
-        if (timeFilter !== "all") {
-          rows = rows.filter((appointment) => appointmentMatchesScheduleFilter(appointment.startTime, timeFilter));
-        }
-        setAppointments(rows);
+
+        setAppointmentsForSubaccountTotals(totalsFiltered);
+        setAppointments(displayFiltered);
       } catch (caught) {
         if (!controller.signal.aborted) {
           setError(caught instanceof Error ? caught.message : "Failed to load appointments");
@@ -219,7 +284,35 @@ export default function AppointmentsPage() {
     setOverrideError(null);
   }, [overridesOpen, selectedAppointment]);
 
-  const totalAppointments = subaccounts.reduce((sum, subaccount) => sum + subaccount.appointmentCount, 0);
+  /** Subaccounts that match the type-ahead query (narrow only the picker list). */
+  const subaccountsForDropdown = useMemo(() => {
+    const needle = subaccountSelectSearch.trim().toLowerCase();
+    if (!needle) {
+      return subaccounts;
+    }
+    return subaccounts.filter((sub) => {
+      const label = formatLocationName(sub.locationName, sub.ghlLocationId).toLowerCase();
+      return (
+        label.includes(needle) ||
+        sub.ghlLocationId.toLowerCase().includes(needle) ||
+        sub.locationId.toLowerCase().includes(needle)
+      );
+    });
+  }, [subaccounts, subaccountSelectSearch]);
+
+  /**
+   * Per-location counts derived from `/appointments` without `locationId`, after the same client filters as the list.
+   * API returns at most 200 rows, so totals can truncate when many rows match globally.
+   */
+  const filteredAppointmentCountsByLocation = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const a of appointmentsForSubaccountTotals) {
+      m.set(a.locationId, (m.get(a.locationId) ?? 0) + 1);
+    }
+    return m;
+  }, [appointmentsForSubaccountTotals]);
+
+  const allSubaccountVisibleCount = appointmentsForSubaccountTotals.length;
 
   const ghlEmbedUrl = useMemo(() => {
     if (!selectedAppointment) {
@@ -261,19 +354,33 @@ export default function AppointmentsPage() {
     setTopbarFilters(
       <div aria-label="Appointment filters" className="appointments-header-filters">
         <div className="appointments-filter-field appointments-filter-inline">
-          <label className="appointments-filter-label" htmlFor="appointment-subaccount-filter">
+          <label className="appointments-filter-label" htmlFor="appointment-subaccount-search">
             Subaccount
           </label>
+          <input
+            aria-label="Filter subaccounts in picker"
+            autoCapitalize="off"
+            autoComplete="off"
+            className="appointments-filter-select appointments-filter-select-inline appointments-subaccount-search"
+            id="appointment-subaccount-search"
+            type="search"
+            placeholder="Find subaccount…"
+            spellCheck={false}
+            value={subaccountSelectSearch}
+            onChange={(e) => setSubaccountSelectSearch(e.target.value)}
+          />
           <select
             className="appointments-filter-select appointments-filter-select-inline"
             id="appointment-subaccount-filter"
+            title="Counts follow Payment, Status, Date, and Hidden filters; capped at first 200 matches from the API."
             value={selectedLocationId}
             onChange={(event) => setSelectedLocationId(event.target.value)}
           >
-            <option value="">All ({totalAppointments})</option>
-            {subaccounts.map((subaccount) => (
+            <option value="">All ({allSubaccountVisibleCount})</option>
+            {subaccountsForDropdown.map((subaccount) => (
               <option key={subaccount.locationId} value={subaccount.locationId}>
-                {formatLocationName(subaccount.locationName, subaccount.ghlLocationId)} ({subaccount.appointmentCount})
+                {formatLocationName(subaccount.locationName, subaccount.ghlLocationId)} (
+                {filteredAppointmentCountsByLocation.get(subaccount.locationId) ?? 0})
               </option>
             ))}
           </select>
@@ -398,12 +505,14 @@ export default function AppointmentsPage() {
   }, [
     setTopbarFilters,
     selectedLocationId,
-    subaccounts,
+    subaccountsForDropdown,
+    subaccountSelectSearch,
     timeFilter,
     paymentFilter,
     lifecycleFilter,
     hiddenFilter,
-    totalAppointments,
+    allSubaccountVisibleCount,
+    filteredAppointmentCountsByLocation,
     selectedAppointmentId,
     loading,
     appointments.length

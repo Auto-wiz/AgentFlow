@@ -27,7 +27,7 @@ import {
 } from "./workspace-access.js";
 
 import type { GhlOAuthTokenEnv } from "./ghl-oauth-location-token.js";
-import { hydrateDashboardCalendarBucketsWithGhlCanonicalNames } from "./dashboard-calendar-ghl-names.js";
+import { hydrateDashboardCalendarBucketsWithGhlCanonicalNames, hydrateLocationCalendarCatalogFromGhlIntoDb } from "./dashboard-calendar-ghl-names.js";
 
 type Env = WorkspaceJwtEnv & GhlOAuthTokenEnv;
 
@@ -212,6 +212,124 @@ function pct(n: number, d: number): number | null {
   return Math.round((n / d) * 10000) / 100;
 }
 
+type OverviewSubaccountRow = {
+  locationId: string;
+  ghlLocationId: string;
+  locationName: string | null;
+  bookedAppointments: number;
+  appointmentsWithCollectedPayment: number;
+  depositsCollectedPercentage: number | null;
+  depositsCollectedAmount: number;
+  depositsCollectedFormatted: string;
+};
+
+function overviewSubaccountDisplayLabel(row: Pick<OverviewSubaccountRow, "locationName" | "ghlLocationId">) {
+  const t = (row.locationName ?? "").trim();
+  return t.length > 0 ? t : row.ghlLocationId;
+}
+
+function overviewPaidBookedRatio(booked: number, collected: number): number | null {
+  if (booked <= 0) {
+    return null;
+  }
+  return collected / booked;
+}
+
+type OverviewSortColumn = "subaccount" | "booked" | "paid" | "conversion" | "deposits";
+
+function parseOverviewSortColumn(raw: string | undefined): OverviewSortColumn {
+  const s = (raw ?? "").trim().toLowerCase();
+  if (s === "subaccount" || s === "paid" || s === "conversion" || s === "deposits") {
+    return s;
+  }
+  return "booked";
+}
+
+function parseOverviewSortOrder(raw: string | undefined): "asc" | "desc" {
+  return (raw ?? "").trim().toLowerCase() === "asc" ? "asc" : "desc";
+}
+
+function filterOverviewSubaccountsByQuery(rows: OverviewSubaccountRow[], q: string): OverviewSubaccountRow[] {
+  const needle = q.trim().toLowerCase();
+  if (!needle) {
+    return rows;
+  }
+  return rows.filter((row) => {
+    const label = overviewSubaccountDisplayLabel(row).toLowerCase();
+    return (
+      label.includes(needle) ||
+      row.ghlLocationId.toLowerCase().includes(needle) ||
+      row.locationId.toLowerCase().includes(needle)
+    );
+  });
+}
+
+function meanConversionAcrossOverviewRows(rows: OverviewSubaccountRow[]): number | null {
+  const ratios: number[] = [];
+  for (const r of rows) {
+    if (r.bookedAppointments > 0) {
+      ratios.push(r.appointmentsWithCollectedPayment / r.bookedAppointments);
+    }
+  }
+  if (ratios.length === 0) {
+    return null;
+  }
+  const mean = ratios.reduce((s, x) => s + x, 0) / ratios.length;
+  return mean * 100;
+}
+
+function sortOverviewSubaccounts(
+  rows: OverviewSubaccountRow[],
+  column: OverviewSortColumn,
+  order: "asc" | "desc"
+): OverviewSubaccountRow[] {
+  const dir = order === "asc" ? 1 : -1;
+  const sorted = [...rows];
+  sorted.sort((a, b) => {
+    let cmp = 0;
+    switch (column) {
+      case "subaccount": {
+        cmp = overviewSubaccountDisplayLabel(a).localeCompare(
+          overviewSubaccountDisplayLabel(b),
+          undefined,
+          { sensitivity: "base" }
+        );
+        break;
+      }
+      case "booked":
+        cmp = a.bookedAppointments - b.bookedAppointments;
+        break;
+      case "paid":
+        cmp = a.appointmentsWithCollectedPayment - b.appointmentsWithCollectedPayment;
+        break;
+      case "deposits":
+        cmp = a.depositsCollectedAmount - b.depositsCollectedAmount;
+        break;
+      case "conversion": {
+        const ra = overviewPaidBookedRatio(a.bookedAppointments, a.appointmentsWithCollectedPayment);
+        const rb = overviewPaidBookedRatio(b.bookedAppointments, b.appointmentsWithCollectedPayment);
+        if (ra === null && rb === null) {
+          cmp = 0;
+        } else if (ra === null) {
+          cmp = 1;
+        } else if (rb === null) {
+          cmp = -1;
+        } else {
+          cmp = ra - rb;
+        }
+        break;
+      }
+      default:
+        cmp = 0;
+    }
+    if (cmp !== 0) {
+      return dir * cmp;
+    }
+    return a.locationId.localeCompare(b.locationId);
+  });
+  return sorted;
+}
+
 export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings: Env }>) {
   const policy = await resolveAccessPolicy(c, c.env);
   if (!policy) {
@@ -297,37 +415,54 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
     amountByLocation.set(row.locationId, cur + BigInt(Number(row.depositSum ?? 0)));
   }
 
-  const subaccounts = rollup
-    .map((row) => {
-      const booked = Number(row.bookedAppointments ?? 0);
-      const collectedCount = Number(row.appointmentsWithCollectedPayment ?? 0);
-      const amount = amountByLocation.get(row.locationId) ?? 0n;
-      const numAmount = Number(amount);
-      return {
-        locationId: row.locationId,
-        ghlLocationId: row.ghlLocationId,
-        locationName: row.locationName,
-        bookedAppointments: booked,
-        appointmentsWithCollectedPayment: collectedCount,
-        depositsCollectedPercentage: pct(collectedCount, booked),
-        depositsCollectedAmount: numAmount,
-        depositsCollectedFormatted: formatDashboardDeposits(numAmount, null)
-      };
-    })
-    .sort((a, b) => b.bookedAppointments - a.bookedAppointments || (a.locationName ?? "").localeCompare(b.locationName ?? ""));
+  const allSubaccounts = rollup.map((row) => {
+    const booked = Number(row.bookedAppointments ?? 0);
+    const collectedCount = Number(row.appointmentsWithCollectedPayment ?? 0);
+    const amount = amountByLocation.get(row.locationId) ?? 0n;
+    const numAmount = Number(amount);
+    return {
+      locationId: row.locationId,
+      ghlLocationId: row.ghlLocationId,
+      locationName: row.locationName,
+      bookedAppointments: booked,
+      appointmentsWithCollectedPayment: collectedCount,
+      depositsCollectedPercentage: pct(collectedCount, booked),
+      depositsCollectedAmount: numAmount,
+      depositsCollectedFormatted: formatDashboardDeposits(numAmount, null)
+    };
+  });
 
   let sumBooked = 0;
   let sumCollected = 0;
-  for (const s of subaccounts) {
+  for (const s of allSubaccounts) {
     sumBooked += s.bookedAppointments;
     sumCollected += s.appointmentsWithCollectedPayment;
   }
 
   /** Match portfolio KPI to the overview table: sum per-row DEPOSITS (locations with bookings in window only). */
-  const totalsDepositAmount = subaccounts.reduce(
+  const totalsDepositAmount = allSubaccounts.reduce(
     (sum, row) => sum + (Number.isFinite(row.depositsCollectedAmount) ? row.depositsCollectedAmount : 0),
     0
   );
+
+  const qRaw = c.req.query("q");
+  const searchQuery = typeof qRaw === "string" ? qRaw : "";
+  const filteredSubaccounts = filterOverviewSubaccountsByQuery(allSubaccounts, searchQuery);
+  const sortColumn = parseOverviewSortColumn(c.req.query("sort"));
+  const sortOrder = parseOverviewSortOrder(c.req.query("order"));
+  const sortedForPaging = sortOverviewSubaccounts(filteredSubaccounts, sortColumn, sortOrder);
+
+  const pageRaw = Number(c.req.query("page"));
+  const page = Number.isFinite(pageRaw) && pageRaw >= 1 ? Math.floor(pageRaw) : 1;
+  const limitRaw = Number(c.req.query("limit"));
+  const pageSize = Math.min(50, Math.max(1, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 50));
+  const totalSubaccounts = sortedForPaging.length;
+  const totalPages = Math.max(1, Math.ceil(totalSubaccounts / pageSize) || 1);
+  const safePage = Math.min(page, totalPages);
+  const offset = (safePage - 1) * pageSize;
+  const subaccounts = sortedForPaging.slice(offset, offset + pageSize);
+
+  const meanConversionAcrossAccountsPct = meanConversionAcrossOverviewRows(filteredSubaccounts);
 
   return c.json({
     fromInclusive: from.toISOString(),
@@ -338,6 +473,16 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
       depositsCollectedPercentage: pct(sumCollected, sumBooked),
       depositsCollectedAmount: totalsDepositAmount,
       depositsCollectedFormatted: formatDashboardDeposits(totalsDepositAmount, null)
+    },
+    stats: {
+      meanConversionAcrossAccountsPct
+    },
+    pagination: {
+      page: safePage,
+      pageSize,
+      totalSubaccounts,
+      totalPages,
+      query: searchQuery.trim()
     },
     subaccounts
   });
@@ -558,6 +703,8 @@ export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bi
   const { from, toExclusive } = bounds;
   const db = dbProbe;
 
+  await hydrateLocationCalendarCatalogFromGhlIntoDb(c.env, db, rawId, dashboardLoc.ghlLocationId);
+
   const scope = await scopedAppointmentPredicates(db, policy);
   const bookedDuring = appointmentsBookedDuringRange(from, toExclusive);
 
@@ -578,11 +725,10 @@ export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bi
         .select({
           bookedCount: sql<number>`cast(count(*) as int)`.as("bookedCount"),
           displayLabel: sql<string>`coalesce(
-            max(${locationCalendars.name}),
-            max(${appointments.title}),
-            case when ${appointmentCalendarBucketExpr} = ''
-            then 'No calendar'
-            else 'Calendar'
+            nullif(trim(max(${locationCalendars.name})), ''),
+            case
+              when max(trim(both from coalesce(${appointments.calendarId}, ''))) = '' then 'No calendar'
+              else concat('Calendar · ', max(trim(both from coalesce(${appointments.calendarId}, ''))))
             end
           )`.as("displayLabel"),
           sampleGhlCalendarId: sql<string | null>`max(${appointments.calendarId})`.as("sampleGhlCalendarId")
@@ -592,7 +738,7 @@ export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bi
           locationCalendars,
           and(
             eq(locationCalendars.locationId, appointments.locationId),
-            eq(locationCalendars.ghlCalendarId, appointments.calendarId)
+            sql`trim(both from coalesce(${appointments.calendarId}, '')) = trim(both from coalesce(${locationCalendars.ghlCalendarId}, ''))`
           )
         )
         .where(appointmentWhere)

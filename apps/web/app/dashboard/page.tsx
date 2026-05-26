@@ -21,10 +21,22 @@ type OverviewRow = {
   depositsCollectedFormatted: string;
 };
 
+type OverviewPagination = {
+  page: number;
+  pageSize: number;
+  totalSubaccounts: number;
+  totalPages: number;
+  query?: string;
+};
+
 type OverviewResponse = {
   fromInclusive: string;
   toExclusive: string;
   totals: Omit<OverviewRow, "locationId" | "ghlLocationId" | "locationName">;
+  stats?: {
+    meanConversionAcrossAccountsPct: number | null;
+  };
+  pagination: OverviewPagination;
   subaccounts: OverviewRow[];
 };
 
@@ -61,86 +73,8 @@ function pctLabel(v: number | null | undefined, fractionDigits = 0): string {
   return `${Math.round(v)}%`;
 }
 
-/** Ratio paid/booked when there are bookings; otherwise null (sorts last). */
-function paidBookedRatio(row: OverviewRow): number | null {
-  if (row.bookedAppointments <= 0) {
-    return null;
-  }
-  return row.appointmentsWithCollectedPayment / row.bookedAppointments;
-}
-
 function locationLabel(row: OverviewRow): string {
   return formatLocationName(row.locationName, row.ghlLocationId);
-}
-
-function tieBreak(a: OverviewRow, b: OverviewRow): number {
-  return a.locationId.localeCompare(b.locationId);
-}
-
-/** Compare rows for client-side sorting. Null conversion / zero-booked ratios sort last regardless of direction. */
-function compareRows(a: OverviewRow, b: OverviewRow, column: SortColumn, direction: "asc" | "desc"): number {
-  const dir = direction === "asc" ? 1 : -1;
-
-  switch (column) {
-    case "subaccount": {
-      const cmp = locationLabel(a).localeCompare(locationLabel(b), undefined, { sensitivity: "base" });
-      if (cmp !== 0) {
-        return dir * cmp;
-      }
-      return tieBreak(a, b);
-    }
-    case "booked": {
-      const diff = a.bookedAppointments - b.bookedAppointments;
-      if (diff !== 0) {
-        return dir * diff;
-      }
-      return tieBreak(a, b);
-    }
-    case "paid": {
-      const diff = a.appointmentsWithCollectedPayment - b.appointmentsWithCollectedPayment;
-      if (diff !== 0) {
-        return dir * diff;
-      }
-      return tieBreak(a, b);
-    }
-    case "deposits": {
-      const diff = a.depositsCollectedAmount - b.depositsCollectedAmount;
-      if (diff !== 0) {
-        return dir * diff;
-      }
-      return tieBreak(a, b);
-    }
-    case "conversion": {
-      const ra = paidBookedRatio(a);
-      const rb = paidBookedRatio(b);
-      if (ra === null && rb === null) {
-        return tieBreak(a, b);
-      }
-      if (ra === null) {
-        return 1;
-      }
-      if (rb === null) {
-        return -1;
-      }
-      const diff = ra - rb;
-      if (diff !== 0) {
-        return dir * diff;
-      }
-      return tieBreak(a, b);
-    }
-    default:
-      return tieBreak(a, b);
-  }
-}
-
-/** Simple mean of each location's paid/booked ratio (locations with bookings only). */
-function meanConversionAcrossAccounts(rows: OverviewRow[]): number | null {
-  const ratios = rows.filter((r) => r.bookedAppointments > 0).map((r) => paidBookedRatio(r)!);
-  if (ratios.length === 0) {
-    return null;
-  }
-  const mean = ratios.reduce((s, x) => s + x, 0) / ratios.length;
-  return mean * 100;
 }
 
 function DashboardOverviewLocationDetailPanels({ detail }: { detail: LocationDetailResponse }) {
@@ -222,6 +156,8 @@ function DashboardOverviewLocationDetailPanels({ detail }: { detail: LocationDet
   );
 }
 
+const OVERVIEW_PAGE_SIZE = 50;
+
 export default function DashboardOverviewPage() {
   const apiBaseUrl = useMemo(() => getApiBaseUrl(), []);
   const [preset, setPreset] = useState<Exclude<PresetKey, "custom"> | "custom">("30");
@@ -231,21 +167,83 @@ export default function DashboardOverviewPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sort, setSort] = useState<SortState>({ column: "booked", direction: "desc" });
-  const [overviewSearch, setOverviewSearch] = useState("");
+  const [overviewSearchDraft, setOverviewSearchDraft] = useState("");
+  const [debouncedOverviewQ, setDebouncedOverviewQ] = useState("");
+  const [page, setPage] = useState(1);
   const [expandedLocationId, setExpandedLocationId] = useState<string | null>(null);
   const [detailsByLoc, setDetailsByLoc] = useState<Record<string, LocationDetailResponse>>({});
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
 
+  const detailsByLocRef = useRef(detailsByLoc);
+  detailsByLocRef.current = detailsByLoc;
+
+  const prefetchDetailInFlightRef = useRef(new Set<string>());
+
   const query = useMemo(() => new URLSearchParams({ from: range.fromInclusive, to: range.toInclusive }), [range]);
 
+  const buildOverviewParams = useCallback(() => {
+    const params = new URLSearchParams(query);
+    params.set("page", String(page));
+    params.set("limit", String(OVERVIEW_PAGE_SIZE));
+    if (debouncedOverviewQ) {
+      params.set("q", debouncedOverviewQ);
+    }
+    params.set("sort", sort.column);
+    params.set("order", sort.direction);
+    return params;
+  }, [query, page, debouncedOverviewQ, sort]);
+
   const detailFetchAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedOverviewQ(overviewSearchDraft.trim()), 400);
+    return () => window.clearTimeout(t);
+  }, [overviewSearchDraft]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedOverviewQ]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [range.fromInclusive, range.toInclusive]);
+
+  const prefetchDashboardDetail = useCallback(
+    async (locationId: string, signal: AbortSignal) => {
+      if (detailsByLocRef.current[locationId] || prefetchDetailInFlightRef.current.has(locationId)) {
+        return;
+      }
+      prefetchDetailInFlightRef.current.add(locationId);
+      try {
+        const res = await fetch(
+          `${apiBaseUrl}/workspace/dashboard/locations/${encodeURIComponent(locationId)}/detail?${query}`,
+          { headers: mergeWorkspaceHeaders(), cache: "no-store", signal }
+        );
+        const payload = (await res.json().catch(() => ({}))) as LocationDetailResponse & { error?: string };
+        if (!res.ok) {
+          return;
+        }
+        setDetailsByLoc((prev) => {
+          if (prev[locationId]) {
+            return prev;
+          }
+          return { ...prev, [locationId]: payload as LocationDetailResponse };
+        });
+      } catch {
+        /* aborted / network */
+      } finally {
+        prefetchDetailInFlightRef.current.delete(locationId);
+      }
+    },
+    [apiBaseUrl, query]
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${apiBaseUrl}/workspace/dashboard/overview?${query}`, {
+      const res = await fetch(`${apiBaseUrl}/workspace/dashboard/overview?${buildOverviewParams()}`, {
         headers: mergeWorkspaceHeaders(),
         cache: "no-store"
       });
@@ -260,7 +258,7 @@ export default function DashboardOverviewPage() {
     } finally {
       setLoading(false);
     }
-  }, [apiBaseUrl, query]);
+  }, [apiBaseUrl, buildOverviewParams]);
 
   useEffect(() => {
     void load();
@@ -274,26 +272,71 @@ export default function DashboardOverviewPage() {
     detailFetchAbortRef.current = null;
   }, [range.fromInclusive, range.toInclusive]);
 
-  const rowsRaw = overview?.subaccounts ?? [];
-  const accountCount = rowsRaw.length;
-  const meanAcrossAccountsPct = useMemo(() => meanConversionAcrossAccounts(rowsRaw), [rowsRaw]);
-
-  const sortedRows = useMemo(() => [...rowsRaw].sort((a, b) => compareRows(a, b, sort.column, sort.direction)), [rowsRaw, sort]);
-
-  const overviewSearchTrimmed = overviewSearch.trim().toLowerCase();
-  const filteredSortedRows = useMemo(() => {
-    if (!overviewSearchTrimmed) {
-      return sortedRows;
+  useEffect(() => {
+    if (!overview?.subaccounts.length || loading) {
+      return;
     }
-    return sortedRows.filter((row) => {
-      const label = locationLabel(row).toLowerCase();
-      return (
-        label.includes(overviewSearchTrimmed) ||
-        row.ghlLocationId.toLowerCase().includes(overviewSearchTrimmed) ||
-        row.locationId.toLowerCase().includes(overviewSearchTrimmed)
-      );
-    });
-  }, [sortedRows, overviewSearchTrimmed]);
+    const ac = new AbortController();
+    const ids = overview.subaccounts.map((r) => r.locationId);
+    void (async () => {
+      const chunk = 3;
+      for (let i = 0; i < ids.length; i += chunk) {
+        if (ac.signal.aborted) {
+          return;
+        }
+        await Promise.all(ids.slice(i, i + chunk).map((id) => prefetchDashboardDetail(id, ac.signal)));
+      }
+    })();
+    return () => ac.abort();
+  }, [overview, loading, prefetchDashboardDetail]);
+
+  useEffect(() => {
+    if (!overview?.pagination || loading) {
+      return;
+    }
+    const ac = new AbortController();
+    const { page: curPage, totalPages } = overview.pagination;
+    const run = async () => {
+      if (curPage >= totalPages) {
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 500));
+      if (ac.signal.aborted) {
+        return;
+      }
+      const p = buildOverviewParams();
+      p.set("page", String(curPage + 1));
+      try {
+        const res = await fetch(`${apiBaseUrl}/workspace/dashboard/overview?${p}`, {
+          headers: mergeWorkspaceHeaders(),
+          cache: "no-store",
+          signal: ac.signal
+        });
+        if (!res.ok) {
+          return;
+        }
+        const data = (await res.json()) as OverviewResponse;
+        const ids = (data.subaccounts ?? []).map((r) => r.locationId);
+        const chunk = 3;
+        for (let i = 0; i < ids.length; i += chunk) {
+          if (ac.signal.aborted) {
+            return;
+          }
+          await Promise.all(ids.slice(i, i + chunk).map((id) => prefetchDashboardDetail(id, ac.signal)));
+        }
+      } catch {
+        /* aborted */
+      }
+    };
+    void run();
+    return () => ac.abort();
+  }, [overview, loading, apiBaseUrl, buildOverviewParams, prefetchDashboardDetail]);
+
+  const tableRows = overview?.subaccounts ?? [];
+  const pagination = overview?.pagination;
+  const rowOrdinalBase = pagination ? (pagination.page - 1) * pagination.pageSize : 0;
+  const accountCount = pagination?.totalSubaccounts ?? 0;
+  const meanAcrossAccountsPct = overview?.stats?.meanConversionAcrossAccountsPct ?? null;
 
   async function toggleRowDetail(locationId: string) {
     if (expandedLocationId === locationId) {
@@ -342,6 +385,7 @@ export default function DashboardOverviewPage() {
   }
 
   function toggleSort(column: SortColumn) {
+    setPage(1);
     setSort((prev) =>
       prev.column === column
         ? { column, direction: prev.direction === "asc" ? "desc" : "asc" }
@@ -396,8 +440,10 @@ export default function DashboardOverviewPage() {
               <p className="dashboard-kpi-eyebrow">Subaccounts · period</p>
               <p className="dashboard-kpi-value">{accountCount}</p>
               <p className="muted dashboard-kpi-sub">
-                Locations in this ranking · period
-                {overviewSearchTrimmed ? ` · showing ${filteredSortedRows.length}` : ""}
+                Locations matching filters · period
+                {pagination && pagination.totalPages > 1
+                  ? ` · page ${pagination.page} of ${pagination.totalPages}`
+                  : ""}
               </p>
             </div>
             <div className="panel dashboard-kpi-panel">
@@ -408,7 +454,9 @@ export default function DashboardOverviewPage() {
             <div className="panel dashboard-kpi-panel">
               <p className="dashboard-kpi-eyebrow">Avg. conversion / account</p>
               <p className="dashboard-kpi-value">{pctLabel(meanAcrossAccountsPct, 1)}</p>
-              <p className="muted dashboard-kpi-sub">Mean of each location&apos;s ratio (booked &gt; 0)</p>
+              <p className="muted dashboard-kpi-sub">
+                Mean of each visible location&apos;s ratio (booked &gt; 0), after search filter
+              </p>
             </div>
             <div className="panel dashboard-kpi-panel">
               <p className="dashboard-kpi-eyebrow">Booked appointments</p>
@@ -434,18 +482,50 @@ export default function DashboardOverviewPage() {
               autoComplete="off"
               className="appointments-filter-select"
               id="dashboard-overview-search"
-              onChange={(e) => setOverviewSearch(e.target.value)}
+              onChange={(e) => setOverviewSearchDraft(e.target.value)}
               placeholder="Name, HighLevel location id, or UUID…"
               spellCheck={false}
               style={{ display: "block", marginTop: 6, maxWidth: 440, width: "100%" }}
               type="search"
-              value={overviewSearch}
+              value={overviewSearchDraft}
             />
             <p className="muted" style={{ marginBottom: 0, marginTop: 8 }}>
-              Showing <strong>{filteredSortedRows.length}</strong> of <strong>{sortedRows.length}</strong> rows in table
-              {overviewSearchTrimmed ? ` · filter: "${overviewSearch.trim()}"` : ""}.
+              {pagination ? (
+                <>
+                  Page <strong>{pagination.page}</strong> of <strong>{pagination.totalPages}</strong> ·{" "}
+                  <strong>{tableRows.length}</strong> rows on this page · <strong>{pagination.totalSubaccounts}</strong>{" "}
+                  subaccounts match
+                  {debouncedOverviewQ ? ` · search: "${debouncedOverviewQ}"` : ""}.
+                </>
+              ) : null}
             </p>
           </div>
+          {pagination && pagination.totalPages > 1 ? (
+            <div
+              className="toolbar"
+              style={{ alignItems: "center", flexWrap: "wrap", gap: 10, marginTop: 12 }}
+            >
+              <button
+                className="button secondary"
+                disabled={pagination.page <= 1 || loading}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                type="button"
+              >
+                Previous
+              </button>
+              <span className="muted">
+                Page {pagination.page} / {pagination.totalPages}
+              </span>
+              <button
+                className="button secondary"
+                disabled={pagination.page >= pagination.totalPages || loading}
+                onClick={() => setPage((p) => p + 1)}
+                type="button"
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
           <div className="panel" style={{ marginTop: 16, overflow: "auto", padding: 0 }}>
             <table className="dashboard-table">
               <thead>
@@ -529,10 +609,10 @@ export default function DashboardOverviewPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredSortedRows.map((row, idx) => (
+                {tableRows.map((row, idx) => (
                   <Fragment key={row.locationId}>
                     <tr>
-                      <td>{idx + 1}</td>
+                      <td>{rowOrdinalBase + idx + 1}</td>
                       <td>
                         <button
                           aria-expanded={expandedLocationId === row.locationId}
@@ -571,13 +651,14 @@ export default function DashboardOverviewPage() {
                 ))}
               </tbody>
             </table>
-            {sortedRows.length === 0 ? (
+            {accountCount === 0 ? (
               <p className="empty muted" style={{ padding: 16 }}>
-                No booked appointments in this window for visible locations.
+                No booked appointments in this window for visible locations
+                {debouncedOverviewQ ? " (or no subaccounts match your search)." : "."}
               </p>
-            ) : filteredSortedRows.length === 0 ? (
+            ) : tableRows.length === 0 ? (
               <p className="empty muted" style={{ padding: 16 }}>
-                No subaccounts match your search.
+                No rows on this page.
               </p>
             ) : null}
           </div>
