@@ -420,26 +420,33 @@ export default function DashboardOverviewPage() {
               <p className="muted dashboard-kpi-sub">Invoices + paid orders · period</p>
             </div>
           </div>
-          <div style={{ marginTop: 16 }}>
-            <label className="inbox-field-label" htmlFor="dashboard-overview-search">
-              Search overview
+          <div className="appointments-filter-field" style={{ marginTop: 16 }}>
+            <label className="appointments-filter-label" htmlFor="dashboard-overview-search">
+              Filter dashboard table
             </label>
             <input
+              aria-label="Filter dashboard overview rows by name or location id"
+              autoCapitalize="off"
               autoComplete="off"
-              aria-label="Filter dashboard overview rows"
+              className="appointments-filter-select"
               id="dashboard-overview-search"
               onChange={(e) => setOverviewSearch(e.target.value)}
-              placeholder="Name, HighLevel location id, or UUID"
-              style={{ display: "block", marginBottom: 2, marginTop: 8, maxWidth: 460, padding: "8px 12px", width: "100%" }}
+              placeholder="Name, HighLevel location id, or UUID…"
+              spellCheck={false}
+              style={{ display: "block", marginTop: 6, maxWidth: 440, width: "100%" }}
               type="search"
               value={overviewSearch}
             />
+            <p className="muted" style={{ marginBottom: 0, marginTop: 8 }}>
+              Showing <strong>{filteredSortedRows.length}</strong> of <strong>{sortedRows.length}</strong> rows in table
+              {overviewSearchTrimmed ? ` · filter: "${overviewSearch.trim()}"` : ""}.
+            </p>
           </div>
           <div className="panel" style={{ marginTop: 16, overflow: "auto", padding: 0 }}>
             <table className="dashboard-table">
               <thead>
                 <tr>
-                  <th>#</th>
+                  <th scope="col">#</th>
                   <th scope="col">
                     <button
                       aria-sort={sortAria("subaccount")}
@@ -515,9 +522,6 @@ export default function DashboardOverviewPage() {
                       ) : null}
                     </button>
                   </th>
-                  <th className="dashboard-th-actions" scope="col">
-                    Detail
-                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -525,25 +529,28 @@ export default function DashboardOverviewPage() {
                   <Fragment key={row.locationId}>
                     <tr>
                       <td>{idx + 1}</td>
-                      <td>{locationLabel(row)}</td>
+                      <td>
+                        <button
+                          aria-expanded={expandedLocationId === row.locationId}
+                          aria-label={`${expandedLocationId === row.locationId ? "Collapse" : "Expand"} details for ${locationLabel(row)}`}
+                          className="dashboard-subaccount-expand"
+                          type="button"
+                          onClick={() => void toggleRowDetail(row.locationId)}
+                        >
+                          <span>{locationLabel(row)}</span>
+                          <span aria-hidden className="dashboard-subaccount-expand-caret">
+                            {expandedLocationId === row.locationId ? "\u25BC" : "\u25B6"}
+                          </span>
+                        </button>
+                      </td>
                       <td>{row.bookedAppointments}</td>
                       <td>{row.appointmentsWithCollectedPayment}</td>
                       <td>{pctLabel(row.depositsCollectedPercentage)}</td>
                       <td>{row.depositsCollectedFormatted}</td>
-                      <td className="dashboard-th-actions">
-                        <button
-                          aria-expanded={expandedLocationId === row.locationId}
-                          className="dashboard-drill-link"
-                          type="button"
-                          onClick={() => void toggleRowDetail(row.locationId)}
-                        >
-                          {expandedLocationId === row.locationId ? "Hide" : "Show"}
-                        </button>
-                      </td>
                     </tr>
                     {expandedLocationId === row.locationId ? (
                       <tr>
-                        <td colSpan={7} style={{ background: "var(--muted-bg, rgba(0, 0, 0, 0.032))", padding: "18px 20px" }}>
+                        <td colSpan={6} style={{ background: "var(--muted-bg, rgba(0, 0, 0, 0.032))", padding: "18px 20px" }}>
                           {detailLoadingId === row.locationId ? (
                             <p className="muted">Loading breakdown…</p>
                           ) : null}

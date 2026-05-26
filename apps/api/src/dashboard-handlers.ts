@@ -615,7 +615,13 @@ export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bi
       await db
         .select({
           paymentSourceId: ghlPaymentOrders.paymentSourceId,
-          displayName: sql<string>`coalesce(max(${paymentSources.displayName}), 'Unknown source')`.as("displayName"),
+          displayName: sql<string>`
+            coalesce(
+              nullif(trim(max(${paymentSources.displayName})), ''),
+              nullif(trim(max(${ghlPaymentOrders.raw}->'source'->>'name')), ''),
+              'Unknown source'
+            )
+          `.as("displayName"),
           paidOrderCount: sql<number>`cast(count(*) as int)`.as("paidOrderCount"),
           amountSum: sql<number>`coalesce(sum(cast(${ghlPaymentOrders.amount} as bigint)), 0)::bigint`.as("amountSum"),
           sampleCurrency: sql<string | null>`max(${ghlPaymentOrders.currency})`.as("sampleCurrency")

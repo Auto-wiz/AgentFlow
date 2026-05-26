@@ -1602,6 +1602,37 @@ button.appointments-row.active {
   text-align: right;
 }
 
+.dashboard-table td.dashboard-th-actions {
+  text-align: right;
+}
+
+.dashboard-subaccount-expand {
+  align-items: center;
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 600;
+  gap: 6px;
+  max-width: 100%;
+  padding: 0;
+  text-align: left;
+}
+
+.dashboard-subaccount-expand:hover {
+  text-decoration: underline;
+}
+
+.dashboard-subaccount-expand-caret {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.65;
+}
+
 .dashboard-th-sort {
   align-items: center;
   appearance: none;
