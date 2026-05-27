@@ -47,20 +47,24 @@ function looksLikeSyntheticCalendarBucketName(name: string, ghlCalendarId: strin
 /**
  * Persist the full GET /calendars catalog for this location into `location_calendars` so joins in dashboard SQL
  * resolve real calendar names (not appointment titles synced from webhooks).
+ * Runs OAuth refresh_grant when `GHL_CLIENT_ID` + `GHL_CLIENT_SECRET` are configured.
+ * @returns `"skipped_no_tokens"` if no bearer could be resolved; `"ran"` if we had tokens and attempted catalog writes.
  */
 export async function hydrateLocationCalendarCatalogFromGhlIntoDb(
   env: GhlOAuthTokenEnv,
   db: AgentFlowDb,
   internalLocationId: string,
   ghlLocationId: string | null | undefined
-): Promise<void> {
+): Promise<"skipped_no_tokens" | "ran"> {
   const trimmedGhlLoc = typeof ghlLocationId === "string" ? ghlLocationId.trim() : "";
   if (!trimmedGhlLoc) {
-    return;
+    return "skipped_no_tokens";
   }
-  const tokens = await getAccessTokensForLocation(env, db, trimmedGhlLoc);
+  const tokens = await getAccessTokensForLocation(env, db, trimmedGhlLoc, {
+    preemptiveOAuthRefresh: true
+  });
   if (tokens.length === 0) {
-    return;
+    return "skipped_no_tokens";
   }
 
   const now = new Date();
@@ -82,8 +86,9 @@ export async function hydrateLocationCalendarCatalogFromGhlIntoDb(
         })
       )
     );
-    return;
+    return "ran";
   }
+  return "ran";
 }
 
 /** Replace calendar buckets that used appointment/service titles with GHL canonical calendar names when OAuth allows. */
@@ -115,7 +120,9 @@ export async function hydrateDashboardCalendarBucketsWithGhlCanonicalNames<T ext
     return rows;
   }
 
-  const tokens = await getAccessTokensForLocation(env, db, trimmedGhlLoc);
+  const tokens = await getAccessTokensForLocation(env, db, trimmedGhlLoc, {
+    preemptiveOAuthRefresh: true
+  });
   if (tokens.length === 0) {
     return rows;
   }

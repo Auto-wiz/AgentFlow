@@ -120,7 +120,8 @@ import { fetchGhlCalendarByIdRawDebug } from "./ghl-calendar-remote.js";
 import {
   addSecondsToNow,
   getAccessTokensForLocation,
-  getCompanyOAuthInstallationForLocation
+  getCompanyOAuthInstallationForLocation,
+  refreshOAuthAccessTokensForLocation
 } from "./ghl-oauth-location-token.js";
 import { fetchSelectionLocationRows, rowsToNullableSelectionSet } from "./workspace-selection-db.js";
 import {
@@ -506,7 +507,9 @@ app.get("/admin/debug/ghl-calendar-by-id-raw", async (c) => {
       );
     }
 
-    const tokens = await getAccessTokensForLocation(c.env, db, ghlLocationId);
+    const tokens = await getAccessTokensForLocation(c.env, db, ghlLocationId, {
+      preemptiveOAuthRefresh: true
+    });
     if (tokens.length === 0) {
       return c.json({ error: "no_oauth_tokens_for_location", ghlLocationId, resolvedInternalLocationId }, 422);
     }
@@ -4186,11 +4189,10 @@ async function hydrateAppointmentCalendarCatalogsBatch(
           return { ok: 0 as const, skip: 1 as const, err: 0 as const };
         }
         try {
-          const tokens = await getAccessTokensForLocation(env, db, ghl);
-          if (tokens.length === 0) {
+          const outcome = await hydrateLocationCalendarCatalogFromGhlIntoDb(env, db, row.locationId, ghl);
+          if (outcome === "skipped_no_tokens") {
             return { ok: 0 as const, skip: 1 as const, err: 0 as const };
           }
-          await hydrateLocationCalendarCatalogFromGhlIntoDb(env, db, row.locationId, ghl);
           return { ok: 1 as const, skip: 0 as const, err: 0 as const };
         } catch (caught) {
           console.warn("[hydrateAppointmentCalendarCatalogsBatch.catalog_failed]", {
@@ -5187,150 +5189,6 @@ async function updateOpportunityWithToken(
     status: 0,
     error: lastError
   };
-}
-
-async function refreshOAuthAccessTokensForLocation(
-  env: Env,
-  db: ReturnType<typeof createDb>,
-  ghlLocationId: string
-) {
-  const clientId = env.GHL_CLIENT_ID?.trim();
-  const clientSecret = env.GHL_CLIENT_SECRET?.trim();
-  if (!clientId || !clientSecret) {
-    return 0;
-  }
-
-  const [locationWithAgency] = await db
-    .select({
-      ghlAgencyId: agencies.ghlAgencyId
-    })
-    .from(locations)
-    .innerJoin(agencies, eq(locations.agencyId, agencies.id))
-    .where(eq(locations.ghlLocationId, ghlLocationId))
-    .limit(1);
-
-  const filters = [eq(ghlOAuthInstallations.locationId, ghlLocationId)];
-  if (locationWithAgency?.ghlAgencyId) {
-    const companyFilter = and(
-      eq(ghlOAuthInstallations.companyId, locationWithAgency.ghlAgencyId),
-      eq(ghlOAuthInstallations.userType, "Company")
-    );
-    if (companyFilter) {
-      filters.push(companyFilter);
-    }
-  }
-
-  let installations = await db
-    .select({
-      id: ghlOAuthInstallations.id,
-      refreshToken: ghlOAuthInstallations.refreshToken,
-      userType: ghlOAuthInstallations.userType
-    })
-    .from(ghlOAuthInstallations)
-    .where(or(...filters))
-    .orderBy(desc(ghlOAuthInstallations.updatedAt))
-    .limit(8);
-
-  if (installations.length === 0) {
-    installations = await db
-      .select({
-        id: ghlOAuthInstallations.id,
-        refreshToken: ghlOAuthInstallations.refreshToken,
-        userType: ghlOAuthInstallations.userType
-      })
-      .from(ghlOAuthInstallations)
-      .where(eq(ghlOAuthInstallations.userType, "Company"))
-      .orderBy(desc(ghlOAuthInstallations.updatedAt))
-      .limit(8);
-  }
-
-  let refreshedCount = 0;
-  for (const installation of installations) {
-    const refreshToken = installation.refreshToken?.trim();
-    if (!refreshToken) {
-      continue;
-    }
-    const refreshed = await refreshGhlAccessTokenWithRefreshToken(env, refreshToken, installation.userType);
-    if (!refreshed) {
-      continue;
-    }
-    await db
-      .update(ghlOAuthInstallations)
-      .set({
-        accessToken: refreshed.accessToken,
-        refreshToken: refreshed.refreshToken,
-        expiresAt: addSecondsToNow(refreshed.expiresIn),
-        updatedAt: new Date()
-      })
-      .where(eq(ghlOAuthInstallations.id, installation.id));
-    refreshedCount += 1;
-  }
-
-  return refreshedCount;
-}
-
-async function refreshGhlAccessTokenWithRefreshToken(
-  env: Env,
-  refreshToken: string,
-  installationUserType: string | null
-) {
-  const clientId = env.GHL_CLIENT_ID?.trim();
-  const clientSecret = env.GHL_CLIENT_SECRET?.trim();
-  if (!clientId || !clientSecret) {
-    return null;
-  }
-
-  const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
-  const configuredUserType = normalizeOAuthUserType(
-    stringOrNull(installationUserType) ?? env.GHL_OAUTH_USER_TYPE ?? "Company"
-  );
-  const fallbackUserType = configuredUserType === "Company" ? "Location" : "Company";
-  const userTypeAttempts = [configuredUserType, fallbackUserType];
-
-  for (const userType of userTypeAttempts) {
-    const requestBody = new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      user_type: userType
-    });
-    try {
-      const response = await fetch(`${baseUrl}/oauth/token`, {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/x-www-form-urlencoded"
-        },
-        body: requestBody.toString()
-      });
-      const raw = asRecord(await response.json().catch(() => ({})));
-      if (!response.ok) {
-        continue;
-      }
-      const nextAccessToken = stringOrNull(raw.access_token ?? raw.accessToken);
-      if (!nextAccessToken) {
-        continue;
-      }
-      return {
-        accessToken: nextAccessToken,
-        refreshToken: stringOrNull(raw.refresh_token ?? raw.refreshToken) ?? refreshToken,
-        expiresIn: Number(raw.expires_in ?? raw.expiresIn ?? 86400)
-      };
-    } catch {
-      continue;
-    }
-  }
-
-  return null;
-}
-
-function normalizeOAuthUserType(value: string | null) {
-  const normalized = (value ?? "").trim().toLowerCase();
-  if (normalized === "location") {
-    return "Location";
-  }
-  return "Company";
 }
 
 function buildGhlLocationLookupRequest(env: Env, ghlLocationId: string) {
