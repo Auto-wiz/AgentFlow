@@ -512,14 +512,29 @@ app.get("/admin/debug/ghl-calendar-by-id-raw", async (c) => {
     }
 
     const probe = await fetchGhlCalendarByIdRawDebug(c.env, {
-      accessToken: tokens[0]!,
+      accessTokens: tokens,
       ghlLocationId,
       calendarId
     });
 
+    const saw401InvalidJwt =
+      probe.winningProbe === null &&
+      probe.probes.some((p) =>
+        p.attempts.some((a) => !a.ok && a.status === 401 && typeof a.rawText === "string" && a.rawText.includes("Invalid JWT"))
+      );
+
     return c.json({
       resolvedInternalLocationId,
       oauthTokenCandidates: tokens.length,
+      leadConnectorOAuthHint:
+        saw401InvalidJwt ?
+          {
+            summary:
+              "LeadConnector rejected the stored OAuth Bearer with 401 Invalid JWT — not an AgentFlow session issue.",
+            nextSteps:
+              "Reconnect Marketplace OAuth for this GHL location (Settings / integrations / AgentFlow), then retry. If persists, revoke duplicate Company/Location installs in your DB."
+          }
+        : null,
       ...probe
     });
   } catch (error) {

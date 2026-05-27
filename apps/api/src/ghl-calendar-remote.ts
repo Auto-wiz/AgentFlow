@@ -208,28 +208,42 @@ export async function fetchGhlCalendarNameLookup(
 }
 
 /**
- * Debug: raw HTTP result for GET /calendars/:id (same headers as production lookup).
+ * Raw HTTP results for GET /calendars/:id (same headers as production lookup).
+ * Tries OAuth bearer candidates in order until one returns a successful response.
  * Does not persist; for admin inspection of GHL payload shape.
  */
 export async function fetchGhlCalendarByIdRawDebug(
   env: GhlOAuthTokenEnv,
-  params: { accessToken: string; ghlLocationId: string; calendarId: string }
+  params: { accessTokens: string[]; ghlLocationId: string; calendarId: string }
 ): Promise<{
   requestUrl: string;
   calendarId: string;
   ghlLocationId: string;
-  attempts: Array<{
-    version: string;
-    status: number;
-    ok: boolean;
-    rawText: string;
-    parsedJson: unknown | null;
+  oauthCandidateCount: number;
+  probes: Array<{
+    tokenIndex: number;
+    attempts: Array<{
+      version: string;
+      status: number;
+      ok: boolean;
+      rawText: string;
+      parsedJson: unknown | null;
+    }>;
+    firstOk: {
+      version: string;
+      status: number;
+      rawText: string;
+      parsedJson: unknown | null;
+    } | null;
   }>;
-  firstOk: {
-    version: string;
-    status: number;
-    rawText: string;
-    parsedJson: unknown | null;
+  winningProbe: {
+    tokenIndex: number;
+    firstOk: {
+      version: string;
+      status: number;
+      rawText: string;
+      parsedJson: unknown | null;
+    };
   } | null;
 }> {
   const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
@@ -237,50 +251,105 @@ export async function fetchGhlCalendarByIdRawDebug(
   const calendarId = params.calendarId.trim();
   const requestUrl = `${baseUrl}/calendars/${encodeURIComponent(calendarId)}`;
 
-  const attempts: Array<{
-    version: string;
-    status: number;
-    ok: boolean;
-    rawText: string;
-    parsedJson: unknown | null;
+  const uniqueTokens = Array.from(
+    new Set(params.accessTokens.map((t) => t.trim()).filter((t) => t.length > 0))
+  );
+
+  const probes: Array<{
+    tokenIndex: number;
+    attempts: Array<{
+      version: string;
+      status: number;
+      ok: boolean;
+      rawText: string;
+      parsedJson: unknown | null;
+    }>;
+    firstOk: {
+      version: string;
+      status: number;
+      rawText: string;
+      parsedJson: unknown | null;
+    } | null;
   }> = [];
 
-  let firstOk: (typeof attempts)[number] | null = null;
+  let winningProbe: {
+    tokenIndex: number;
+    firstOk: {
+      version: string;
+      status: number;
+      rawText: string;
+      parsedJson: unknown | null;
+    };
+  } | null = null;
 
-  for (const version of LEAD_CONNECTOR_CALENDAR_VERSIONS) {
-    try {
-      const response = await fetch(requestUrl, {
-        headers: {
-          Authorization: `Bearer ${params.accessToken}`,
-          Accept: "application/json",
-          Version: version,
-          "Location-Id": ghlLocationId,
-          locationId: ghlLocationId
+  for (let tokenIndex = 0; tokenIndex < uniqueTokens.length; tokenIndex++) {
+    const accessToken = uniqueTokens[tokenIndex];
+    const attempts: Array<{
+      version: string;
+      status: number;
+      ok: boolean;
+      rawText: string;
+      parsedJson: unknown | null;
+    }> = [];
+
+    let firstOk: (typeof attempts)[number] | null = null;
+
+    for (const version of LEAD_CONNECTOR_CALENDAR_VERSIONS) {
+      try {
+        const response = await fetch(requestUrl, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: "application/json",
+            Version: version,
+            "Location-Id": ghlLocationId,
+            locationId: ghlLocationId
+          }
+        });
+        const rawText = await response.text();
+        const parsedJson = safeJsonParse(rawText);
+        const row = {
+          version,
+          status: response.status,
+          ok: response.ok,
+          rawText,
+          parsedJson
+        };
+        attempts.push(row);
+        if (response.ok && !firstOk) {
+          firstOk = row;
         }
-      });
-      const rawText = await response.text();
-      const parsedJson = safeJsonParse(rawText);
-      const row = {
-        version,
-        status: response.status,
-        ok: response.ok,
-        rawText,
-        parsedJson
-      };
-      attempts.push(row);
-      if (response.ok && !firstOk) {
-        firstOk = row;
+      } catch (caught) {
+        attempts.push({
+          version,
+          status: 0,
+          ok: false,
+          rawText: caught instanceof Error ? caught.message : String(caught),
+          parsedJson: null
+        });
       }
-    } catch (caught) {
-      attempts.push({
-        version,
-        status: 0,
-        ok: false,
-        rawText: caught instanceof Error ? caught.message : String(caught),
-        parsedJson: null
-      });
+    }
+
+    probes.push({ tokenIndex, attempts, firstOk });
+
+    if (firstOk && winningProbe === null) {
+      winningProbe = {
+        tokenIndex,
+        firstOk: {
+          version: firstOk.version,
+          status: firstOk.status,
+          rawText: firstOk.rawText,
+          parsedJson: firstOk.parsedJson
+        }
+      };
     }
   }
 
-  return { requestUrl, calendarId, ghlLocationId, attempts, firstOk };
+  return {
+    requestUrl,
+    calendarId,
+    ghlLocationId,
+    oauthCandidateCount: uniqueTokens.length,
+    probes,
+    winningProbe
+  };
 }
