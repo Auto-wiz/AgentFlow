@@ -526,11 +526,30 @@ app.get("/admin/debug/ghl-calendar-by-id-raw", async (c) => {
         p.attempts.some((a) => !a.ok && a.status === 401 && typeof a.rawText === "string" && a.rawText.includes("Invalid JWT"))
       );
 
+    const saw401ScopeDenied =
+      probe.winningProbe === null &&
+      probe.probes.some((p) =>
+        p.attempts.some(
+          (a) =>
+            !a.ok &&
+            a.status === 401 &&
+            typeof a.rawText === "string" &&
+            a.rawText.toLowerCase().includes("not authorized for this scope")
+        )
+      );
+
     return c.json({
       resolvedInternalLocationId,
       oauthTokenCandidates: tokens.length,
       leadConnectorOAuthHint:
-        saw401InvalidJwt ?
+        saw401ScopeDenied ?
+          {
+            summary:
+              "LeadConnector rejected GET /calendars with 401 — token lacks calendars.readonly scope (we only had calendars/events.readonly).",
+            nextSteps:
+              "Add calendars.readonly to Marketplace app scopes, reinstall OAuth for this location, then retry."
+          }
+        : saw401InvalidJwt ?
           {
             summary:
               "LeadConnector rejected the stored OAuth Bearer with 401 Invalid JWT — not an AgentFlow session issue.",
@@ -4189,7 +4208,9 @@ async function hydrateAppointmentCalendarCatalogsBatch(
           return { ok: 0 as const, skip: 1 as const, err: 0 as const };
         }
         try {
-          const outcome = await hydrateLocationCalendarCatalogFromGhlIntoDb(env, db, row.locationId, ghl);
+          const outcome = await hydrateLocationCalendarCatalogFromGhlIntoDb(env, db, row.locationId, ghl, {
+            preemptiveOAuthRefresh: true
+          });
           if (outcome === "skipped_no_tokens") {
             return { ok: 0 as const, skip: 1 as const, err: 0 as const };
           }

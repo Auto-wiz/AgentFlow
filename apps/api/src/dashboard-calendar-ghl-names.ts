@@ -7,6 +7,11 @@ import { fetchFullCalendarCatalogForLocation, fetchGhlCalendarNameLookup } from 
 import type { GhlOAuthTokenEnv } from "./ghl-oauth-location-token.js";
 import { getAccessTokensForLocation } from "./ghl-oauth-location-token.js";
 
+export type GhlCalendarHydrateOptions = {
+  /** When true, rotates OAuth via refresh_token before resolving Bearer candidates (admin backfill / debug). */
+  preemptiveOAuthRefresh?: boolean;
+};
+
 function lookupCalendarNameCaseInsensitive(map: Map<string, string>, calendarId: string): string | undefined {
   const t = calendarId.trim();
   if (!t || map.size === 0) {
@@ -47,22 +52,22 @@ function looksLikeSyntheticCalendarBucketName(name: string, ghlCalendarId: strin
 /**
  * Persist the full GET /calendars catalog for this location into `location_calendars` so joins in dashboard SQL
  * resolve real calendar names (not appointment titles synced from webhooks).
- * Runs OAuth refresh_grant when `GHL_CLIENT_ID` + `GHL_CLIENT_SECRET` are configured.
  * @returns `"skipped_no_tokens"` if no bearer could be resolved; `"ran"` if we had tokens and attempted catalog writes.
  */
 export async function hydrateLocationCalendarCatalogFromGhlIntoDb(
   env: GhlOAuthTokenEnv,
   db: AgentFlowDb,
   internalLocationId: string,
-  ghlLocationId: string | null | undefined
+  ghlLocationId: string | null | undefined,
+  options?: GhlCalendarHydrateOptions
 ): Promise<"skipped_no_tokens" | "ran"> {
   const trimmedGhlLoc = typeof ghlLocationId === "string" ? ghlLocationId.trim() : "";
   if (!trimmedGhlLoc) {
     return "skipped_no_tokens";
   }
-  const tokens = await getAccessTokensForLocation(env, db, trimmedGhlLoc, {
-    preemptiveOAuthRefresh: true
-  });
+  const tokenOpts =
+    options?.preemptiveOAuthRefresh === true ? { preemptiveOAuthRefresh: true as const } : undefined;
+  const tokens = await getAccessTokensForLocation(env, db, trimmedGhlLoc, tokenOpts);
   if (tokens.length === 0) {
     return "skipped_no_tokens";
   }
@@ -101,7 +106,8 @@ export async function hydrateDashboardCalendarBucketsWithGhlCanonicalNames<T ext
   db: AgentFlowDb,
   internalLocationId: string,
   ghlLocationId: string | null | undefined,
-  rows: T[]
+  rows: T[],
+  options?: GhlCalendarHydrateOptions
 ): Promise<T[]> {
   const trimmedGhlLoc = typeof ghlLocationId === "string" ? ghlLocationId.trim() : "";
   if (!trimmedGhlLoc || rows.length === 0) {
@@ -120,9 +126,9 @@ export async function hydrateDashboardCalendarBucketsWithGhlCanonicalNames<T ext
     return rows;
   }
 
-  const tokens = await getAccessTokensForLocation(env, db, trimmedGhlLoc, {
-    preemptiveOAuthRefresh: true
-  });
+  const tokenOpts =
+    options?.preemptiveOAuthRefresh === true ? { preemptiveOAuthRefresh: true as const } : undefined;
+  const tokens = await getAccessTokensForLocation(env, db, trimmedGhlLoc, tokenOpts);
   if (tokens.length === 0) {
     return rows;
   }

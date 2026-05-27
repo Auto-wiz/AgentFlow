@@ -26,14 +26,15 @@ import {
   type WorkspaceJwtEnv
 } from "./workspace-access.js";
 
-import type { GhlOAuthTokenEnv } from "./ghl-oauth-location-token.js";
+import type { GhlOAuthRefreshCredentialEnv, GhlOAuthTokenEnv } from "./ghl-oauth-location-token.js";
+import { refreshOAuthAccessTokensForLocation } from "./ghl-oauth-location-token.js";
 import {
   hydrateDashboardCalendarBucketsWithGhlCanonicalNames,
   hydrateLocationCalendarCatalogFromGhlIntoDb,
   reconcileCalendarBucketsWithStoredLocationCalendarNames
 } from "./dashboard-calendar-ghl-names.js";
 
-type Env = WorkspaceJwtEnv & GhlOAuthTokenEnv;
+type Env = WorkspaceJwtEnv & GhlOAuthRefreshCredentialEnv;
 
 /**
  * Dashboard deposit sums use the same integer storage as webhooks (`normalizeMoneyAmount` → rounded major
@@ -707,7 +708,22 @@ export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bi
   const { from, toExclusive } = bounds;
   const db = dbProbe;
 
-  await hydrateLocationCalendarCatalogFromGhlIntoDb(c.env, db, rawId, dashboardLoc.ghlLocationId);
+  const trimmedGhlLoc =
+    typeof dashboardLoc.ghlLocationId === "string" ? dashboardLoc.ghlLocationId.trim() : "";
+  if (trimmedGhlLoc) {
+    try {
+      if (c.env.GHL_CLIENT_ID?.trim() && c.env.GHL_CLIENT_SECRET?.trim()) {
+        await refreshOAuthAccessTokensForLocation(c.env, db, trimmedGhlLoc);
+      }
+      await hydrateLocationCalendarCatalogFromGhlIntoDb(c.env, db, rawId, trimmedGhlLoc);
+    } catch (ghlSidecarErr) {
+      console.warn("[dashboard.location_detail.calendar_catalog_sidecar]", {
+        locationId: rawId,
+        ghlLocationId: trimmedGhlLoc,
+        ghlSidecarErr
+      });
+    }
+  }
 
   const scope = await scopedAppointmentPredicates(db, policy);
   const bookedDuring = appointmentsBookedDuringRange(from, toExclusive);
@@ -762,13 +778,21 @@ export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bi
       };
     });
 
-  let calendarsHydrated = await hydrateDashboardCalendarBucketsWithGhlCanonicalNames(
-    c.env,
-    db,
-    rawId,
-    dashboardLoc.ghlLocationId,
-    calendars
-  );
+  let calendarsHydrated = calendars;
+  try {
+    calendarsHydrated = await hydrateDashboardCalendarBucketsWithGhlCanonicalNames(
+      c.env,
+      db,
+      rawId,
+      dashboardLoc.ghlLocationId,
+      calendars
+    );
+  } catch (ghlBucketErr) {
+    console.warn("[dashboard.location_detail.calendar_bucket_hydrate]", {
+      locationId: rawId,
+      ghlBucketErr
+    });
+  }
   calendarsHydrated = await reconcileCalendarBucketsWithStoredLocationCalendarNames(db, rawId, calendarsHydrated);
 
   const orderTs = sql`coalesce(${ghlPaymentOrders.ghlUpdatedAt}, ${ghlPaymentOrders.ghlCreatedAt}, ${ghlPaymentOrders.updatedAt}, ${ghlPaymentOrders.createdAt})`;
