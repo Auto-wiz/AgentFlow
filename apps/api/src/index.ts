@@ -31,6 +31,7 @@ import {
   ghlPaymentOrders,
   invoices,
   locations,
+  locationCalendars,
   messages,
   threads,
   userSubaccountVisibilities,
@@ -114,6 +115,7 @@ import {
   getWorkspaceDashboardLocationDetailHandler,
   getWorkspaceDashboardSubaccountSeriesHandler
 } from "./dashboard-handlers.js";
+import { hydrateLocationCalendarCatalogFromGhlIntoDb } from "./dashboard-calendar-ghl-names.js";
 import {
   addSecondsToNow,
   getAccessTokensForLocation,
@@ -374,6 +376,38 @@ app.post("/admin/locations/hydrate-missing-names", async (c) => {
         error: "hydrate_failed",
         message,
         hint: "If message mentions subrequests: batch size is capped; Worker needs [limits].subrequests in wrangler.toml (paid) or a smaller backlog. Hydrate retries are safe."
+      },
+      500
+    );
+  }
+});
+
+app.post("/admin/locations/hydrate-appointment-calendar-catalogs", async (c) => {
+  try {
+    const me = await resolveSessionUser(c, c.env);
+    if (!me || me.role !== "admin") {
+      return c.json({ error: "forbidden" }, 403);
+    }
+
+    const limitParsed = Number.parseInt(String(c.req.query("limit") ?? "12"), 10);
+    /** Locations per POST; catalog fetch is heavy — keep batches small vs Worker subrequests. */
+    const limit = Number.isFinite(limitParsed) ? Math.min(24, Math.max(1, limitParsed)) : 12;
+
+    const concParsed = Number.parseInt(String(c.req.query("concurrency") ?? "4"), 10);
+    /** Max parallel catalog syncs inside this batch (default 4, like other hydrate throttles). */
+    const concurrency = Number.isFinite(concParsed) ? Math.min(8, Math.max(1, concParsed)) : 4;
+
+    const body = await hydrateAppointmentCalendarCatalogsBatch(c.env, limit, concurrency);
+    return c.json(body);
+  } catch (error) {
+    const message = formatErrorDeep(error);
+    console.error("[admin/locations/hydrate-appointment-calendar-catalogs]", error);
+    return c.json(
+      {
+        ok: false as const,
+        error: "hydrate_failed",
+        message,
+        hint: "Reduce limit/concurrency if Workers hit subrequest limits; POST again until backlogRemaining reaches 0."
       },
       500
     );
@@ -3925,6 +3959,145 @@ async function refreshStaleLocationNamesCronBatch(env: Env, requestedLimit: numb
     renamedCount,
     unchangedNameCount,
     failedLookupCount
+  };
+}
+
+/** Appointments referencing a calendar_id with no matching `location_calendars` row yet (join for dashboard labels). */
+function whereAppointmentCalendarIdMissingCatalogRow(db: ReturnType<typeof createDb>): SQL {
+  return and(
+    sql`trim(both from coalesce(${appointments.calendarId}, '')) <> ''`,
+    sql`trim(both from coalesce(${locations.ghlLocationId}, '')) <> ''`,
+    notExists(
+      db
+        .select()
+        .from(locationCalendars)
+        .where(
+          and(
+            eq(locationCalendars.locationId, appointments.locationId),
+            sql`lower(trim(both from coalesce(${locationCalendars.ghlCalendarId}, ''))) = lower(trim(both from coalesce(${appointments.calendarId}, '')))`
+          )!
+        )
+    )
+  )!;
+}
+
+/**
+ * Backfill `location_calendars` via GHL calendar catalog for locations that already have appointments
+ * with unmatched calendar IDs. Runs at most `requestedLimit` locations per invocation; hydrates inside
+ * the batch with at most `requestedConcurrency` catalogs in parallel (default 4).
+ */
+async function hydrateAppointmentCalendarCatalogsBatch(
+  env: Env,
+  requestedLimit: number,
+  requestedConcurrency: number
+) {
+  const batchLimit = Number.isFinite(requestedLimit)
+    ? Math.min(24, Math.max(1, Math.floor(requestedLimit)))
+    : 12;
+  const concurrency = Number.isFinite(requestedConcurrency)
+    ? Math.min(8, Math.max(1, Math.floor(requestedConcurrency)))
+    : 4;
+
+  const db = createDb(env.DATABASE_URL);
+  const mismatchPredicate = whereAppointmentCalendarIdMissingCatalogRow(db);
+
+  const backlogSubq = db
+    .select({ locationId: appointments.locationId })
+    .from(appointments)
+    .innerJoin(locations, eq(appointments.locationId, locations.id))
+    .where(mismatchPredicate)
+    .groupBy(appointments.locationId)
+    .as("backlog_calendar_hydrate_locations");
+
+  const backlogPeek = await db.select({ backlog: sql<number>`count(*)::int` }).from(backlogSubq);
+
+  const backlogBefore = backlogPeek[0]?.backlog ?? 0;
+
+  const candidates = await db
+    .select({
+      locationId: appointments.locationId,
+      ghlLocationId: locations.ghlLocationId
+    })
+    .from(appointments)
+    .innerJoin(locations, eq(appointments.locationId, locations.id))
+    .where(mismatchPredicate)
+    .groupBy(appointments.locationId, locations.ghlLocationId)
+    .orderBy(asc(appointments.locationId))
+    .limit(batchLimit);
+
+  if (candidates.length === 0) {
+    return {
+      ok: true as const,
+      message: "no_locations_needing_calendar_catalog_hydrate" as const,
+      batchLimit,
+      concurrency,
+      backlogRemaining: backlogBefore,
+      catalogsAttemptedInBatch: 0,
+      catalogHydrateOk: 0,
+      skippedNoOAuth: 0,
+      catalogHydrateErrors: 0,
+      rerunHint:
+        backlogBefore <= 0
+          ? "All appointment calendar IDs appear to have matching location_calendars rows."
+          : "No rows picked in batch scope; POST again immediately (race) or verify appointment calendar_id vs location OAuth."
+    };
+  }
+
+  let catalogHydrateOk = 0;
+  let skippedNoOAuth = 0;
+  let catalogHydrateErrors = 0;
+
+  for (let offset = 0; offset < candidates.length; offset += concurrency) {
+    const slice = candidates.slice(offset, offset + concurrency);
+    const counts = await Promise.all(
+      slice.map(async (row) => {
+        const ghl = typeof row.ghlLocationId === "string" ? row.ghlLocationId.trim() : "";
+        if (!ghl) {
+          return { ok: 0 as const, skip: 1 as const, err: 0 as const };
+        }
+        try {
+          const tokens = await getAccessTokensForLocation(env, db, ghl);
+          if (tokens.length === 0) {
+            return { ok: 0 as const, skip: 1 as const, err: 0 as const };
+          }
+          await hydrateLocationCalendarCatalogFromGhlIntoDb(env, db, row.locationId, ghl);
+          return { ok: 1 as const, skip: 0 as const, err: 0 as const };
+        } catch (caught) {
+          console.warn("[hydrateAppointmentCalendarCatalogsBatch.catalog_failed]", {
+            locationId: row.locationId,
+            caught
+          });
+          return { ok: 0 as const, skip: 0 as const, err: 1 as const };
+        }
+      })
+    );
+
+    for (const c of counts) {
+      catalogHydrateOk += c.ok;
+      skippedNoOAuth += c.skip;
+      catalogHydrateErrors += c.err;
+    }
+  }
+
+  /** Conservative: assume each successful hydrate cleared that location from backlog estimate. */
+  const backlogRemaining = Math.max(0, backlogBefore - catalogHydrateOk);
+
+  return {
+    ok: true as const,
+    batchLimit,
+    concurrency,
+    candidatesQueued: candidates.length,
+    backlogBeforeDistinctLocations: backlogBefore,
+    catalogsAttemptedInBatch: candidates.length,
+    catalogHydrateOk,
+    skippedNoOAuth,
+    catalogHydrateErrors,
+    backlogRemaining,
+    backlogMeasure: "estimated_from_successful_catalog_hydrates" as const,
+    rerunHint:
+      backlogRemaining > 0 || candidates.length >= batchLimit
+        ? "POST again until backlogRemaining is 0 and candidatesQueued stays below batch limit."
+        : "Backfill pass complete for scoped backlog (per estimate)."
   };
 }
 
