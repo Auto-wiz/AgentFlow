@@ -1,6 +1,7 @@
 import type { AgentFlowDb } from "@agentflow/db";
-import { locationCalendars, paymentSources } from "@agentflow/db";
-import { sql } from "drizzle-orm";
+import { ghlPaymentOrders, locationCalendars, paymentSources } from "@agentflow/db";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 
 export type ParsedOrderPaymentSource = {
   type: string;
@@ -147,4 +148,131 @@ export async function upsertPaymentSourceFromOrder(
     throw new Error("payment source upsert failed");
   }
   return row.id;
+}
+
+/** Paid orders stored before migration 0013, or rows never re-processed, may lack `payment_source_id` while `raw.source` exists. */
+export function wherePaymentOrderRowMissingPaymentSourceLink(): SQL {
+  return and(
+    isNull(ghlPaymentOrders.paymentSourceId),
+    sql`jsonb_typeof(${ghlPaymentOrders.raw}->'source') = 'object'`
+  )!;
+}
+
+export async function linkStoredPaymentOrderToPaymentSource(
+  db: AgentFlowDb,
+  params: { orderId: string; locationId: string; raw: unknown; now?: Date }
+): Promise<"linked" | "no_source_in_raw" | "failed"> {
+  const root = asRecord(params.raw);
+  if (!root) {
+    return "no_source_in_raw";
+  }
+  const parsed = parsePaymentSourceFromOrderPayload(root);
+  if (!parsed) {
+    return "no_source_in_raw";
+  }
+  const now = params.now ?? new Date();
+  try {
+    const paymentSourceId = await upsertPaymentSourceFromOrder(db, params.locationId, parsed, now);
+    await db
+      .update(ghlPaymentOrders)
+      .set({ paymentSourceId, updatedAt: now })
+      .where(eq(ghlPaymentOrders.id, params.orderId));
+    return "linked";
+  } catch {
+    return "failed";
+  }
+}
+
+/**
+ * Backfill `payment_sources` + `ghl_payment_orders.payment_source_id` from stored order webhook JSON (`raw.source`).
+ * No outbound GHL calls — safe to run in larger batches than calendar catalog hydrate.
+ */
+export async function hydratePaymentSourcesFromStoredOrdersBatch(
+  db: AgentFlowDb,
+  requestedLimit: number,
+  requestedConcurrency: number
+) {
+  const batchLimit = Number.isFinite(requestedLimit)
+    ? Math.min(200, Math.max(1, Math.floor(requestedLimit)))
+    : 50;
+  const concurrency = Number.isFinite(requestedConcurrency)
+    ? Math.min(8, Math.max(1, Math.floor(requestedConcurrency)))
+    : 4;
+
+  const missingLink = wherePaymentOrderRowMissingPaymentSourceLink();
+
+  const [backlogPeek, candidates] = await Promise.all([
+    db.select({ backlog: sql<number>`count(*)::int` }).from(ghlPaymentOrders).where(missingLink),
+    db
+      .select({
+        orderId: ghlPaymentOrders.id,
+        locationId: ghlPaymentOrders.locationId,
+        raw: ghlPaymentOrders.raw
+      })
+      .from(ghlPaymentOrders)
+      .where(missingLink)
+      .orderBy(asc(ghlPaymentOrders.locationId), asc(ghlPaymentOrders.id))
+      .limit(batchLimit)
+  ]);
+
+  const backlogBefore = backlogPeek[0]?.backlog ?? 0;
+
+  if (candidates.length === 0) {
+    return {
+      ok: true as const,
+      message: "no_orders_needing_payment_source_link" as const,
+      batchLimit,
+      concurrency,
+      backlogRemaining: backlogBefore,
+      ordersAttemptedInBatch: 0,
+      ordersLinkedInBatch: 0,
+      ordersFailedInBatch: 0,
+      rerunHint:
+        backlogBefore <= 0
+          ? "All orders with raw.source appear linked to payment_sources."
+          : "No rows picked in batch scope; POST again immediately (race)."
+    };
+  }
+
+  let ordersLinkedInBatch = 0;
+  let ordersFailedInBatch = 0;
+
+  for (let offset = 0; offset < candidates.length; offset += concurrency) {
+    const slice = candidates.slice(offset, offset + concurrency);
+    const outcomes = await Promise.all(
+      slice.map((row) =>
+        linkStoredPaymentOrderToPaymentSource(db, {
+          orderId: row.orderId,
+          locationId: row.locationId,
+          raw: row.raw
+        })
+      )
+    );
+    for (const outcome of outcomes) {
+      if (outcome === "linked") {
+        ordersLinkedInBatch += 1;
+      } else if (outcome === "failed") {
+        ordersFailedInBatch += 1;
+      }
+    }
+  }
+
+  const backlogRemaining = Math.max(0, backlogBefore - ordersLinkedInBatch);
+
+  return {
+    ok: true as const,
+    batchLimit,
+    concurrency,
+    candidatesQueued: candidates.length,
+    backlogBeforeOrders: backlogBefore,
+    ordersAttemptedInBatch: candidates.length,
+    ordersLinkedInBatch,
+    ordersFailedInBatch,
+    backlogRemaining,
+    backlogMeasure: "estimated_from_successful_links" as const,
+    rerunHint:
+      backlogRemaining > 0 || candidates.length >= batchLimit
+        ? "POST again until backlogRemaining is 0 and candidatesQueued stays below batch limit."
+        : "Backfill pass complete for scoped backlog (per estimate)."
+  };
 }

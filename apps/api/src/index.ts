@@ -106,6 +106,7 @@ import {
 import { putWorkspaceAppointmentOverridesHandler } from "./appointment-overrides-handler.js";
 import {
   deriveAppointmentCalendarDisplayName,
+  hydratePaymentSourcesFromStoredOrdersBatch,
   parsePaymentSourceFromOrderPayload,
   upsertLocationCalendarRow,
   upsertPaymentSourceFromOrder
@@ -413,6 +414,29 @@ app.post("/admin/locations/hydrate-appointment-calendar-catalogs", async (c) => 
       },
       500
     );
+  }
+});
+
+app.post("/admin/locations/hydrate-payment-sources-from-orders", async (c) => {
+  try {
+    const me = await resolveSessionUser(c, c.env);
+    if (!me || me.role !== "admin") {
+      return c.json({ error: "forbidden" }, 403);
+    }
+
+    const limitParsed = Number.parseInt(String(c.req.query("limit") ?? "50"), 10);
+    const limit = Number.isFinite(limitParsed) ? Math.min(200, Math.max(1, limitParsed)) : 50;
+
+    const concParsed = Number.parseInt(String(c.req.query("concurrency") ?? "4"), 10);
+    const concurrency = Number.isFinite(concParsed) ? Math.min(8, Math.max(1, concParsed)) : 4;
+
+    const db = createDb(c.env.DATABASE_URL);
+    const body = await hydratePaymentSourcesFromStoredOrdersBatch(db, limit, concurrency);
+    return c.json(body);
+  } catch (error) {
+    const message = formatErrorDeep(error);
+    console.error("[admin/locations/hydrate-payment-sources-from-orders]", error);
+    return c.json({ ok: false as const, error: "hydrate_failed", message }, 500);
   }
 });
 
