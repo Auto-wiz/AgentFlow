@@ -26,15 +26,25 @@ import {
   type WorkspaceJwtEnv
 } from "./workspace-access.js";
 
-import type { GhlOAuthRefreshCredentialEnv, GhlOAuthTokenEnv } from "./ghl-oauth-location-token.js";
-import { refreshOAuthAccessTokensForLocation } from "./ghl-oauth-location-token.js";
+import type { GhlOAuthTokenEnv } from "./ghl-oauth-location-token.js";
 import {
-  hydrateDashboardCalendarBucketsWithGhlCanonicalNames,
-  hydrateLocationCalendarCatalogFromGhlIntoDb,
   reconcileCalendarBucketsWithStoredLocationCalendarNames
 } from "./dashboard-calendar-ghl-names.js";
 
-type Env = WorkspaceJwtEnv & GhlOAuthRefreshCredentialEnv;
+type Env = WorkspaceJwtEnv & GhlOAuthTokenEnv;
+
+function formatDashboardHandlerError(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  const parts: string[] = [error.message];
+  let cursor: unknown = error.cause;
+  for (let i = 0; i < 4 && cursor instanceof Error; i++) {
+    parts.push(`cause: ${cursor.message}`);
+    cursor = cursor.cause;
+  }
+  return parts.join(" | ");
+}
 
 /**
  * Dashboard deposit sums use the same integer storage as webhooks (`normalizeMoneyAmount` → rounded major
@@ -669,6 +679,7 @@ export async function getWorkspaceDashboardSubaccountSeriesHandler(c: Context<{ 
  * Drill-down for a location: calendars booked-in-window breakdown and paid-order deposits grouped by webhook `source`.
  */
 export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bindings: Env }>) {
+  try {
   const policy = await resolveAccessPolicy(c, c.env);
   if (!policy) {
     return c.json({ error: "unauthorized" }, 401);
@@ -707,23 +718,6 @@ export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bi
   }
   const { from, toExclusive } = bounds;
   const db = dbProbe;
-
-  const trimmedGhlLoc =
-    typeof dashboardLoc.ghlLocationId === "string" ? dashboardLoc.ghlLocationId.trim() : "";
-  if (trimmedGhlLoc) {
-    try {
-      if (c.env.GHL_CLIENT_ID?.trim() && c.env.GHL_CLIENT_SECRET?.trim()) {
-        await refreshOAuthAccessTokensForLocation(c.env, db, trimmedGhlLoc);
-      }
-      await hydrateLocationCalendarCatalogFromGhlIntoDb(c.env, db, rawId, trimmedGhlLoc);
-    } catch (ghlSidecarErr) {
-      console.warn("[dashboard.location_detail.calendar_catalog_sidecar]", {
-        locationId: rawId,
-        ghlLocationId: trimmedGhlLoc,
-        ghlSidecarErr
-      });
-    }
-  }
 
   const scope = await scopedAppointmentPredicates(db, policy);
   const bookedDuring = appointmentsBookedDuringRange(from, toExclusive);
@@ -779,20 +773,6 @@ export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bi
     });
 
   let calendarsHydrated = calendars;
-  try {
-    calendarsHydrated = await hydrateDashboardCalendarBucketsWithGhlCanonicalNames(
-      c.env,
-      db,
-      rawId,
-      dashboardLoc.ghlLocationId,
-      calendars
-    );
-  } catch (ghlBucketErr) {
-    console.warn("[dashboard.location_detail.calendar_bucket_hydrate]", {
-      locationId: rawId,
-      ghlBucketErr
-    });
-  }
   calendarsHydrated = await reconcileCalendarBucketsWithStoredLocationCalendarNames(db, rawId, calendarsHydrated);
 
   const orderTs = sql`coalesce(${ghlPaymentOrders.ghlUpdatedAt}, ${ghlPaymentOrders.ghlCreatedAt}, ${ghlPaymentOrders.updatedAt}, ${ghlPaymentOrders.createdAt})`;
@@ -863,4 +843,14 @@ export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bi
       invoiceAgg?.sampleCurrency ?? null
     )
   });
+  } catch (error) {
+    console.error("[dashboard.location_detail]", { locationId: c.req.param("locationId"), error });
+    return c.json(
+      {
+        error: "detail_failed",
+        message: formatDashboardHandlerError(error)
+      },
+      500
+    );
+  }
 }
