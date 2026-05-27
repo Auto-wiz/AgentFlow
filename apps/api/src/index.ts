@@ -116,6 +116,7 @@ import {
   getWorkspaceDashboardSubaccountSeriesHandler
 } from "./dashboard-handlers.js";
 import { hydrateLocationCalendarCatalogFromGhlIntoDb } from "./dashboard-calendar-ghl-names.js";
+import { fetchGhlCalendarByIdRawDebug } from "./ghl-calendar-remote.js";
 import {
   addSecondsToNow,
   getAccessTokensForLocation,
@@ -411,6 +412,120 @@ app.post("/admin/locations/hydrate-appointment-calendar-catalogs", async (c) => 
       },
       500
     );
+  }
+});
+
+/**
+ * Raw GET /calendars/:calendarId probe (LeadConnector); admin only.
+ * Optionally resolve internal location via `locationId`, `ghlLocationId`, or by scanning `appointments.calendar_id`.
+ */
+app.get("/admin/debug/ghl-calendar-by-id-raw", async (c) => {
+  try {
+    const me = await resolveSessionUser(c, c.env);
+    if (!me || me.role !== "admin") {
+      return c.json({ error: "forbidden" }, 403);
+    }
+
+    const calendarId = String(c.req.query("calendarId") ?? "").trim();
+    if (!calendarId) {
+      return c.json(
+        {
+          error: "calendar_id_required",
+          hint: "Query calendarId=. Optional: locationId=<uuid>|ghlLocationId=. If both omitted we infer locationId from appointments with this calendar id."
+        },
+        400
+      );
+    }
+
+    let ghlLocationId = String(c.req.query("ghlLocationId") ?? "").trim();
+    let resolvedInternalLocationId: string | null = String(c.req.query("locationId") ?? "").trim() || null;
+
+    const db = createDb(c.env.DATABASE_URL);
+
+    if (!resolvedInternalLocationId && !ghlLocationId) {
+      const locRows = await db
+        .select({ locationId: appointments.locationId })
+        .from(appointments)
+        .where(
+          sql`lower(trim(both from coalesce(${appointments.calendarId}, ''))) = ${calendarId.trim().toLowerCase()}`
+        )
+        .groupBy(appointments.locationId)
+        .limit(8);
+
+      const distinctIds = locRows.map((r) => r.locationId).filter(Boolean);
+      if (distinctIds.length === 0) {
+        return c.json(
+          {
+            error: "calendar_id_not_seen_on_appointments",
+            hint: "Pass locationId=<internal uuid> or ghlLocationId= so we can still call LeadConnector.",
+            calendarId
+          },
+          404
+        );
+      }
+      if (distinctIds.length > 1) {
+        return c.json(
+          {
+            error: "ambiguous_calendar_id_across_locations",
+            hint: "Pass locationId= or ghlLocationId= to choose one subaccount.",
+            calendarId,
+            candidateLocationIds: distinctIds
+          },
+          409
+        );
+      }
+      resolvedInternalLocationId = distinctIds[0] ?? null;
+    }
+
+    if (!ghlLocationId && resolvedInternalLocationId) {
+      if (!isUuid(resolvedInternalLocationId)) {
+        return c.json({ error: "invalid_location_uuid" }, 400);
+      }
+      const [row] = await db
+        .select({ ghlLocationId: locations.ghlLocationId })
+        .from(locations)
+        .where(eq(locations.id, resolvedInternalLocationId))
+        .limit(1);
+      const ghl = typeof row?.ghlLocationId === "string" ? row.ghlLocationId.trim() : "";
+      if (!ghl) {
+        return c.json(
+          { error: "location_missing_ghl_location_id", resolvedInternalLocationId },
+          404
+        );
+      }
+      ghlLocationId = ghl;
+    }
+
+    if (!ghlLocationId) {
+      return c.json(
+        {
+          error: "ghl_location_unresolved",
+          hint: "Pass ghlLocationId= or locationId= (uuid), or ensure appointments exist with this calendarId."
+        },
+        400
+      );
+    }
+
+    const tokens = await getAccessTokensForLocation(c.env, db, ghlLocationId);
+    if (tokens.length === 0) {
+      return c.json({ error: "no_oauth_tokens_for_location", ghlLocationId, resolvedInternalLocationId }, 422);
+    }
+
+    const probe = await fetchGhlCalendarByIdRawDebug(c.env, {
+      accessToken: tokens[0]!,
+      ghlLocationId,
+      calendarId
+    });
+
+    return c.json({
+      resolvedInternalLocationId,
+      oauthTokenCandidates: tokens.length,
+      ...probe
+    });
+  } catch (error) {
+    const message = formatErrorDeep(error);
+    console.error("[admin/debug/ghl-calendar-by-id-raw]", error);
+    return c.json({ ok: false as const, error: "probe_failed", message }, 500);
   }
 });
 

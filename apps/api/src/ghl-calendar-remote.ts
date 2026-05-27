@@ -206,3 +206,81 @@ export async function fetchGhlCalendarNameLookup(
 
   return out;
 }
+
+/**
+ * Debug: raw HTTP result for GET /calendars/:id (same headers as production lookup).
+ * Does not persist; for admin inspection of GHL payload shape.
+ */
+export async function fetchGhlCalendarByIdRawDebug(
+  env: GhlOAuthTokenEnv,
+  params: { accessToken: string; ghlLocationId: string; calendarId: string }
+): Promise<{
+  requestUrl: string;
+  calendarId: string;
+  ghlLocationId: string;
+  attempts: Array<{
+    version: string;
+    status: number;
+    ok: boolean;
+    rawText: string;
+    parsedJson: unknown | null;
+  }>;
+  firstOk: {
+    version: string;
+    status: number;
+    rawText: string;
+    parsedJson: unknown | null;
+  } | null;
+}> {
+  const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
+  const ghlLocationId = params.ghlLocationId.trim();
+  const calendarId = params.calendarId.trim();
+  const requestUrl = `${baseUrl}/calendars/${encodeURIComponent(calendarId)}`;
+
+  const attempts: Array<{
+    version: string;
+    status: number;
+    ok: boolean;
+    rawText: string;
+    parsedJson: unknown | null;
+  }> = [];
+
+  let firstOk: (typeof attempts)[number] | null = null;
+
+  for (const version of LEAD_CONNECTOR_CALENDAR_VERSIONS) {
+    try {
+      const response = await fetch(requestUrl, {
+        headers: {
+          Authorization: `Bearer ${params.accessToken}`,
+          Accept: "application/json",
+          Version: version,
+          "Location-Id": ghlLocationId,
+          locationId: ghlLocationId
+        }
+      });
+      const rawText = await response.text();
+      const parsedJson = safeJsonParse(rawText);
+      const row = {
+        version,
+        status: response.status,
+        ok: response.ok,
+        rawText,
+        parsedJson
+      };
+      attempts.push(row);
+      if (response.ok && !firstOk) {
+        firstOk = row;
+      }
+    } catch (caught) {
+      attempts.push({
+        version,
+        status: 0,
+        ok: false,
+        rawText: caught instanceof Error ? caught.message : String(caught),
+        parsedJson: null
+      });
+    }
+  }
+
+  return { requestUrl, calendarId, ghlLocationId, attempts, firstOk };
+}
