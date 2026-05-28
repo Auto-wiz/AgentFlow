@@ -81,6 +81,20 @@ function DashboardOverviewLocationDetailPanels({ detail }: { detail: LocationDet
   const hasInvoice =
     Number.isFinite(detail.invoiceDepositsCollectedAmount) &&
     Number(detail.invoiceDepositsCollectedAmount ?? 0) > 0;
+
+  const totalCalendarBooked = detail.calendars.reduce((sum, c) => sum + Number(c.bookedCount ?? 0), 0);
+  const totalPaidOrderAmount = detail.orderPaymentsBySource.reduce(
+    (sum, p) => sum + Number(p.depositsCollectedAmount ?? 0),
+    0
+  );
+
+  function shareOfTotalPct(part: number, total: number): string {
+    if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0) {
+      return "—";
+    }
+    return pctLabel((part / total) * 100);
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div>
@@ -98,6 +112,9 @@ function DashboardOverviewLocationDetailPanels({ detail }: { detail: LocationDet
                   <th className="dashboard-th-actions" scope="col">
                     Booked
                   </th>
+                  <th className="dashboard-th-actions" scope="col">
+                    %
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -105,6 +122,9 @@ function DashboardOverviewLocationDetailPanels({ detail }: { detail: LocationDet
                   <tr key={c.ghlCalendarId ?? `cal-${i}`}>
                     <td>{c.name}</td>
                     <td className="dashboard-th-actions">{c.bookedCount}</td>
+                    <td className="dashboard-th-actions">
+                      {shareOfTotalPct(Number(c.bookedCount ?? 0), totalCalendarBooked)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -130,6 +150,9 @@ function DashboardOverviewLocationDetailPanels({ detail }: { detail: LocationDet
                   <th className="dashboard-th-actions" scope="col">
                     Amount
                   </th>
+                  <th className="dashboard-th-actions" scope="col">
+                    %
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -138,6 +161,9 @@ function DashboardOverviewLocationDetailPanels({ detail }: { detail: LocationDet
                     <td>{p.displayName}</td>
                     <td className="dashboard-th-actions">{p.paidOrderCount}</td>
                     <td className="dashboard-th-actions">{p.depositsCollectedFormatted}</td>
+                    <td className="dashboard-th-actions">
+                      {shareOfTotalPct(Number(p.depositsCollectedAmount ?? 0), totalPaidOrderAmount)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
