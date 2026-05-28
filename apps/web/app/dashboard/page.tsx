@@ -92,7 +92,12 @@ function DashboardOverviewLocationDetailPanels({ detail }: { detail: LocationDet
     if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0) {
       return "—";
     }
-    return pctLabel((part / total) * 100);
+    const pct = (part / total) * 100;
+    const formatted = pct.toLocaleString(undefined, {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 0
+    });
+    return `${formatted}%`;
   }
 
   return (
