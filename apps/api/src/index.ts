@@ -105,6 +105,13 @@ import {
 } from "./appointment-payment-sql.js";
 import { putWorkspaceAppointmentOverridesHandler } from "./appointment-overrides-handler.js";
 import {
+  getAdminClientChargeLocationsHandler,
+  getWorkspaceClientChargesHandler,
+  patchAdminClientChargeLocationHandler,
+  postWorkspaceClientChargeHandler,
+  postWorkspaceClientChargeRetryHandler
+} from "./client-charges-handlers.js";
+import {
   deriveAppointmentCalendarDisplayName,
   hydratePaymentSourcesFromStoredOrdersBatch,
   parsePaymentSourceFromOrderPayload,
@@ -155,6 +162,8 @@ type Env = {
   GHL_CLIENT_ID?: string;
   GHL_CLIENT_SECRET?: string;
   GHL_APP_ID?: string;
+  GHL_CLIENT_CHARGE_METER_ID?: string;
+  GHL_CLIENT_CHARGE_ENDPOINT?: string;
   GHL_INSTALL_URL?: string;
   /**
    * Full "Installation URL" from Developer Portal → your app → Advanced Settings → Auth (Show install link).
@@ -678,6 +687,12 @@ app.get("/admin/workspace-audit-logs", async (c) => {
 });
 
 app.put("/workspace/appointments/:id/overrides", putWorkspaceAppointmentOverridesHandler);
+
+app.get("/workspace/client-charges", getWorkspaceClientChargesHandler);
+app.post("/workspace/client-charges/:appointmentId/charge", postWorkspaceClientChargeHandler);
+app.post("/workspace/client-charges/:appointmentId/retry", postWorkspaceClientChargeRetryHandler);
+app.get("/admin/client-charges/locations", getAdminClientChargeLocationsHandler);
+app.patch("/admin/client-charges/locations/:locationId", patchAdminClientChargeLocationHandler);
 
 app.get("/workspace/dashboard/overview", getWorkspaceDashboardOverviewHandler);
 app.get("/workspace/dashboard/locations/:locationId/detail", getWorkspaceDashboardLocationDetailHandler);
