@@ -107,6 +107,7 @@ import { putWorkspaceAppointmentOverridesHandler } from "./appointment-overrides
 import {
   getAdminClientChargeLocationsHandler,
   getWorkspaceClientChargesHandler,
+  getWorkspaceClientChargesOverviewHandler,
   patchAdminClientChargeLocationHandler,
   postWorkspaceClientChargeHandler,
   postWorkspaceClientChargeRetryHandler
@@ -688,6 +689,7 @@ app.get("/admin/workspace-audit-logs", async (c) => {
 
 app.put("/workspace/appointments/:id/overrides", putWorkspaceAppointmentOverridesHandler);
 
+app.get("/workspace/client-charges/overview", getWorkspaceClientChargesOverviewHandler);
 app.get("/workspace/client-charges", getWorkspaceClientChargesHandler);
 app.post("/workspace/client-charges/:appointmentId/charge", postWorkspaceClientChargeHandler);
 app.post("/workspace/client-charges/:appointmentId/retry", postWorkspaceClientChargeRetryHandler);

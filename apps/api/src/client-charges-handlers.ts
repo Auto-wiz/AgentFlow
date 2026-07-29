@@ -19,6 +19,7 @@ import {
 import {
   getClientChargeCandidateByAppointment,
   listClientChargeCandidates,
+  listClientChargeOverview,
   type ClientChargeCandidate
 } from "./client-charges-sql.js";
 import { resolveDashboardBounds } from "./dashboard-handlers.js";
@@ -71,6 +72,62 @@ async function policyLocationScope(c: Context<Bindings>) {
   };
 }
 
+function parseClientChargeOverviewSort(
+  raw: string | undefined
+): "subaccount" | "unbilled" | "charged" | "eligible" {
+  const v = (raw ?? "").trim().toLowerCase();
+  if (v === "subaccount") return "subaccount";
+  if (v === "charged") return "charged";
+  if (v === "eligible") return "eligible";
+  return "unbilled";
+}
+
+function parseClientChargeStatus(raw: string | undefined) {
+  const statusRaw = (raw ?? "all").trim().toLowerCase();
+  return statusRaw === "unbilled" ||
+    statusRaw === "pending" ||
+    statusRaw === "succeeded" ||
+    statusRaw === "failed"
+    ? statusRaw
+    : "all";
+}
+
+export async function getWorkspaceClientChargesOverviewHandler(c: Context<Bindings>) {
+  try {
+    const scoped = await policyLocationScope(c);
+    if (!scoped) return c.json({ error: "unauthorized" }, 401);
+    const bounds = resolveDashboardBounds(c.req.query("from"), c.req.query("to"));
+    if ("error" in bounds) return c.json({ error: bounds.error }, 400);
+
+    const pageRaw = Number.parseInt(c.req.query("page") ?? "1", 10);
+    const limitRaw = Number.parseInt(c.req.query("limit") ?? "50", 10);
+    const sortColumn = parseClientChargeOverviewSort(c.req.query("sort"));
+    const sortDirection = c.req.query("order")?.trim().toLowerCase() === "asc" ? "asc" : "desc";
+
+    const result = await listClientChargeOverview(scoped.db, {
+      from: bounds.from,
+      toExclusive: bounds.toExclusive,
+      allowedLocationIds: scoped.allowedLocationIds,
+      hiddenLocationIds: scoped.hiddenLocationIds,
+      query: c.req.query("q") ?? "",
+      page: Number.isFinite(pageRaw) ? pageRaw : 1,
+      pageSize: Number.isFinite(limitRaw) ? limitRaw : 50,
+      sortColumn,
+      sortDirection
+    });
+
+    c.header("Cache-Control", "private, no-store, max-age=0");
+    return c.json({
+      fromInclusive: bounds.from.toISOString(),
+      toExclusive: bounds.toExclusive.toISOString(),
+      ...result
+    });
+  } catch (error) {
+    console.error("[client_charges.overview]", error);
+    return c.json({ error: "client_charges_overview_failed", message: deepError(error) }, 500);
+  }
+}
+
 export async function getWorkspaceClientChargesHandler(c: Context<Bindings>) {
   try {
     const scoped = await policyLocationScope(c);
@@ -80,20 +137,19 @@ export async function getWorkspaceClientChargesHandler(c: Context<Bindings>) {
 
     const pageRaw = Number.parseInt(c.req.query("page") ?? "1", 10);
     const limitRaw = Number.parseInt(c.req.query("limit") ?? "50", 10);
-    const statusRaw = (c.req.query("status") ?? "all").trim().toLowerCase();
-    const status =
-      statusRaw === "unbilled" ||
-      statusRaw === "pending" ||
-      statusRaw === "succeeded" ||
-      statusRaw === "failed"
-        ? statusRaw
-        : "all";
+    const status = parseClientChargeStatus(c.req.query("status"));
+    const locationIdRaw = (c.req.query("locationId") ?? "").trim();
+    const locationId = locationIdRaw ? locationIdRaw : undefined;
+    if (locationId && !isUuid(locationId)) {
+      return c.json({ error: "invalid_location_id" }, 400);
+    }
 
     const result = await listClientChargeCandidates(scoped.db, {
       from: bounds.from,
       toExclusive: bounds.toExclusive,
       allowedLocationIds: scoped.allowedLocationIds,
       hiddenLocationIds: scoped.hiddenLocationIds,
+      locationId,
       query: c.req.query("q") ?? "",
       status,
       page: Number.isFinite(pageRaw) ? pageRaw : 1,

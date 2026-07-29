@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getApiBaseUrl } from "../../../lib/api-base-url";
 import { formatLocationName } from "../../../lib/location-display";
@@ -15,6 +15,7 @@ import { DashboardSubnav } from "../dashboard-subnav";
 
 type PresetKey = "7" | "30" | "90" | "custom";
 type StatusFilter = "all" | "unbilled" | "pending" | "succeeded" | "failed";
+type OverviewSortColumn = "subaccount" | "unbilled" | "charged" | "eligible";
 
 type CanonicalDeposit = {
   kind: "payment_order" | "invoice";
@@ -82,6 +83,35 @@ type ClientChargesResponse = {
   };
 };
 
+type ClientChargeOverviewRow = {
+  locationId: string;
+  ghlLocationId: string;
+  locationName: string | null;
+  eligibleCount: number;
+  unbilledCount: number;
+  unbilledAmount: number;
+  chargedCount: number;
+  chargedAmount: number;
+  pendingCount: number;
+  failedCount: number;
+  currency: string | null;
+  mixedCurrencies: boolean;
+};
+
+type ClientChargesOverviewResponse = {
+  fromInclusive: string;
+  toExclusive: string;
+  subaccounts: ClientChargeOverviewRow[];
+  totals: ClientChargesTotals;
+  pagination: {
+    page: number;
+    pageSize: number;
+    totalSubaccounts: number;
+    totalPages: number;
+    query?: string;
+  };
+};
+
 type BillingLocationConfig = {
   locationId: string;
   ghlLocationId: string;
@@ -91,6 +121,14 @@ type BillingLocationConfig = {
   meterId: string | null;
   updatedAt: string | null;
 };
+
+type OverviewSortState = {
+  column: OverviewSortColumn;
+  direction: "asc" | "desc";
+};
+
+const OVERVIEW_PAGE_SIZE = 50;
+const DETAIL_PAGE_SIZE = 50;
 
 function formatMoney(amount: number, currency: string | null | undefined) {
   if (!Number.isFinite(amount)) return "—";
@@ -159,6 +197,292 @@ function canRetry(row: ClientChargeRow, isAdmin: boolean) {
   return row.charge.status.toLowerCase() === "failed";
 }
 
+function locationLabel(row: Pick<ClientChargeOverviewRow, "locationName" | "ghlLocationId">) {
+  return formatLocationName(row.locationName, row.ghlLocationId);
+}
+
+function ClientChargesLocationDetail({
+  apiBaseUrl,
+  locationId,
+  range,
+  isAdmin,
+  busyAppointmentId,
+  onRequestCharge
+}: {
+  apiBaseUrl: string;
+  locationId: string;
+  range: DateRangeStrings;
+  isAdmin: boolean;
+  busyAppointmentId: string | null;
+  onRequestCharge: (row: ClientChargeRow, mode: "charge" | "retry") => void;
+}) {
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [searchDraft, setSearchDraft] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<ClientChargesResponse | null>(null);
+  const reloadTokenRef = useRef(0);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setDebouncedQ(searchDraft.trim());
+      setPage(1);
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [searchDraft]);
+
+  const loadDetail = useCallback(async () => {
+    const token = ++reloadTokenRef.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        from: range.fromInclusive.slice(0, 10),
+        to: range.toInclusive.slice(0, 10),
+        locationId,
+        page: String(page),
+        limit: String(DETAIL_PAGE_SIZE),
+        status: statusFilter
+      });
+      if (debouncedQ) params.set("q", debouncedQ);
+      const res = await fetch(`${apiBaseUrl}/workspace/client-charges?${params}`, {
+        cache: "no-store",
+        headers: mergeWorkspaceHeaders()
+      });
+      const payload = (await res.json().catch(() => ({}))) as ClientChargesResponse & {
+        error?: string;
+        message?: string;
+      };
+      if (token !== reloadTokenRef.current) return;
+      if (!res.ok) {
+        throw new Error(payload.message ?? payload.error ?? "Unable to load appointments");
+      }
+      setData(payload);
+    } catch (caught) {
+      if (token !== reloadTokenRef.current) return;
+      setData(null);
+      setError(caught instanceof Error ? caught.message : "Unable to load appointments");
+    } finally {
+      if (token === reloadTokenRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [apiBaseUrl, debouncedQ, locationId, page, range.fromInclusive, range.toInclusive, statusFilter]);
+
+  useEffect(() => {
+    void loadDetail();
+  }, [loadDetail]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ locationId?: string }>).detail;
+      if (!detail?.locationId || detail.locationId === locationId) {
+        void loadDetail();
+      }
+    };
+    window.addEventListener("client-charges:refresh-detail", handler);
+    return () => window.removeEventListener("client-charges:refresh-detail", handler);
+  }, [loadDetail, locationId]);
+
+  const rows = data?.rows ?? [];
+  const pagination = data?.pagination;
+
+  return (
+    <div>
+      <div
+        className="appointments-filter-field"
+        style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 12, alignItems: "flex-end" }}
+      >
+        <div style={{ flex: "1 1 200px", maxWidth: 360 }}>
+          <label className="appointments-filter-label" htmlFor={`client-charges-detail-search-${locationId}`}>
+            Search appointments
+          </label>
+          <input
+            aria-label="Filter appointments by contact or title"
+            autoCapitalize="off"
+            autoComplete="off"
+            className="appointments-filter-select"
+            id={`client-charges-detail-search-${locationId}`}
+            onChange={(e) => setSearchDraft(e.target.value)}
+            placeholder="Contact, appointment…"
+            spellCheck={false}
+            style={{ display: "block", marginTop: 6, width: "100%" }}
+            type="search"
+            value={searchDraft}
+          />
+        </div>
+        <div>
+          <label className="appointments-filter-label" htmlFor={`client-charges-detail-status-${locationId}`}>
+            Status
+          </label>
+          <select
+            className="appointments-filter-select"
+            id={`client-charges-detail-status-${locationId}`}
+            onChange={(e) => {
+              setStatusFilter(e.target.value as StatusFilter);
+              setPage(1);
+            }}
+            style={{ display: "block", marginTop: 6 }}
+            value={statusFilter}
+          >
+            <option value="all">All</option>
+            <option value="unbilled">Unbilled</option>
+            <option value="pending">Pending</option>
+            <option value="succeeded">Charged</option>
+            <option value="failed">Failed</option>
+          </select>
+        </div>
+      </div>
+
+      {loading ? <p className="muted">Loading appointments…</p> : null}
+      {error ? <p className="empty">{error}</p> : null}
+
+      {!loading && data ? (
+        <>
+          {pagination ? (
+            <p className="muted" style={{ marginBottom: 8, marginTop: 0 }}>
+              <strong>{pagination.totalRows}</strong> appointment{pagination.totalRows === 1 ? "" : "s"}
+              {statusFilter !== "all" ? ` · status “${statusFilter}”` : ""}
+              {debouncedQ ? ` · search: "${debouncedQ}"` : ""}.
+            </p>
+          ) : null}
+          <div className="dashboard-overview-detail-metrics-scroll">
+            <table className="dashboard-table dashboard-table-nested-compact">
+              <thead>
+                <tr>
+                  <th scope="col">Appointment / contact</th>
+                  <th scope="col">Deposit source</th>
+                  <th className="dashboard-th-actions" scope="col">
+                    Deposit (charge amount)
+                  </th>
+                  <th scope="col">Charge status</th>
+                  {isAdmin ? (
+                    <th className="dashboard-th-actions" scope="col">
+                      Action
+                    </th>
+                  ) : null}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={isAdmin ? 5 : 4}>
+                      <p className="muted" style={{ margin: "8px 0" }}>
+                        No billable results in this period
+                        {statusFilter !== "all" ? ` for status “${statusFilter}”` : ""}.
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                  rows.map((row) => {
+                    const status = chargeStatusLabel(row);
+                    const busy = busyAppointmentId === row.appointmentId;
+                    const pending = row.charge?.status.toLowerCase() === "pending";
+                    const succeeded = row.charge?.status.toLowerCase() === "succeeded";
+                    return (
+                      <tr key={row.appointmentId}>
+                        <td>
+                          <div>{row.appointmentTitle?.trim() || row.ghlAppointmentId}</div>
+                          <div className="muted">
+                            {row.contactName?.trim() || row.contactEmail?.trim() || "No contact"}
+                            {row.appointmentStartTime
+                              ? ` · ${formatWhen(row.appointmentStartTime)}`
+                              : ` · booked ${formatWhen(row.appointmentBookedAt)}`}
+                          </div>
+                        </td>
+                        <td>
+                          <div>{depositSourceLabel(row.deposit)}</div>
+                          <div className="muted">{row.deposit.externalId}</div>
+                        </td>
+                        <td className="dashboard-th-actions">
+                          <strong>
+                            {formatMoney(depositChargeAmount(row), depositChargeCurrency(row))}
+                          </strong>
+                        </td>
+                        <td>
+                          <div>{status}</div>
+                          {row.charge?.ghlReferenceId ? (
+                            <div className="muted">Ref {row.charge.ghlReferenceId}</div>
+                          ) : null}
+                          {row.charge?.succeededAt ? (
+                            <div className="muted">{formatWhen(row.charge.succeededAt)}</div>
+                          ) : null}
+                          {row.charge?.lastError ? (
+                            <div className="empty" style={{ marginTop: 4, fontSize: "0.85em" }}>
+                              {row.charge.lastError}
+                            </div>
+                          ) : null}
+                          {pending ? (
+                            <div className="muted" style={{ marginTop: 4 }}>
+                              Ambiguous / in flight — do not retry until reconciled
+                            </div>
+                          ) : null}
+                        </td>
+                        {isAdmin ? (
+                          <td className="dashboard-th-actions">
+                            {canRetry(row, isAdmin) ? (
+                              <button
+                                className="button secondary"
+                                disabled={busy}
+                                onClick={() => onRequestCharge(row, "retry")}
+                                type="button"
+                              >
+                                {busy ? "…" : "Retry"}
+                              </button>
+                            ) : canCharge(row, isAdmin) ? (
+                              <button
+                                className="button"
+                                disabled={busy}
+                                onClick={() => onRequestCharge(row, "charge")}
+                                type="button"
+                              >
+                                {busy ? "…" : "Charge"}
+                              </button>
+                            ) : succeeded || pending ? (
+                              <span className="muted">{succeeded ? "Done" : "Pending"}</span>
+                            ) : (
+                              <span className="muted">—</span>
+                            )}
+                          </td>
+                        ) : null}
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+          {pagination && pagination.totalPages > 1 ? (
+            <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
+              <button
+                className="button secondary"
+                disabled={page <= 1 || loading}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                type="button"
+              >
+                Previous
+              </button>
+              <span className="muted">
+                Page {pagination.page} / {pagination.totalPages}
+              </span>
+              <button
+                className="button secondary"
+                disabled={page >= pagination.totalPages || loading}
+                onClick={() => setPage((p) => p + 1)}
+                type="button"
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 export default function ClientChargesPage() {
   const apiBaseUrl = getApiBaseUrl();
   const { user, hydrated, sessionKey } = useWorkspaceAuth();
@@ -167,14 +491,20 @@ export default function ClientChargesPage() {
   const [preset, setPreset] = useState<PresetKey>("30");
   const [range, setRange] = useState<DateRangeStrings>(() => utcInclusiveRange(30));
   const [customDraft, setCustomDraft] = useState<DateRangeStrings>(() => utcInclusiveRange(30));
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [searchDraft, setSearchDraft] = useState("");
-  const [debouncedQ, setDebouncedQ] = useState("");
-  const [page, setPage] = useState(1);
 
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<ClientChargesResponse | null>(null);
+  const [overviewSearchDraft, setOverviewSearchDraft] = useState("");
+  const [debouncedOverviewQ, setDebouncedOverviewQ] = useState("");
+  const [overviewPage, setOverviewPage] = useState(1);
+  const [overviewSort, setOverviewSort] = useState<OverviewSortState>({
+    column: "unbilled",
+    direction: "desc"
+  });
+  const [expandedLocationId, setExpandedLocationId] = useState<string | null>(null);
+
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
+  const [overview, setOverview] = useState<ClientChargesOverviewResponse | null>(null);
+
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyAppointmentId, setBusyAppointmentId] = useState<string | null>(null);
   const [confirmRow, setConfirmRow] = useState<ClientChargeRow | null>(null);
@@ -187,50 +517,69 @@ export default function ClientChargesPage() {
   const [billingSearch, setBillingSearch] = useState("");
   const [showEligibility, setShowEligibility] = useState(false);
 
+  const query = useMemo(
+    () =>
+      new URLSearchParams({
+        from: range.fromInclusive.slice(0, 10),
+        to: range.toInclusive.slice(0, 10)
+      }),
+    [range.fromInclusive, range.toInclusive]
+  );
+
   useEffect(() => {
     const t = window.setTimeout(() => {
-      setDebouncedQ(searchDraft.trim());
-      setPage(1);
-    }, 300);
+      setDebouncedOverviewQ(overviewSearchDraft.trim());
+      setOverviewPage(1);
+    }, 400);
     return () => window.clearTimeout(t);
-  }, [searchDraft]);
+  }, [overviewSearchDraft]);
 
-  const loadCharges = useCallback(async () => {
+  useEffect(() => {
+    setOverviewPage(1);
+  }, [range.fromInclusive, range.toInclusive]);
+
+  useEffect(() => {
+    setExpandedLocationId(null);
+  }, [range.fromInclusive, range.toInclusive, debouncedOverviewQ]);
+
+  const buildOverviewParams = useCallback(() => {
+    const params = new URLSearchParams(query);
+    params.set("page", String(overviewPage));
+    params.set("limit", String(OVERVIEW_PAGE_SIZE));
+    if (debouncedOverviewQ) params.set("q", debouncedOverviewQ);
+    params.set("sort", overviewSort.column);
+    params.set("order", overviewSort.direction);
+    return params;
+  }, [query, overviewPage, debouncedOverviewQ, overviewSort]);
+
+  const loadOverview = useCallback(async () => {
     if (!hydrated) return;
-    setLoading(true);
-    setError(null);
+    setOverviewLoading(true);
+    setOverviewError(null);
     try {
-      const params = new URLSearchParams({
-        from: range.fromInclusive.slice(0, 10),
-        to: range.toInclusive.slice(0, 10),
-        page: String(page),
-        limit: "50",
-        status: statusFilter
-      });
-      if (debouncedQ) params.set("q", debouncedQ);
-      const res = await fetch(`${apiBaseUrl}/workspace/client-charges?${params}`, {
+      const res = await fetch(`${apiBaseUrl}/workspace/client-charges/overview?${buildOverviewParams()}`, {
         cache: "no-store",
         headers: mergeWorkspaceHeaders()
       });
-      const payload = (await res.json().catch(() => ({}))) as ClientChargesResponse & {
+      const payload = (await res.json().catch(() => ({}))) as ClientChargesOverviewResponse & {
         error?: string;
         message?: string;
       };
       if (!res.ok) {
-        throw new Error(payload.message ?? payload.error ?? "Unable to load client charges");
+        throw new Error(payload.message ?? payload.error ?? "Unable to load client charges overview");
       }
-      setData(payload);
+      setOverview(payload);
     } catch (caught) {
-      setData(null);
-      setError(caught instanceof Error ? caught.message : "Unable to load client charges");
+      setOverview(null);
+      setOverviewError(caught instanceof Error ? caught.message : "Unable to load client charges overview");
     } finally {
-      setLoading(false);
+      setOverviewLoading(false);
     }
-  }, [apiBaseUrl, debouncedQ, hydrated, page, range.fromInclusive, range.toInclusive, statusFilter]);
+  }, [apiBaseUrl, buildOverviewParams, hydrated]);
 
   useEffect(() => {
-    void loadCharges();
-  }, [loadCharges, sessionKey]);
+    void loadOverview();
+  }, [loadOverview, sessionKey]);
 
   const loadBillingLocations = useCallback(async () => {
     if (!isAdmin) {
@@ -267,6 +616,10 @@ export default function ClientChargesPage() {
     }
   }, [loadBillingLocations, showEligibility, sessionKey]);
 
+  function notifyDetailRefresh(locationId?: string) {
+    window.dispatchEvent(new CustomEvent("client-charges:refresh-detail", { detail: { locationId } }));
+  }
+
   async function patchLocationBilling(loc: BillingLocationConfig, enabled: boolean) {
     setBillingBusyId(loc.locationId);
     setBillingError(null);
@@ -286,7 +639,8 @@ export default function ClientChargesPage() {
         throw new Error(payload.message ?? payload.error ?? "Update failed");
       }
       await loadBillingLocations();
-      await loadCharges();
+      await loadOverview();
+      notifyDetailRefresh();
     } catch (caught) {
       setBillingError(caught instanceof Error ? caught.message : "Update failed");
     } finally {
@@ -323,7 +677,8 @@ export default function ClientChargesPage() {
         );
       }
       setConfirmRow(null);
-      await loadCharges();
+      await loadOverview();
+      notifyDetailRefresh(row.locationId);
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : "Charge failed");
     } finally {
@@ -349,9 +704,36 @@ export default function ClientChargesPage() {
     });
   }, [billingLocs, billingSearch]);
 
-  const totals = data?.totals;
-  const rows = data?.rows ?? [];
-  const pagination = data?.pagination;
+  const totals = overview?.totals;
+  const tableRows = overview?.subaccounts ?? [];
+  const pagination = overview?.pagination;
+  const rowOrdinalBase = pagination ? (pagination.page - 1) * pagination.pageSize : 0;
+  const accountCount = pagination?.totalSubaccounts ?? 0;
+
+  function toggleOverviewSort(column: OverviewSortColumn) {
+    setOverviewPage(1);
+    setOverviewSort((prev) =>
+      prev.column === column
+        ? { column, direction: prev.direction === "asc" ? "desc" : "asc" }
+        : { column, direction: column === "subaccount" ? "asc" : "desc" }
+    );
+  }
+
+  function sortAria(column: OverviewSortColumn): "ascending" | "descending" | undefined {
+    return overviewSort.column === column
+      ? overviewSort.direction === "asc"
+        ? "ascending"
+        : "descending"
+      : undefined;
+  }
+
+  function sortCaret(column: OverviewSortColumn): string | null {
+    return overviewSort.column === column ? (overviewSort.direction === "desc" ? "↓" : "↑") : null;
+  }
+
+  function toggleRowDetail(locationId: string) {
+    setExpandedLocationId((prev) => (prev === locationId ? null : locationId));
+  }
 
   return (
     <div style={{ paddingTop: 8 }}>
@@ -362,7 +744,7 @@ export default function ClientChargesPage() {
           const f = Date.parse(customDraft.fromInclusive.slice(0, 10));
           const t = Date.parse(customDraft.toInclusive.slice(0, 10));
           if (!Number.isFinite(f) || !Number.isFinite(t) || f > t) {
-            setError("Invalid custom range.");
+            setOverviewError("Invalid custom range.");
             return;
           }
           setPreset("custom");
@@ -370,16 +752,14 @@ export default function ClientChargesPage() {
             fromInclusive: customDraft.fromInclusive.slice(0, 10),
             toInclusive: customDraft.toInclusive.slice(0, 10)
           });
-          setPage(1);
-          setError(null);
+          setOverviewError(null);
         }}
         onCustomDraft={(d) => setCustomDraft(d)}
         onPresetChange={(p) => {
           if (p === "7" || p === "30" || p === "90") {
             setPreset(p);
             setRange(utcInclusiveRange(Number(p)));
-            setPage(1);
-            setError(null);
+            setOverviewError(null);
             return;
           }
           setPreset("custom");
@@ -389,11 +769,11 @@ export default function ClientChargesPage() {
         value={range}
       />
 
-      {loading ? <p className="muted">Loading client charges…</p> : null}
-      {error ? <p className="empty">{error}</p> : null}
+      {overviewLoading ? <p className="muted">Loading client charges…</p> : null}
+      {overviewError ? <p className="empty">{overviewError}</p> : null}
       {actionError ? <p className="empty">{actionError}</p> : null}
 
-      {!loading && totals ? (
+      {!overviewLoading && totals ? (
         <div className="dashboard-kpi-grid">
           <div className="panel dashboard-kpi-panel">
             <p className="dashboard-kpi-eyebrow">Eligible results</p>
@@ -433,43 +813,22 @@ export default function ClientChargesPage() {
         style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 16, alignItems: "flex-end" }}
       >
         <div style={{ flex: "1 1 220px", maxWidth: 440 }}>
-          <label className="appointments-filter-label" htmlFor="client-charges-search">
-            Search
+          <label className="appointments-filter-label" htmlFor="client-charges-overview-search">
+            Filter subaccounts
           </label>
           <input
-            aria-label="Filter client charges by location, contact, or appointment"
+            aria-label="Filter client charges by subaccount name or id"
             autoCapitalize="off"
             autoComplete="off"
             className="appointments-filter-select"
-            id="client-charges-search"
-            onChange={(e) => setSearchDraft(e.target.value)}
-            placeholder="Location, contact, appointment…"
+            id="client-charges-overview-search"
+            onChange={(e) => setOverviewSearchDraft(e.target.value)}
+            placeholder="Name, HighLevel location id, or UUID…"
             spellCheck={false}
             style={{ display: "block", marginTop: 6, width: "100%" }}
             type="search"
-            value={searchDraft}
+            value={overviewSearchDraft}
           />
-        </div>
-        <div>
-          <label className="appointments-filter-label" htmlFor="client-charges-status">
-            Status
-          </label>
-          <select
-            className="appointments-filter-select"
-            id="client-charges-status"
-            onChange={(e) => {
-              setStatusFilter(e.target.value as StatusFilter);
-              setPage(1);
-            }}
-            style={{ display: "block", marginTop: 6 }}
-            value={statusFilter}
-          >
-            <option value="all">All</option>
-            <option value="unbilled">Unbilled</option>
-            <option value="pending">Pending</option>
-            <option value="succeeded">Charged</option>
-            <option value="failed">Failed</option>
-          </select>
         </div>
         {isAdmin ? (
           <button
@@ -485,150 +844,180 @@ export default function ClientChargesPage() {
       {pagination ? (
         <p className="muted" style={{ marginBottom: 0, marginTop: 8 }}>
           Page <strong>{pagination.page}</strong> of <strong>{pagination.totalPages}</strong> ·{" "}
-          <strong>{rows.length}</strong> rows on this page · <strong>{pagination.totalRows}</strong> match
-          {debouncedQ ? ` · search: "${debouncedQ}"` : ""}.
+          <strong>{tableRows.length}</strong> rows on this page · <strong>{accountCount}</strong> subaccounts match
+          {debouncedOverviewQ ? ` · search: "${debouncedOverviewQ}"` : ""}.
         </p>
-      ) : null}
-
-      {!loading && data ? (
-        <div className="dashboard-overview-table-scroll" style={{ marginTop: 12 }}>
-          <table className="dashboard-table">
-            <thead>
-              <tr>
-                <th scope="col">Subaccount</th>
-                <th scope="col">Appointment / contact</th>
-                <th scope="col">Deposit source</th>
-                <th className="dashboard-th-actions" scope="col">
-                  Deposit (charge amount)
-                </th>
-                <th scope="col">Charge status</th>
-                <th className="dashboard-th-actions" scope="col">
-                  Action
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 ? (
-                <tr>
-                  <td colSpan={6}>
-                    <p className="muted" style={{ margin: "12px 0" }}>
-                      No billable results in this period
-                      {statusFilter !== "all" ? ` for status “${statusFilter}”` : ""}. Enable locations under
-                      eligibility, or widen the date range.
-                    </p>
-                  </td>
-                </tr>
-              ) : (
-                rows.map((row) => {
-                  const status = chargeStatusLabel(row);
-                  const busy = busyAppointmentId === row.appointmentId;
-                  const pending = row.charge?.status.toLowerCase() === "pending";
-                  const succeeded = row.charge?.status.toLowerCase() === "succeeded";
-                  return (
-                    <tr key={row.appointmentId}>
-                      <td>
-                        <strong>{formatLocationName(row.locationName, row.ghlLocationId)}</strong>
-                        <div className="muted">{row.ghlLocationId}</div>
-                      </td>
-                      <td>
-                        <div>{row.appointmentTitle?.trim() || row.ghlAppointmentId}</div>
-                        <div className="muted">
-                          {row.contactName?.trim() || row.contactEmail?.trim() || "No contact"}
-                          {row.appointmentStartTime
-                            ? ` · ${formatWhen(row.appointmentStartTime)}`
-                            : ` · booked ${formatWhen(row.appointmentBookedAt)}`}
-                        </div>
-                      </td>
-                      <td>
-                        <div>{depositSourceLabel(row.deposit)}</div>
-                        <div className="muted">{row.deposit.externalId}</div>
-                      </td>
-                      <td className="dashboard-th-actions">
-                        <strong>
-                          {formatMoney(depositChargeAmount(row), depositChargeCurrency(row))}
-                        </strong>
-                      </td>
-                      <td>
-                        <div>{status}</div>
-                        {row.charge?.ghlReferenceId ? (
-                          <div className="muted">Ref {row.charge.ghlReferenceId}</div>
-                        ) : null}
-                        {row.charge?.succeededAt ? (
-                          <div className="muted">{formatWhen(row.charge.succeededAt)}</div>
-                        ) : null}
-                        {row.charge?.lastError ? (
-                          <div className="empty" style={{ marginTop: 4, fontSize: "0.85em" }}>
-                            {row.charge.lastError}
-                          </div>
-                        ) : null}
-                        {pending ? (
-                          <div className="muted" style={{ marginTop: 4 }}>
-                            Ambiguous / in flight — do not retry until reconciled
-                          </div>
-                        ) : null}
-                      </td>
-                      <td className="dashboard-th-actions">
-                        {!isAdmin ? (
-                          <span className="muted">Admin only</span>
-                        ) : canRetry(row, isAdmin) ? (
-                          <button
-                            className="button secondary"
-                            disabled={busy}
-                            onClick={() => {
-                              setConfirmMode("retry");
-                              setConfirmRow(row);
-                              setActionError(null);
-                            }}
-                            type="button"
-                          >
-                            {busy ? "…" : "Retry"}
-                          </button>
-                        ) : canCharge(row, isAdmin) ? (
-                          <button
-                            className="button"
-                            disabled={busy}
-                            onClick={() => {
-                              setConfirmMode("charge");
-                              setConfirmRow(row);
-                              setActionError(null);
-                            }}
-                            type="button"
-                          >
-                            {busy ? "…" : "Charge"}
-                          </button>
-                        ) : succeeded || pending ? (
-                          <span className="muted">{succeeded ? "Done" : "Pending"}</span>
-                        ) : (
-                          <span className="muted">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
       ) : null}
 
       {pagination && pagination.totalPages > 1 ? (
         <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
           <button
             className="button secondary"
-            disabled={page <= 1 || loading}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={overviewPage <= 1 || overviewLoading}
+            onClick={() => setOverviewPage((p) => Math.max(1, p - 1))}
             type="button"
           >
             Previous
           </button>
           <button
             className="button secondary"
-            disabled={page >= pagination.totalPages || loading}
-            onClick={() => setPage((p) => p + 1)}
+            disabled={overviewPage >= pagination.totalPages || overviewLoading}
+            onClick={() => setOverviewPage((p) => p + 1)}
             type="button"
           >
             Next
           </button>
+        </div>
+      ) : null}
+
+      {!overviewLoading && overview ? (
+        <div className="panel" style={{ marginTop: 16, overflow: "auto", padding: 0 }}>
+          <table className="dashboard-table">
+            <thead>
+              <tr>
+                <th scope="col">#</th>
+                <th scope="col">
+                  <button
+                    aria-sort={sortAria("subaccount")}
+                    className="dashboard-th-sort"
+                    onClick={() => toggleOverviewSort("subaccount")}
+                    type="button"
+                  >
+                    Subaccount
+                    {sortCaret("subaccount") ? (
+                      <span aria-hidden className="dashboard-th-sort-hint">
+                        {sortCaret("subaccount")}
+                      </span>
+                    ) : null}
+                  </button>
+                </th>
+                <th scope="col">
+                  <button
+                    aria-sort={sortAria("eligible")}
+                    className="dashboard-th-sort"
+                    onClick={() => toggleOverviewSort("eligible")}
+                    type="button"
+                  >
+                    Eligible
+                    {sortCaret("eligible") ? (
+                      <span aria-hidden className="dashboard-th-sort-hint">
+                        {sortCaret("eligible")}
+                      </span>
+                    ) : null}
+                  </button>
+                </th>
+                <th scope="col">
+                  <button
+                    aria-sort={sortAria("unbilled")}
+                    className="dashboard-th-sort"
+                    onClick={() => toggleOverviewSort("unbilled")}
+                    type="button"
+                  >
+                    Unbilled
+                    {sortCaret("unbilled") ? (
+                      <span aria-hidden className="dashboard-th-sort-hint">
+                        {sortCaret("unbilled")}
+                      </span>
+                    ) : null}
+                  </button>
+                </th>
+                <th scope="col">
+                  <button
+                    aria-sort={sortAria("charged")}
+                    className="dashboard-th-sort"
+                    onClick={() => toggleOverviewSort("charged")}
+                    type="button"
+                  >
+                    Charged
+                    {sortCaret("charged") ? (
+                      <span aria-hidden className="dashboard-th-sort-hint">
+                        {sortCaret("charged")}
+                      </span>
+                    ) : null}
+                  </button>
+                </th>
+                <th scope="col">Failed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tableRows.map((row, idx) => (
+                <Fragment key={row.locationId}>
+                  <tr>
+                    <td>{rowOrdinalBase + idx + 1}</td>
+                    <td>
+                      <button
+                        aria-expanded={expandedLocationId === row.locationId}
+                        aria-label={`${expandedLocationId === row.locationId ? "Collapse" : "Expand"} appointments for ${locationLabel(row)}`}
+                        className="dashboard-subaccount-expand"
+                        onClick={() => toggleRowDetail(row.locationId)}
+                        type="button"
+                      >
+                        <span>{locationLabel(row)}</span>
+                        <span aria-hidden className="dashboard-subaccount-expand-caret">
+                          {expandedLocationId === row.locationId ? "\u25BC" : "\u25B6"}
+                        </span>
+                      </button>
+                      <div className="muted">{row.ghlLocationId}</div>
+                    </td>
+                    <td>{row.eligibleCount}</td>
+                    <td>
+                      <div>{row.unbilledCount}</div>
+                      <div className="muted">
+                        {row.mixedCurrencies
+                          ? "Mixed currencies"
+                          : formatMoney(row.unbilledAmount, row.currency)}
+                      </div>
+                    </td>
+                    <td>
+                      <div>{row.chargedCount}</div>
+                      <div className="muted">
+                        {row.mixedCurrencies
+                          ? "Mixed currencies"
+                          : formatMoney(row.chargedAmount, row.currency)}
+                      </div>
+                    </td>
+                    <td>
+                      {row.failedCount}
+                      {row.pendingCount > 0 ? (
+                        <div className="muted">{row.pendingCount} pending</div>
+                      ) : null}
+                    </td>
+                  </tr>
+                  {expandedLocationId === row.locationId ? (
+                    <tr>
+                      <td
+                        colSpan={6}
+                        style={{ background: "var(--muted-bg, rgba(0, 0, 0, 0.032))", padding: "18px 20px" }}
+                      >
+                        <ClientChargesLocationDetail
+                          apiBaseUrl={apiBaseUrl}
+                          busyAppointmentId={busyAppointmentId}
+                          isAdmin={isAdmin}
+                          locationId={row.locationId}
+                          onRequestCharge={(chargeRow, mode) => {
+                            setConfirmMode(mode);
+                            setConfirmRow(chargeRow);
+                            setActionError(null);
+                          }}
+                          range={range}
+                        />
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+          {accountCount === 0 ? (
+            <p className="empty muted" style={{ padding: 16 }}>
+              No billable results in this window for enabled locations
+              {debouncedOverviewQ ? " (or no subaccounts match your search)." : "."}
+            </p>
+          ) : tableRows.length === 0 ? (
+            <p className="empty muted" style={{ padding: 16 }}>
+              No rows on this page.
+            </p>
+          ) : null}
         </div>
       ) : null}
 

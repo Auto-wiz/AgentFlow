@@ -54,17 +54,7 @@ export type ClientChargeCandidate = {
 
 export type ClientChargeListResult = {
   rows: ClientChargeCandidate[];
-  totals: {
-    eligibleCount: number;
-    chargedCount: number;
-    unbilledCount: number;
-    pendingCount: number;
-    failedCount: number;
-    chargedAmount: number;
-    unbilledAmount: number;
-    currency: string | null;
-    mixedCurrencies: boolean;
-  };
+  totals: ClientChargeTotals;
   pagination: {
     page: number;
     pageSize: number;
@@ -72,6 +62,114 @@ export type ClientChargeListResult = {
     totalPages: number;
   };
 };
+
+export type ClientChargeTotals = {
+  eligibleCount: number;
+  chargedCount: number;
+  unbilledCount: number;
+  pendingCount: number;
+  failedCount: number;
+  chargedAmount: number;
+  unbilledAmount: number;
+  currency: string | null;
+  mixedCurrencies: boolean;
+};
+
+export type ClientChargeOverviewRow = {
+  locationId: string;
+  ghlLocationId: string;
+  locationName: string | null;
+  eligibleCount: number;
+  unbilledCount: number;
+  unbilledAmount: number;
+  chargedCount: number;
+  chargedAmount: number;
+  pendingCount: number;
+  failedCount: number;
+  currency: string | null;
+  mixedCurrencies: boolean;
+};
+
+export type ClientChargeOverviewResult = {
+  subaccounts: ClientChargeOverviewRow[];
+  totals: ClientChargeTotals;
+  pagination: {
+    page: number;
+    pageSize: number;
+    totalSubaccounts: number;
+    totalPages: number;
+    query?: string;
+  };
+};
+
+export type ClientChargeFetchParams = {
+  from: Date;
+  toExclusive: Date;
+  allowedLocationIds: string[] | null;
+  hiddenLocationIds?: string[];
+  locationId?: string;
+  appointmentId?: string;
+  query?: string;
+  status?: "all" | "unbilled" | "pending" | "succeeded" | "failed";
+  /** Overview search: match location name/id only (not appointment fields). */
+  subaccountQueryOnly?: boolean;
+};
+
+function computeChargeTotals(candidates: ClientChargeCandidate[]): ClientChargeTotals {
+  const currencies = new Set(candidates.map((row) => row.deposit.currency));
+  return {
+    eligibleCount: candidates.length,
+    chargedCount: candidates.filter((row) => row.charge?.status === "succeeded").length,
+    unbilledCount: candidates.filter((row) => row.charge === null).length,
+    pendingCount: candidates.filter((row) => row.charge?.status === "pending").length,
+    failedCount: candidates.filter((row) => row.charge?.status === "failed").length,
+    chargedAmount: candidates.reduce(
+      (sum, row) => sum + (row.charge?.status === "succeeded" ? row.charge.amount : 0),
+      0
+    ),
+    unbilledAmount: candidates.reduce(
+      (sum, row) => sum + (row.charge === null ? row.deposit.amount : 0),
+      0
+    ),
+    currency: currencies.size === 1 ? ([...currencies][0] ?? null) : null,
+    mixedCurrencies: currencies.size > 1
+  };
+}
+
+function aggregateOverviewRow(
+  locationId: string,
+  ghlLocationId: string,
+  locationName: string | null,
+  rows: ClientChargeCandidate[]
+): ClientChargeOverviewRow {
+  const totals = computeChargeTotals(rows);
+  return {
+    locationId,
+    ghlLocationId,
+    locationName,
+    eligibleCount: totals.eligibleCount,
+    unbilledCount: totals.unbilledCount,
+    unbilledAmount: totals.unbilledAmount,
+    chargedCount: totals.chargedCount,
+    chargedAmount: totals.chargedAmount,
+    pendingCount: totals.pendingCount,
+    failedCount: totals.failedCount,
+    currency: totals.currency,
+    mixedCurrencies: totals.mixedCurrencies
+  };
+}
+
+function matchesSubaccountQuery(
+  row: Pick<ClientChargeCandidate, "locationName" | "ghlLocationId" | "locationId">,
+  needle: string
+) {
+  if (!needle) return true;
+  const haystack = [row.locationName, row.ghlLocationId, row.locationId]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(needle);
+}
 
 function canonicalDepositSql(): SQL<CanonicalDepositEvidence | null> {
   /*
@@ -238,20 +336,10 @@ function normalizeEvidence(value: CanonicalDepositEvidence | null): CanonicalDep
   };
 }
 
-export async function listClientChargeCandidates(
+export async function fetchClientChargeCandidates(
   db: Db,
-  params: {
-    from: Date;
-    toExclusive: Date;
-    allowedLocationIds: string[] | null;
-    hiddenLocationIds?: string[];
-    appointmentId?: string;
-    query?: string;
-    status?: "all" | "unbilled" | "pending" | "succeeded" | "failed";
-    page: number;
-    pageSize: number;
-  }
-): Promise<ClientChargeListResult> {
+  params: ClientChargeFetchParams
+): Promise<ClientChargeCandidate[]> {
   const bookingCapturedAt = sql<Date>`coalesce(${appointments.dateAdded}, ${appointments.createdAt})`;
   const filters: SQL[] = [
     eq(locationBillingConfig.enabled, true),
@@ -270,6 +358,9 @@ export async function listClientChargeCandidates(
   }
   if (params.hiddenLocationIds?.length) {
     filters.push(notInArray(appointments.locationId, params.hiddenLocationIds));
+  }
+  if (params.locationId) {
+    filters.push(eq(appointments.locationId, params.locationId));
   }
   if (params.appointmentId) {
     filters.push(eq(appointments.id, params.appointmentId));
@@ -357,7 +448,9 @@ export async function listClientChargeCandidates(
       charge
     };
 
-    if (query) {
+    if (params.subaccountQueryOnly) {
+      if (!matchesSubaccountQuery(candidate, query)) continue;
+    } else if (query) {
       const haystack = [
         candidate.locationName,
         candidate.ghlLocationId,
@@ -378,24 +471,89 @@ export async function listClientChargeCandidates(
   }
 
   normalized.sort((a, b) => b.appointmentBookedAt.localeCompare(a.appointmentBookedAt));
-  const currencies = new Set(normalized.map((row) => row.deposit.currency));
-  const totals = {
-    eligibleCount: normalized.length,
-    chargedCount: normalized.filter((row) => row.charge?.status === "succeeded").length,
-    unbilledCount: normalized.filter((row) => row.charge === null).length,
-    pendingCount: normalized.filter((row) => row.charge?.status === "pending").length,
-    failedCount: normalized.filter((row) => row.charge?.status === "failed").length,
-    chargedAmount: normalized.reduce(
-      (sum, row) => sum + (row.charge?.status === "succeeded" ? row.charge.amount : 0),
-      0
-    ),
-    unbilledAmount: normalized.reduce(
-      (sum, row) => sum + (row.charge === null ? row.deposit.amount : 0),
-      0
-    ),
-    currency: currencies.size === 1 ? ([...currencies][0] ?? null) : null,
-    mixedCurrencies: currencies.size > 1
+  return normalized;
+}
+
+export async function listClientChargeOverview(
+  db: Db,
+  params: ClientChargeFetchParams & {
+    page: number;
+    pageSize: number;
+    sortColumn?: "subaccount" | "unbilled" | "charged" | "eligible";
+    sortDirection?: "asc" | "desc";
+  }
+): Promise<ClientChargeOverviewResult> {
+  const candidates = await fetchClientChargeCandidates(db, {
+    ...params,
+    status: "all",
+    subaccountQueryOnly: true,
+    locationId: undefined,
+    appointmentId: undefined
+  });
+
+  const byLocation = new Map<string, ClientChargeCandidate[]>();
+  for (const row of candidates) {
+    const bucket = byLocation.get(row.locationId) ?? [];
+    bucket.push(row);
+    byLocation.set(row.locationId, bucket);
+  }
+
+  let subaccounts: ClientChargeOverviewRow[] = [];
+  for (const [locationId, rows] of byLocation) {
+    const first = rows[0]!;
+    subaccounts.push(
+      aggregateOverviewRow(locationId, first.ghlLocationId, first.locationName, rows)
+    );
+  }
+
+  const sortColumn = params.sortColumn ?? "unbilled";
+  const sortDirection = params.sortDirection ?? "desc";
+  const dir = sortDirection === "asc" ? 1 : -1;
+  subaccounts.sort((a, b) => {
+    let cmp = 0;
+    if (sortColumn === "subaccount") {
+      const na = (a.locationName ?? a.ghlLocationId).toLowerCase();
+      const nb = (b.locationName ?? b.ghlLocationId).toLowerCase();
+      cmp = na.localeCompare(nb);
+    } else if (sortColumn === "charged") {
+      cmp = a.chargedCount - b.chargedCount || a.chargedAmount - b.chargedAmount;
+    } else if (sortColumn === "eligible") {
+      cmp = a.eligibleCount - b.eligibleCount;
+    } else {
+      cmp = a.unbilledCount - b.unbilledCount || a.unbilledAmount - b.unbilledAmount;
+    }
+    return cmp * dir;
+  });
+
+  const totals = computeChargeTotals(candidates);
+  const pageSize = Math.min(100, Math.max(1, Math.floor(params.pageSize)));
+  const totalSubaccounts = subaccounts.length;
+  const totalPages = Math.max(1, Math.ceil(totalSubaccounts / pageSize));
+  const page = Math.min(Math.max(1, Math.floor(params.page)), totalPages);
+  const start = (page - 1) * pageSize;
+
+  return {
+    subaccounts: subaccounts.slice(start, start + pageSize),
+    totals,
+    pagination: {
+      page,
+      pageSize,
+      totalSubaccounts,
+      totalPages,
+      query: params.query?.trim() || undefined
+    }
   };
+}
+
+export async function listClientChargeCandidates(
+  db: Db,
+  params: ClientChargeFetchParams & {
+    page: number;
+    pageSize: number;
+  }
+): Promise<ClientChargeListResult> {
+  const normalized = await fetchClientChargeCandidates(db, params);
+  const totals = computeChargeTotals(normalized);
 
   const pageSize = Math.min(100, Math.max(1, Math.floor(params.pageSize)));
   const totalRows = normalized.length;
