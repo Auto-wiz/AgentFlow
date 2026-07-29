@@ -619,6 +619,114 @@ export const invoices = pgTable(
   })
 );
 
+/** Per-subaccount opt-in for pay-per-result wallet billing. */
+export const locationBillingConfig = pgTable(
+  "location_billing_config",
+  {
+    locationId: uuid("location_id")
+      .primaryKey()
+      .references(() => locations.id, { onDelete: "cascade" }),
+    enabled: boolean("enabled").notNull().default(false),
+    currency: text("currency").notNull().default("USD"),
+    ghlMeterId: text("ghl_meter_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedByWorkspaceUserId: uuid("updated_by_workspace_user_id").references(() => workspaceUsers.id, {
+      onDelete: "set null"
+    })
+  },
+  (table) => ({
+    enabledIdx: index("location_billing_config_enabled_idx").on(table.enabled)
+  })
+);
+
+/** One idempotent GHL wallet charge per paid appointment. */
+export const clientResultCharges = pgTable(
+  "client_result_charges",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => locations.id, { onDelete: "restrict" }),
+    appointmentId: uuid("appointment_id")
+      .notNull()
+      .references(() => appointments.id, { onDelete: "restrict" }),
+    depositSourceKind: text("deposit_source_kind").notNull(),
+    paymentOrderId: uuid("payment_order_id").references(() => ghlPaymentOrders.id, {
+      onDelete: "restrict"
+    }),
+    invoiceId: uuid("invoice_id").references(() => invoices.id, { onDelete: "restrict" }),
+    depositAmount: integer("deposit_amount").notNull(),
+    depositCurrency: text("deposit_currency").notNull(),
+    chargeAmount: integer("charge_amount").notNull(),
+    chargeCurrency: text("charge_currency").notNull(),
+    status: text("status").notNull().default("pending"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    ghlReferenceId: text("ghl_reference_id"),
+    ghlTransactionId: text("ghl_transaction_id"),
+    requestSnapshot: jsonb("request_snapshot")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    responseSnapshot: jsonb("response_snapshot")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    lastError: text("last_error"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    createdByWorkspaceUserId: uuid("created_by_workspace_user_id").references(() => workspaceUsers.id, {
+      onDelete: "set null"
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    succeededAt: timestamp("succeeded_at", { withTimezone: true }),
+    failedAt: timestamp("failed_at", { withTimezone: true }),
+    reversedAt: timestamp("reversed_at", { withTimezone: true })
+  },
+  (table) => ({
+    appointmentUnique: uniqueIndex("client_result_charges_appointment_unique").on(table.appointmentId),
+    idempotencyUnique: uniqueIndex("client_result_charges_idempotency_unique").on(table.idempotencyKey),
+    locationCreatedIdx: index("client_result_charges_location_created_idx").on(
+      table.locationId,
+      table.createdAt
+    ),
+    statusIdx: index("client_result_charges_status_idx").on(table.status),
+    paymentOrderIdx: index("client_result_charges_payment_order_idx").on(table.paymentOrderId),
+    invoiceIdx: index("client_result_charges_invoice_idx").on(table.invoiceId)
+  })
+);
+
+/** Immutable history of every claim, outbound attempt, outcome, and reversal. */
+export const clientResultChargeEvents = pgTable(
+  "client_result_charge_events",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    chargeId: uuid("charge_id")
+      .notNull()
+      .references(() => clientResultCharges.id, { onDelete: "restrict" }),
+    eventType: text("event_type").notNull(),
+    attemptNumber: integer("attempt_number").notNull(),
+    payload: jsonb("payload")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    actorWorkspaceUserId: uuid("actor_workspace_user_id").references(() => workspaceUsers.id, {
+      onDelete: "set null"
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    chargeCreatedIdx: index("client_result_charge_events_charge_created_idx").on(
+      table.chargeId,
+      table.createdAt
+    )
+  })
+);
+
 export const agenciesRelations = relations(agencies, ({ many }) => ({
   locations: many(locations)
 }));
@@ -637,7 +745,9 @@ export const locationsRelations = relations(locations, ({ one, many }) => ({
   locationCalendars: many(locationCalendars),
   paymentSources: many(paymentSources),
   invoices: many(invoices),
-  ghlPaymentOrders: many(ghlPaymentOrders)
+  ghlPaymentOrders: many(ghlPaymentOrders),
+  billingConfig: one(locationBillingConfig),
+  clientResultCharges: many(clientResultCharges)
 }));
 
 export const userSubaccountVisibilitiesRelations = relations(
@@ -665,7 +775,10 @@ export const workspaceUserLocationSelectionRelations = relations(
 );
 
 export const workspaceUsersRelations = relations(workspaceUsers, ({ many }) => ({
-  workspaceSelections: many(workspaceUserLocationSelection)
+  workspaceSelections: many(workspaceUserLocationSelection),
+  billingConfigsUpdated: many(locationBillingConfig),
+  clientResultChargesCreated: many(clientResultCharges),
+  clientResultChargeEvents: many(clientResultChargeEvents)
 }));
 
 export const contactsRelations = relations(contacts, ({ one, many }) => ({
@@ -715,7 +828,8 @@ export const appointmentsRelations = relations(appointments, ({ one }) => ({
   contact: one(contacts, {
     fields: [appointments.contactId],
     references: [contacts.id]
-  })
+  }),
+  clientResultCharge: one(clientResultCharges)
 }));
 
 export const locationCalendarsRelations = relations(locationCalendars, ({ one }) => ({
@@ -756,5 +870,52 @@ export const ghlPaymentOrdersRelations = relations(ghlPaymentOrders, ({ one }) =
   paymentSource: one(paymentSources, {
     fields: [ghlPaymentOrders.paymentSourceId],
     references: [paymentSources.id]
+  }),
+  clientResultCharge: one(clientResultCharges)
+}));
+
+export const locationBillingConfigRelations = relations(locationBillingConfig, ({ one }) => ({
+  location: one(locations, {
+    fields: [locationBillingConfig.locationId],
+    references: [locations.id]
+  }),
+  updatedBy: one(workspaceUsers, {
+    fields: [locationBillingConfig.updatedByWorkspaceUserId],
+    references: [workspaceUsers.id]
+  })
+}));
+
+export const clientResultChargesRelations = relations(clientResultCharges, ({ one, many }) => ({
+  location: one(locations, {
+    fields: [clientResultCharges.locationId],
+    references: [locations.id]
+  }),
+  appointment: one(appointments, {
+    fields: [clientResultCharges.appointmentId],
+    references: [appointments.id]
+  }),
+  paymentOrder: one(ghlPaymentOrders, {
+    fields: [clientResultCharges.paymentOrderId],
+    references: [ghlPaymentOrders.id]
+  }),
+  invoice: one(invoices, {
+    fields: [clientResultCharges.invoiceId],
+    references: [invoices.id]
+  }),
+  createdBy: one(workspaceUsers, {
+    fields: [clientResultCharges.createdByWorkspaceUserId],
+    references: [workspaceUsers.id]
+  }),
+  events: many(clientResultChargeEvents)
+}));
+
+export const clientResultChargeEventsRelations = relations(clientResultChargeEvents, ({ one }) => ({
+  charge: one(clientResultCharges, {
+    fields: [clientResultChargeEvents.chargeId],
+    references: [clientResultCharges.id]
+  }),
+  actor: one(workspaceUsers, {
+    fields: [clientResultChargeEvents.actorWorkspaceUserId],
+    references: [workspaceUsers.id]
   })
 }));
