@@ -178,6 +178,17 @@ function depositSourceLabel(deposit: CanonicalDeposit) {
   return `${kind} · ${match}`;
 }
 
+function buildGhlPaymentOrderUrl(
+  ghlLocationId: string | null | undefined,
+  deposit: CanonicalDeposit
+): string | null {
+  if (deposit.kind !== "payment_order") return null;
+  const locationId = ghlLocationId?.trim();
+  const orderId = deposit.externalId?.trim();
+  if (!locationId || !orderId) return null;
+  return `https://app.gohighlevel.com/v2/location/${encodeURIComponent(locationId)}/payments/v2/orders/${encodeURIComponent(orderId)}`;
+}
+
 function chargeStatusLabel(row: ClientChargeRow) {
   if (!row.charge) return "Unbilled";
   const status = row.charge.status.toLowerCase();
@@ -384,6 +395,7 @@ function ClientChargesLocationDetail({
                     const busy = busyAppointmentId === row.appointmentId;
                     const pending = row.charge?.status.toLowerCase() === "pending";
                     const succeeded = row.charge?.status.toLowerCase() === "succeeded";
+                    const paymentOrderUrl = buildGhlPaymentOrderUrl(row.ghlLocationId, row.deposit);
                     return (
                       <tr key={row.appointmentId}>
                         <td>
@@ -398,6 +410,17 @@ function ClientChargesLocationDetail({
                         <td>
                           <div>{depositSourceLabel(row.deposit)}</div>
                           <div className="muted">{row.deposit.externalId}</div>
+                          {paymentOrderUrl ? (
+                            <a
+                              className="button secondary"
+                              href={paymentOrderUrl}
+                              rel="noopener noreferrer"
+                              style={{ display: "inline-block", fontSize: "0.85em", marginTop: 6, padding: "4px 10px" }}
+                              target="_blank"
+                            >
+                              Open order in GHL
+                            </a>
+                          ) : null}
                         </td>
                         <td className="dashboard-th-actions">
                           <strong>
