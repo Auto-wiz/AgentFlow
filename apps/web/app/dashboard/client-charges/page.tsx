@@ -2,9 +2,12 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { canAccessClientCharges } from "@agentflow/shared";
+
 import { getApiBaseUrl } from "../../../lib/api-base-url";
 import { formatLocationName } from "../../../lib/location-display";
 import { mergeWorkspaceHeaders } from "../../../lib/workspace-api-headers";
+import { useGuardedNavigate } from "../../components/navigation-guard-provider";
 import { useWorkspaceAuth } from "../../components/workspace-auth-provider";
 import {
   DashboardRangeControl,
@@ -485,8 +488,17 @@ function ClientChargesLocationDetail({
 
 export default function ClientChargesPage() {
   const apiBaseUrl = getApiBaseUrl();
+  const { replaceGuarded } = useGuardedNavigate();
   const { user, hydrated, sessionKey } = useWorkspaceAuth();
   const isAdmin = hydrated && user?.role === "admin";
+  const canUseClientCharges = hydrated && canAccessClientCharges(user?.email);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    if (!canAccessClientCharges(user?.email)) {
+      void replaceGuarded("/dashboard");
+    }
+  }, [hydrated, replaceGuarded, user?.email]);
 
   const [preset, setPreset] = useState<PresetKey>("30");
   const [range, setRange] = useState<DateRangeStrings>(() => utcInclusiveRange(30));
@@ -554,7 +566,7 @@ export default function ClientChargesPage() {
   }, [query, overviewPage, debouncedOverviewQ, overviewSort]);
 
   const loadOverview = useCallback(async () => {
-    if (!hydrated) return;
+    if (!hydrated || !canUseClientCharges) return;
     setOverviewLoading(true);
     setOverviewError(null);
     setOverviewHttpStatus(null);
@@ -583,7 +595,7 @@ export default function ClientChargesPage() {
     } finally {
       setOverviewLoading(false);
     }
-  }, [apiBaseUrl, buildOverviewParams, hydrated]);
+  }, [apiBaseUrl, buildOverviewParams, canUseClientCharges, hydrated]);
 
   useEffect(() => {
     void loadOverview();
@@ -741,6 +753,10 @@ export default function ClientChargesPage() {
 
   function toggleRowDetail(locationId: string) {
     setExpandedLocationId((prev) => (prev === locationId ? null : locationId));
+  }
+
+  if (!canUseClientCharges) {
+    return hydrated ? null : <p className="muted">Loading client charges…</p>;
   }
 
   return (

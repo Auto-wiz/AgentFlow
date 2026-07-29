@@ -6,7 +6,7 @@ import {
   locationBillingConfig,
   locations
 } from "@agentflow/db";
-import { AUDIT_ACTION_KINDS } from "@agentflow/shared";
+import { AUDIT_ACTION_KINDS, canAccessClientCharges } from "@agentflow/shared";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Context } from "hono";
 
@@ -72,6 +72,13 @@ async function policyLocationScope(c: Context<Bindings>) {
   };
 }
 
+async function requireClientChargesAccess(c: Context<Bindings>) {
+  const me = await resolveSessionUser(c, c.env);
+  if (!me) return c.json({ error: "unauthorized" }, 401);
+  if (!canAccessClientCharges(me.email)) return c.json({ error: "forbidden" }, 403);
+  return me;
+}
+
 function parseClientChargeOverviewSort(
   raw: string | undefined
 ): "subaccount" | "unbilled" | "charged" | "eligible" {
@@ -94,6 +101,8 @@ function parseClientChargeStatus(raw: string | undefined) {
 
 export async function getWorkspaceClientChargesOverviewHandler(c: Context<Bindings>) {
   try {
+    const access = await requireClientChargesAccess(c);
+    if (access instanceof Response) return access;
     const scoped = await policyLocationScope(c);
     if (!scoped) return c.json({ error: "unauthorized" }, 401);
     const bounds = resolveDashboardBounds(c.req.query("from"), c.req.query("to"));
@@ -130,6 +139,8 @@ export async function getWorkspaceClientChargesOverviewHandler(c: Context<Bindin
 
 export async function getWorkspaceClientChargesHandler(c: Context<Bindings>) {
   try {
+    const access = await requireClientChargesAccess(c);
+    if (access instanceof Response) return access;
     const scoped = await policyLocationScope(c);
     if (!scoped) return c.json({ error: "unauthorized" }, 401);
     const bounds = resolveDashboardBounds(c.req.query("from"), c.req.query("to"));
@@ -350,6 +361,7 @@ async function writeChargeOutcome(params: {
 async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
   const me = await resolveSessionUser(c, c.env);
   if (!me) return c.json({ error: "unauthorized" }, 401);
+  if (!canAccessClientCharges(me.email)) return c.json({ error: "forbidden" }, 403);
   if (me.role !== "admin") return c.json({ error: "admin_required" }, 403);
   const policy = await resolveAccessPolicy(c, c.env);
   if (!policy) return c.json({ error: "unauthorized" }, 401);
@@ -513,7 +525,9 @@ export async function postWorkspaceClientChargeRetryHandler(c: Context<Bindings>
 
 export async function getAdminClientChargeLocationsHandler(c: Context<Bindings>) {
   const me = await resolveSessionUser(c, c.env);
-  if (!me || me.role !== "admin") return c.json({ error: "forbidden" }, 403);
+  if (!me) return c.json({ error: "unauthorized" }, 401);
+  if (!canAccessClientCharges(me.email)) return c.json({ error: "forbidden" }, 403);
+  if (me.role !== "admin") return c.json({ error: "forbidden" }, 403);
   const policy = await resolveAccessPolicy(c, c.env);
   if (!policy) return c.json({ error: "unauthorized" }, 401);
   const db = createDb(c.env.DATABASE_URL);
@@ -547,7 +561,9 @@ export async function getAdminClientChargeLocationsHandler(c: Context<Bindings>)
 export async function patchAdminClientChargeLocationHandler(c: Context<Bindings>) {
   try {
     const me = await resolveSessionUser(c, c.env);
-    if (!me || me.role !== "admin") return c.json({ error: "forbidden" }, 403);
+    if (!me) return c.json({ error: "unauthorized" }, 401);
+    if (!canAccessClientCharges(me.email)) return c.json({ error: "forbidden" }, 403);
+    if (me.role !== "admin") return c.json({ error: "forbidden" }, 403);
     const policy = await resolveAccessPolicy(c, c.env);
     if (!policy) return c.json({ error: "unauthorized" }, 401);
     const locationId = (c.req.param("locationId") ?? "").trim();

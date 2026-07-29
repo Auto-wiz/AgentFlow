@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { canAccessClientCharges } from "../../../packages/shared/src/client-charges-access.ts";
+
 import {
   CANONICAL_DEPOSIT_PRECEDENCE,
   canonicalDepositRank,
@@ -89,5 +91,20 @@ describe("idempotency and retry gates", () => {
     assert.equal(isChargeActionDisabled("succeeded"), true);
     assert.equal(isChargeActionDisabled("failed"), false);
     assert.equal(isChargeActionDisabled(null), false);
+  });
+});
+
+describe("client charges access allowlist", () => {
+  it("allows info@autowiz.net and omar workspace logins", () => {
+    assert.equal(canAccessClientCharges("info@autowiz.net"), true);
+    assert.equal(canAccessClientCharges("INFO@AUTOWIZ.NET"), true);
+    assert.equal(canAccessClientCharges("omarurzim@gmail.com"), true);
+    assert.equal(canAccessClientCharges("omarurzi@autowiz.net"), true);
+  });
+
+  it("denies other workspace users", () => {
+    assert.equal(canAccessClientCharges(null), false);
+    assert.equal(canAccessClientCharges("other@autowiz.net"), false);
+    assert.equal(canAccessClientCharges("admin@example.com"), false);
   });
 });

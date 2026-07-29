@@ -322,3 +322,8 @@ export {
   WORKSPACE_AUDIT_ACTION_OPTIONS
 } from "./audit-constants";
 export type { WorkspaceAuditActionKind } from "./audit-constants";
+export {
+  CLIENT_CHARGES_ALLOWED_EMAILS,
+  canAccessClientCharges,
+  normalizeWorkspaceEmail
+} from "./client-charges-access";
