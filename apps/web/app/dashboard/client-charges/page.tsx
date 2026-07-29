@@ -503,6 +503,7 @@ export default function ClientChargesPage() {
 
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [overviewError, setOverviewError] = useState<string | null>(null);
+  const [overviewHttpStatus, setOverviewHttpStatus] = useState<number | null>(null);
   const [overview, setOverview] = useState<ClientChargesOverviewResponse | null>(null);
 
   const [actionError, setActionError] = useState<string | null>(null);
@@ -556,16 +557,23 @@ export default function ClientChargesPage() {
     if (!hydrated) return;
     setOverviewLoading(true);
     setOverviewError(null);
+    setOverviewHttpStatus(null);
     try {
       const res = await fetch(`${apiBaseUrl}/workspace/client-charges/overview?${buildOverviewParams()}`, {
         cache: "no-store",
         headers: mergeWorkspaceHeaders()
       });
+      setOverviewHttpStatus(res.status);
       const payload = (await res.json().catch(() => ({}))) as ClientChargesOverviewResponse & {
         error?: string;
         message?: string;
       };
       if (!res.ok) {
+        if (res.status === 404) {
+          throw new Error(
+            "Client Charges overview is unavailable on the API (404). Redeploy the Cloudflare Worker so GET /workspace/client-charges/overview is live."
+          );
+        }
         throw new Error(payload.message ?? payload.error ?? "Unable to load client charges overview");
       }
       setOverview(payload);
@@ -770,7 +778,19 @@ export default function ClientChargesPage() {
       />
 
       {overviewLoading ? <p className="muted">Loading client charges…</p> : null}
-      {overviewError ? <p className="empty">{overviewError}</p> : null}
+      {overviewError ? (
+        <div className="panel" style={{ marginTop: 12, padding: 14 }}>
+          <p className="empty" style={{ margin: 0 }}>
+            {overviewError}
+          </p>
+          {overviewHttpStatus === 404 ? (
+            <p className="muted" style={{ margin: "8px 0 0" }}>
+              The web app expects a subaccount overview table. If you only redeployed Pages, publish the API Worker
+              too (`wrangler deploy` in <code>apps/api</code>).
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       {actionError ? <p className="empty">{actionError}</p> : null}
 
       {!overviewLoading && totals ? (
@@ -808,14 +828,13 @@ export default function ClientChargesPage() {
         </div>
       ) : null}
 
-      <div
-        className="appointments-filter-field"
-        style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 16, alignItems: "flex-end" }}
-      >
-        <div style={{ flex: "1 1 220px", maxWidth: 440 }}>
-          <label className="appointments-filter-label" htmlFor="client-charges-overview-search">
-            Filter subaccounts
-          </label>
+      <div className="appointments-filter-field" style={{ marginTop: 16 }}>
+        <label className="appointments-filter-label" htmlFor="client-charges-overview-search">
+          Filter subaccounts
+        </label>
+        <div
+          style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 6, alignItems: "flex-end" }}
+        >
           <input
             aria-label="Filter client charges by subaccount name or id"
             autoCapitalize="off"
@@ -825,32 +844,36 @@ export default function ClientChargesPage() {
             onChange={(e) => setOverviewSearchDraft(e.target.value)}
             placeholder="Name, HighLevel location id, or UUID…"
             spellCheck={false}
-            style={{ display: "block", marginTop: 6, width: "100%" }}
+            style={{ display: "block", flex: "1 1 220px", maxWidth: 440, width: "100%" }}
             type="search"
             value={overviewSearchDraft}
           />
+          {isAdmin ? (
+            <button
+              className="button secondary"
+              onClick={() => setShowEligibility((v) => !v)}
+              type="button"
+            >
+              {showEligibility ? "Hide eligibility" : "Location eligibility"}
+            </button>
+          ) : null}
         </div>
-        {isAdmin ? (
-          <button
-            className="button secondary"
-            onClick={() => setShowEligibility((v) => !v)}
-            type="button"
-          >
-            {showEligibility ? "Hide eligibility" : "Location eligibility"}
-          </button>
-        ) : null}
+        <p className="muted" style={{ marginBottom: 0, marginTop: 8 }}>
+          {pagination ? (
+            <>
+              Page <strong>{pagination.page}</strong> of <strong>{pagination.totalPages}</strong> ·{" "}
+              <strong>{tableRows.length}</strong> rows on this page · <strong>{accountCount}</strong> subaccounts match
+              {debouncedOverviewQ ? ` · search: "${debouncedOverviewQ}"` : ""}.
+            </>
+          ) : null}
+        </p>
       </div>
 
-      {pagination ? (
-        <p className="muted" style={{ marginBottom: 0, marginTop: 8 }}>
-          Page <strong>{pagination.page}</strong> of <strong>{pagination.totalPages}</strong> ·{" "}
-          <strong>{tableRows.length}</strong> rows on this page · <strong>{accountCount}</strong> subaccounts match
-          {debouncedOverviewQ ? ` · search: "${debouncedOverviewQ}"` : ""}.
-        </p>
-      ) : null}
-
       {pagination && pagination.totalPages > 1 ? (
-        <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
+        <div
+          className="toolbar"
+          style={{ alignItems: "center", flexWrap: "wrap", gap: 10, marginTop: 12 }}
+        >
           <button
             className="button secondary"
             disabled={overviewPage <= 1 || overviewLoading}
@@ -859,6 +882,9 @@ export default function ClientChargesPage() {
           >
             Previous
           </button>
+          <span className="muted">
+            Page {pagination.page} / {pagination.totalPages}
+          </span>
           <button
             className="button secondary"
             disabled={overviewPage >= pagination.totalPages || overviewLoading}
@@ -957,7 +983,6 @@ export default function ClientChargesPage() {
                           {expandedLocationId === row.locationId ? "\u25BC" : "\u25B6"}
                         </span>
                       </button>
-                      <div className="muted">{row.ghlLocationId}</div>
                     </td>
                     <td>{row.eligibleCount}</td>
                     <td>
