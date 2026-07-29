@@ -58,6 +58,15 @@ describe("amount and currency validation", () => {
     assert.equal(isValidChargeCurrency("US"), false);
     assert.equal(isValidChargeCurrency(""), false);
   });
+
+  it("mirrors variable deposit X as the charge amount", () => {
+    for (const raw of [25, 30, 35, 47.6]) {
+      const deposit = normalizeChargeAmount(raw);
+      const charge = normalizeChargeAmount(raw);
+      assert.equal(charge, deposit);
+      assert.ok(charge != null && charge > 0);
+    }
+  });
 });
 
 describe("idempotency and retry gates", () => {

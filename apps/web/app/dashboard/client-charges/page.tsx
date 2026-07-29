@@ -116,6 +116,16 @@ function formatWhen(iso: string | null | undefined) {
   });
 }
 
+function depositChargeAmount(row: ClientChargeRow) {
+  if (row.charge) return row.charge.amount;
+  return row.deposit.amount;
+}
+
+function depositChargeCurrency(row: ClientChargeRow) {
+  if (row.charge) return row.charge.currency;
+  return row.deposit.currency;
+}
+
 function depositSourceLabel(deposit: CanonicalDeposit) {
   const kind = deposit.kind === "invoice" ? "Invoice" : "Payment order";
   const match =
@@ -257,7 +267,7 @@ export default function ClientChargesPage() {
     }
   }, [loadBillingLocations, showEligibility, sessionKey]);
 
-  async function toggleLocationEnabled(loc: BillingLocationConfig, enabled: boolean) {
+  async function patchLocationBilling(loc: BillingLocationConfig, enabled: boolean) {
     setBillingBusyId(loc.locationId);
     setBillingError(null);
     try {
@@ -489,7 +499,7 @@ export default function ClientChargesPage() {
                 <th scope="col">Appointment / contact</th>
                 <th scope="col">Deposit source</th>
                 <th className="dashboard-th-actions" scope="col">
-                  Deposit
+                  Deposit (charge amount)
                 </th>
                 <th scope="col">Charge status</th>
                 <th className="dashboard-th-actions" scope="col">
@@ -534,7 +544,9 @@ export default function ClientChargesPage() {
                         <div className="muted">{row.deposit.externalId}</div>
                       </td>
                       <td className="dashboard-th-actions">
-                        {formatMoney(row.deposit.amount, row.deposit.currency)}
+                        <strong>
+                          {formatMoney(depositChargeAmount(row), depositChargeCurrency(row))}
+                        </strong>
                       </td>
                       <td>
                         <div>{status}</div>
@@ -624,8 +636,8 @@ export default function ClientChargesPage() {
         <div className="panel" style={{ padding: 18, marginTop: 20 }}>
           <h2 style={{ marginTop: 0 }}>Location eligibility</h2>
           <p className="muted">
-            Client Charges stay off by default. Enable a subaccount only after the GHL dynamic billing meter and
-            wallet scopes are configured. Disabled locations never appear as chargeable results.
+            Client Charges stay off by default. Enable a subaccount only after the GHL dynamic billing meter and wallet
+            scopes are configured. The charge amount always mirrors the lead&apos;s paid deposit for that appointment.
           </p>
           {billingLoading ? <p className="muted">Loading locations…</p> : null}
           {billingError ? <div className="empty">{billingError}</div> : null}
@@ -660,7 +672,7 @@ export default function ClientChargesPage() {
                       aria-label={`Enable Client Charges for ${loc.ghlLocationId}`}
                       checked={Boolean(loc.enabled)}
                       disabled={billingBusyId === loc.locationId}
-                      onChange={(e) => void toggleLocationEnabled(loc, e.target.checked)}
+                      onChange={(e) => void patchLocationBilling(loc, e.target.checked)}
                       type="checkbox"
                     />
                   </label>
@@ -695,16 +707,27 @@ export default function ClientChargesPage() {
               {confirmMode === "retry" ? "Retry wallet charge" : "Confirm wallet charge"}
             </h3>
             <p className="muted appointments-override-subheader">
-              This creates an irreversible GHL Marketplace wallet charge for the deposit amount. Double-check before
-              continuing.
+              You will charge the sub-account the same amount the lead paid as a deposit. This GHL Marketplace wallet
+              charge is irreversible. Double-check before continuing.
             </p>
             <dl style={{ margin: "12px 0 0", display: "grid", gap: 8 }}>
               <div>
                 <dt className="muted" style={{ margin: 0 }}>
-                  Subaccount
+                  Amount to charge
                 </dt>
                 <dd style={{ margin: "2px 0 0" }}>
-                  {formatLocationName(confirmRow.locationName, confirmRow.ghlLocationId)}
+                  <strong>
+                    {formatMoney(depositChargeAmount(confirmRow), depositChargeCurrency(confirmRow))}
+                  </strong>
+                  <span className="muted"> (same as lead deposit)</span>
+                </dd>
+              </div>
+              <div>
+                <dt className="muted" style={{ margin: 0 }}>
+                  Deposit source
+                </dt>
+                <dd style={{ margin: "2px 0 0" }}>
+                  {depositSourceLabel(confirmRow.deposit)} · {confirmRow.deposit.externalId}
                 </dd>
               </div>
               <div>
@@ -718,18 +741,10 @@ export default function ClientChargesPage() {
               </div>
               <div>
                 <dt className="muted" style={{ margin: 0 }}>
-                  Amount
+                  Subaccount
                 </dt>
                 <dd style={{ margin: "2px 0 0" }}>
-                  <strong>{formatMoney(confirmRow.deposit.amount, confirmRow.deposit.currency)}</strong>
-                </dd>
-              </div>
-              <div>
-                <dt className="muted" style={{ margin: 0 }}>
-                  Deposit evidence
-                </dt>
-                <dd style={{ margin: "2px 0 0" }}>
-                  {depositSourceLabel(confirmRow.deposit)} · {confirmRow.deposit.externalId}
+                  {formatLocationName(confirmRow.locationName, confirmRow.ghlLocationId)}
                 </dd>
               </div>
             </dl>

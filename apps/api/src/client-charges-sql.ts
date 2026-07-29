@@ -389,7 +389,10 @@ export async function listClientChargeCandidates(
       (sum, row) => sum + (row.charge?.status === "succeeded" ? row.charge.amount : 0),
       0
     ),
-    unbilledAmount: normalized.reduce((sum, row) => sum + (row.charge === null ? row.deposit.amount : 0), 0),
+    unbilledAmount: normalized.reduce(
+      (sum, row) => sum + (row.charge === null ? row.deposit.amount : 0),
+      0
+    ),
     currency: currencies.size === 1 ? ([...currencies][0] ?? null) : null,
     mixedCurrencies: currencies.size > 1
   };

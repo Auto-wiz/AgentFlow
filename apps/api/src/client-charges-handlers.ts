@@ -367,8 +367,8 @@ async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
   }
 
   const now = new Date();
-  const amount = normalizeChargeAmount(candidate.deposit.amount);
-  if (amount == null) {
+  const chargeAmount = normalizeChargeAmount(candidate.deposit.amount);
+  if (chargeAmount == null) {
     return c.json({ error: "invalid_deposit_amount", message: "Canonical deposit amount must be positive." }, 400);
   }
   const idempotencyKey = clientChargeIdempotencyKey(candidate.appointmentId);
@@ -380,14 +380,14 @@ async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
       depositSourceKind: candidate.deposit.kind,
       paymentOrderId: candidate.deposit.kind === "payment_order" ? candidate.deposit.id : null,
       invoiceId: candidate.deposit.kind === "invoice" ? candidate.deposit.id : null,
-      depositAmount: amount,
+      depositAmount: chargeAmount,
       depositCurrency: candidate.deposit.currency,
-      chargeAmount: amount,
+      chargeAmount,
       chargeCurrency: candidate.deposit.currency,
       status: "pending",
       idempotencyKey,
       requestSnapshot: {
-        candidate: candidate.deposit,
+        canonicalDeposit: candidate.deposit,
         appointmentId: candidate.appointmentId,
         ghlAppointmentId: candidate.ghlAppointmentId
       },
