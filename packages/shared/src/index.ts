@@ -161,12 +161,26 @@ export type NormalizedGhlOrderWebhookEvent = NormalizedGhlBaseWebhookEvent & {
   };
 };
 
+/** SaaS plan / new location webhooks — auto-sync Stripe customer for Client Charges. */
+export type NormalizedGhlSaasBillingWebhookEvent = NormalizedGhlBaseWebhookEvent & {
+  kind: "saas_billing";
+  location: {
+    ghlLocationId: string;
+    name?: string | null;
+  };
+  agency: {
+    ghlAgencyId: string;
+    name?: string | null;
+  };
+};
+
 export type NormalizedGhlWebhookEvent =
   | NormalizedGhlMessageWebhookEvent
   | NormalizedGhlAppointmentWebhookEvent
   | NormalizedGhlInstallWebhookEvent
   | NormalizedGhlInvoiceWebhookEvent
-  | NormalizedGhlOrderWebhookEvent;
+  | NormalizedGhlOrderWebhookEvent
+  | NormalizedGhlSaasBillingWebhookEvent;
 
 export type ContactOnDemandDetails = {
   id: string | null;

@@ -52,6 +52,7 @@ import type {
   NormalizedGhlInvoiceWebhookEvent,
   NormalizedGhlOrderWebhookEvent,
   NormalizedGhlMessageWebhookEvent,
+  NormalizedGhlSaasBillingWebhookEvent,
   NormalizedGhlWebhookEvent,
   ThreadOpportunity
 } from "@agentflow/shared";
@@ -127,6 +128,7 @@ import {
   upsertLocationCalendarRow,
   upsertPaymentSourceFromOrder
 } from "./ghl-dimension-sync.js";
+import { processSaasBillingWebhookEvent } from "./ghl-webhook-stripe-sync.js";
 import {
   getWorkspaceDashboardOverviewHandler,
   getWorkspaceDashboardLocationDetailHandler,
@@ -2810,6 +2812,12 @@ async function processWebhookEvent(env: Env, event: NormalizedGhlWebhookEvent) {
     return;
   }
 
+  if (event.kind === "saas_billing") {
+    await processSaasBillingWebhookEvent(env, event);
+    await markWebhookEventProcessed(env, event.idempotencyKey);
+    return;
+  }
+
   await processInstallWebhookEvent(env, event);
 }
 
@@ -5313,7 +5321,55 @@ async function normalizeGhlWebhook(
     return normalizeInvoiceWebhook(root, headers, rawBody, eventType);
   }
 
+  if (isSaasBillingWebhookEvent(eventLower)) {
+    return normalizeSaasBillingWebhook(root, headers, rawBody, eventType);
+  }
+
   return null;
+}
+
+function isSaasBillingWebhookEvent(eventLower: string) {
+  return eventLower.includes("saasplan") || eventLower.includes("locationcreate");
+}
+
+async function normalizeSaasBillingWebhook(
+  root: Record<string, any>,
+  headers: Headers,
+  rawBody: string,
+  eventType: string
+): Promise<NormalizedGhlSaasBillingWebhookEvent | null> {
+  const location = asRecord(root.location);
+  const company = asRecord(root.company ?? root.agency);
+  const ghlLocationId = stringValue(
+    root.locationId ?? root.location_id ?? location.id ?? root.altId
+  );
+  const ghlAgencyId = stringValue(
+    root.companyId ?? root.agencyId ?? root.company_id ?? company.id
+  );
+
+  if (!ghlLocationId || !ghlAgencyId) {
+    return null;
+  }
+
+  const idempotencyHeader = getWebhookIdempotencyHeader(headers);
+  const idempotencyKey =
+    idempotencyHeader ??
+    `${eventType}:${ghlAgencyId}:${ghlLocationId}:${stringValue(root.timestamp ?? root.updatedAt) || (await sha256Hex(rawBody))}`;
+
+  return {
+    kind: "saas_billing",
+    idempotencyKey,
+    eventType,
+    location: {
+      ghlLocationId,
+      name: stringOrNull(root.locationName ?? location.name ?? root.name)
+    },
+    agency: {
+      ghlAgencyId,
+      name: stringOrNull(root.companyName ?? company.name)
+    },
+    raw: root
+  };
 }
 
 async function normalizeMessageWebhook(

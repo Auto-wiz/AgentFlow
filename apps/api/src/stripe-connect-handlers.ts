@@ -9,7 +9,7 @@ import {
   normalizeStripeCustomerId
 } from "./client-charges-logic.js";
 import { createStripeClient } from "./client-charges-stripe.js";
-import { fetchGhlSaasSubscriptionForLocation } from "./ghl-saas-subscription.js";
+import { syncLocationStripeFromGhlSaas } from "./client-charges-ghl-stripe-sync.js";
 import {
   applyStripeAccountSnapshot,
   ensureLocationBillingConfigRow,
@@ -285,57 +285,6 @@ export async function postAdminLocationStripeBillingSetupHandler(c: Context<Bind
 
   if (!session.url) return c.json({ error: "checkout_session_failed" }, 500);
   return c.json({ url: session.url });
-}
-
-async function syncLocationStripeFromGhlSaas(
-  env: StripeConnectEnv,
-  db: ReturnType<typeof createDb>,
-  locationId: string,
-  ghlLocationId: string
-) {
-  const saas = await fetchGhlSaasSubscriptionForLocation(env, db, ghlLocationId);
-  if (!saas.ok) {
-    return {
-      ok: false as const,
-      status: saas.status ?? 502,
-      error: saas.error,
-      code: saas.code,
-      ...(saas.code === "customer_id_missing" && saas.payloadShape != null
-        ? { payloadShape: saas.payloadShape }
-        : {})
-    };
-  }
-
-  const stripe = createStripeClient(env);
-  if (!stripe) {
-    return {
-      ok: false as const,
-      status: 500,
-      error: "Stripe is not configured",
-      code: "stripe_not_configured"
-    };
-  }
-
-  const applied = await applyPlatformStripeCustomerToLocation(stripe, db, locationId, saas.customerId);
-  if (!applied.ok) {
-    return {
-      ok: false as const,
-      status: applied.code === "stripe_customer_in_use" ? 409 : 400,
-      error: applied.error,
-      code: applied.code
-    };
-  }
-
-  return {
-    ok: true as const,
-    stripeCustomerId: applied.stripeCustomerId,
-    stripeCustomerMasked: maskStripeCustomerId(applied.stripeCustomerId),
-    billingReady: applied.billingReady,
-    hasPaymentMethod: Boolean(applied.stripeDefaultPaymentMethodId),
-    customerEmail: applied.customerEmail,
-    customerName: applied.customerName,
-    ghlCustomerId: saas.customerId
-  };
 }
 
 export async function postAdminLocationStripeSyncFromGhlHandler(c: Context<Bindings>) {
