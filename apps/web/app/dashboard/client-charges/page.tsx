@@ -259,7 +259,7 @@ function StripeBillingLinkBadge({
     return (
       <span
         className="client-charges-stripe-badge client-charges-stripe-badge--partial"
-        title="Stripe customer linked — add or verify payment method in Location eligibility"
+        title="Stripe customer linked — add or verify payment method in Pay per Use Model Eligibility"
       >
         Stripe
       </span>
@@ -800,7 +800,7 @@ export default function ClientChargesPage() {
       if (!res.ok) {
         const hint =
           payload.error === "billing_not_ready" || payload.code === "billing_not_ready"
-            ? " Sync Stripe from GHL or link cus_… and add a payment method under Location eligibility."
+            ? " Sync Stripe from GHL or link cus_… and add a payment method under Pay per Use Model Eligibility."
             : "";
         throw new Error((payload.message ?? payload.error ?? "Update failed") + hint);
       }
@@ -1032,7 +1032,7 @@ function formatGhlSyncFailureMessage(payload: {
         }
         const billingHint =
           payload.error === "billing_not_ready"
-            ? " Sync Stripe from GHL or add a payment method under Location eligibility."
+            ? " Sync Stripe from GHL or add a payment method under Pay per Use Model Eligibility."
             : "";
         throw new Error(
           (payload.message ??
@@ -1225,7 +1225,7 @@ function formatGhlSyncFailureMessage(payload: {
               onClick={() => setShowEligibility((v) => !v)}
               type="button"
             >
-              {showEligibility ? "Hide eligibility" : "Location eligibility"}
+              {showEligibility ? "Hide Pay per Use Model Eligibility" : "Pay per Use Model Eligibility"}
             </button>
           ) : null}
         </div>
@@ -1426,7 +1426,7 @@ function formatGhlSyncFailureMessage(payload: {
 
       {isAdmin && showEligibility ? (
         <div className="panel" style={{ padding: 18, marginTop: 20 }}>
-          <h2 style={{ marginTop: 0 }}>Location eligibility</h2>
+          <h2 style={{ marginTop: 0 }}>Pay per Use Model Eligibility</h2>
           {platformStripeLabel ? <p className="muted">{platformStripeLabel}</p> : null}
           <p className="muted">
             Client Charges stay off by default. Sync each subaccount&apos;s Stripe customer from GHL SaaS billing

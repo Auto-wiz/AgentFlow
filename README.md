@@ -160,7 +160,7 @@ Pay-per-result billing uses **one platform Stripe account** (`STRIPE_SECRET_KEY`
    - **`PATCH /admin/client-charges/locations/:locationId/stripe/customer-link`** with `{ "stripeCustomerId": "cus_…" }` to verify manually.
    If sync returns **`customer_id_missing`**, the response includes **`payloadShape`** (keys/types only, no secrets) so the parser can be extended.
 5. **Automatic sync:** GHL webhooks **`SaaSPlanCreate`** and **`LocationCreate`** (must be subscribed on your Marketplace app webhook) queue a background job that upserts the location and runs the same GHL → Stripe customer sync when **`STRIPE_SECRET_KEY`** is set. Skips locations that already have **`cus_` + payment method**. Manual sync endpoints remain available.
-6. In the app: **Dashboard → Client Charges → Location eligibility** → **Sync from GHL** or paste **`cus_…`** → **Verify customer** → **Add payment method** → enable the subaccount.
+6. In the app: **Dashboard → Client Charges → Pay per Use Model Eligibility** → **Sync from GHL** or paste **`cus_…`** → **Verify customer** → **Add payment method** → enable the subaccount.
 7. **Live charges are opt-in:** Worker var **`CLIENT_CHARGES_CHARGING_ENABLED`** must be **`true`** before **`POST /workspace/client-charges/:appointmentId/charge`** or **retry** will run Stripe PaymentIntents. Default in `wrangler.toml` is **`false`** (sync, customer link, and Checkout setup still work).
 
 ## Validation
