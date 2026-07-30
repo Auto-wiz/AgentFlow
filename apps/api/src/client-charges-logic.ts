@@ -53,6 +53,19 @@ export function clientChargeIdempotencyKey(appointmentId: string): string {
   return `agentflow-result-${appointmentId.trim()}`;
 }
 
+/** Label for “charged by” in UI — prefers display name, then email local-part. */
+export function chargeActorDisplayName(
+  displayName: string | null | undefined,
+  email: string | null | undefined
+): string | null {
+  const dn = displayName?.trim();
+  if (dn) return dn;
+  const em = email?.trim();
+  if (!em) return null;
+  const local = em.split("@")[0]?.trim();
+  return local || em;
+}
+
 /** Stripe Connect account ids use the acct_ prefix. */
 export function normalizeStripeConnectAccountId(raw: unknown): string | null {
   if (typeof raw !== "string") return null;

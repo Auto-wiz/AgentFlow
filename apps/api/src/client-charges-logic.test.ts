@@ -6,6 +6,7 @@ import { canAccessClientCharges } from "../../../packages/shared/src/client-char
 import {
   CANONICAL_DEPOSIT_PRECEDENCE,
   canonicalDepositRank,
+  chargeActorDisplayName,
   clientChargeIdempotencyKey,
   isChargeActionDisabled,
   isChargeRetryable,
@@ -142,6 +143,12 @@ describe("Stripe customer id and GHL SaaS payload", () => {
     assert.equal(isClientChargesChargingEnabled({ CLIENT_CHARGES_CHARGING_ENABLED: "false" }), false);
     assert.equal(isClientChargesChargingEnabled({ CLIENT_CHARGES_CHARGING_ENABLED: "true" }), true);
     assert.equal(isClientChargesChargingEnabled({ CLIENT_CHARGES_CHARGING_ENABLED: "1" }), true);
+  });
+
+  it("prefers display name for charge actor label", () => {
+    assert.equal(chargeActorDisplayName("Omar", "omar@example.com"), "Omar");
+    assert.equal(chargeActorDisplayName(null, "omar@example.com"), "omar");
+    assert.equal(chargeActorDisplayName("  ", null), null);
   });
 
   it("finds a location row in saas-locations v3 list payloads", () => {

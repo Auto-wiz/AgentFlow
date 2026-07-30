@@ -44,6 +44,7 @@ type ChargeLedger = {
   updatedAt: string;
   succeededAt: string | null;
   failedAt: string | null;
+  chargedBy: string | null;
 };
 
 type ClientChargeRow = {
@@ -215,7 +216,14 @@ function buildGhlPaymentOrderUrl(
 function chargeStatusLabel(row: ClientChargeRow) {
   if (!row.charge) return "Unbilled";
   const status = row.charge.status.toLowerCase();
-  if (status === "succeeded") return "Charged";
+  if (status === "succeeded") {
+    const who = row.charge.chargedBy?.trim();
+    const when = row.charge.succeededAt ? formatWhen(row.charge.succeededAt) : null;
+    if (who && when) return `Charged by ${who} · ${when}`;
+    if (who) return `Charged by ${who}`;
+    if (when) return `Charged · ${when}`;
+    return "Charged";
+  }
   if (status === "pending") return "Pending";
   if (status === "failed") return "Failed";
   if (status === "reversed") return "Reversed";
@@ -494,7 +502,7 @@ function ClientChargesLocationDetail({
                           {row.charge?.ghlReferenceId ? (
                             <div className="muted">Ref {row.charge.ghlReferenceId}</div>
                           ) : null}
-                          {row.charge?.succeededAt ? (
+                          {!succeeded && row.charge?.succeededAt ? (
                             <div className="muted">{formatWhen(row.charge.succeededAt)}</div>
                           ) : null}
                           {row.charge?.lastError ? (

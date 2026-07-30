@@ -4,12 +4,14 @@ import {
   contacts,
   createDb,
   locationBillingConfig,
-  locations
+  locations,
+  workspaceUsers
 } from "@agentflow/db";
 import { and, asc, eq, gte, inArray, lt, not, notInArray, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 
 import { appointmentCancelledOnlySql, buildAppointmentEffectivePaidSql } from "./appointment-payment-sql.js";
+import { chargeActorDisplayName } from "./client-charges-logic.js";
 
 type Db = ReturnType<typeof createDb>;
 
@@ -49,6 +51,7 @@ export type ClientChargeCandidate = {
     updatedAt: string;
     succeededAt: string | null;
     failedAt: string | null;
+    chargedBy: string | null;
   } | null;
 };
 
@@ -395,13 +398,16 @@ export async function fetchClientChargeCandidates(
       chargeCreatedAt: clientResultCharges.createdAt,
       chargeUpdatedAt: clientResultCharges.updatedAt,
       chargeSucceededAt: clientResultCharges.succeededAt,
-      chargeFailedAt: clientResultCharges.failedAt
+      chargeFailedAt: clientResultCharges.failedAt,
+      chargeCreatorDisplayName: workspaceUsers.displayName,
+      chargeCreatorEmail: workspaceUsers.email
     })
     .from(appointments)
     .innerJoin(locations, eq(appointments.locationId, locations.id))
     .innerJoin(locationBillingConfig, eq(locationBillingConfig.locationId, appointments.locationId))
     .leftJoin(contacts, eq(appointments.contactId, contacts.id))
     .leftJoin(clientResultCharges, eq(clientResultCharges.appointmentId, appointments.id))
+    .leftJoin(workspaceUsers, eq(clientResultCharges.createdByWorkspaceUserId, workspaceUsers.id))
     .where(and(...filters))
     .orderBy(asc(bookingCapturedAt), asc(appointments.id));
 
@@ -430,7 +436,8 @@ export async function fetchClientChargeCandidates(
           createdAt: iso(row.chargeCreatedAt)!,
           updatedAt: iso(row.chargeUpdatedAt)!,
           succeededAt: iso(row.chargeSucceededAt),
-          failedAt: iso(row.chargeFailedAt)
+          failedAt: iso(row.chargeFailedAt),
+          chargedBy: chargeActorDisplayName(row.chargeCreatorDisplayName, row.chargeCreatorEmail)
         }
       : null;
 

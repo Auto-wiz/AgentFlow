@@ -11,6 +11,7 @@ import type { Context } from "hono";
 
 import { createStripeClientCharge, type ClientChargeStripeEnv } from "./client-charges-stripe.js";
 import {
+  chargeActorDisplayName,
   clientChargeIdempotencyKey,
   isChargeRetryable,
   isClientChargesChargingEnabled,
@@ -212,7 +213,10 @@ export async function getWorkspaceClientChargesHandler(c: Context<Bindings>) {
   }
 }
 
-function chargePublicRow(row: typeof clientResultCharges.$inferSelect) {
+function chargePublicRow(
+  row: typeof clientResultCharges.$inferSelect,
+  chargedByOverride?: string | null
+) {
   return {
     id: row.id,
     appointmentId: row.appointmentId,
@@ -234,7 +238,8 @@ function chargePublicRow(row: typeof clientResultCharges.$inferSelect) {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     succeededAt: row.succeededAt?.toISOString() ?? null,
-    failedAt: row.failedAt?.toISOString() ?? null
+    failedAt: row.failedAt?.toISOString() ?? null,
+    chargedBy: chargedByOverride ?? null
   };
 }
 
@@ -243,9 +248,10 @@ async function writeChargeOutcome(params: {
   candidate: ClientChargeCandidate;
   charge: typeof clientResultCharges.$inferSelect;
   actorId: string;
+  actorChargedBy: string | null;
   isRetry: boolean;
 }) {
-  const { c, candidate, charge, actorId, isRetry } = params;
+  const { c, candidate, charge, actorId, actorChargedBy, isRetry } = params;
   const db = createDb(c.env.DATABASE_URL);
   const [locationRow] = await db
     .select({
@@ -352,7 +358,7 @@ async function writeChargeOutcome(params: {
         stripeChargeId: result.chargeId
       }
     });
-    return { status: 200 as const, body: { ok: true as const, charge: chargePublicRow(updated!) } };
+    return { status: 200 as const, body: { ok: true as const, charge: chargePublicRow(updated!, actorChargedBy) } };
   }
 
   const nextStatus = result.ambiguous ? "pending" : "failed";
@@ -408,7 +414,7 @@ async function writeChargeOutcome(params: {
       ambiguous: result.ambiguous,
       error: result.ambiguous ? "charge_outcome_ambiguous" : "charge_failed",
       message: errorMessage,
-      charge: chargePublicRow(updated!)
+      charge: chargePublicRow(updated!, actorChargedBy)
     }
   };
 }
@@ -430,6 +436,8 @@ async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
   }
   const policy = await resolveAccessPolicy(c, c.env);
   if (!policy) return c.json({ error: "unauthorized" }, 401);
+
+  const actorChargedBy = chargeActorDisplayName(me.displayName, me.email);
 
   const appointmentId = (c.req.param("appointmentId") ?? "").trim();
   if (!isUuid(appointmentId)) return c.json({ error: "invalid_appointment_id" }, 400);
@@ -480,7 +488,14 @@ async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
       summary: `Retried client charge for appointment ${candidate.ghlAppointmentId}`,
       details: { appointmentId, attemptNumber: claimed.attemptCount }
     });
-    const result = await writeChargeOutcome({ c, candidate, charge: claimed, actorId: me.id, isRetry: true });
+    const result = await writeChargeOutcome({
+      c,
+      candidate,
+      charge: claimed,
+      actorId: me.id,
+      actorChargedBy,
+      isRetry: true
+    });
     return c.json(result.body, result.status);
   }
 
@@ -566,7 +581,14 @@ async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
     details: { appointmentId, canonicalDeposit: candidate.deposit }
   });
 
-  const result = await writeChargeOutcome({ c, candidate, charge: claimed, actorId: me.id, isRetry: false });
+  const result = await writeChargeOutcome({
+    c,
+    candidate,
+    charge: claimed,
+    actorId: me.id,
+    actorChargedBy,
+    isRetry: false
+  });
   return c.json(result.body, result.status);
 }
 
