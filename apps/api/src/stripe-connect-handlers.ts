@@ -3,7 +3,11 @@ import { canAccessClientCharges } from "@agentflow/shared";
 import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Context } from "hono";
 
-import { normalizeStripeConnectAccountId, normalizeStripeCustomerId } from "./client-charges-logic.js";
+import {
+  isClientChargesChargingEnabled,
+  normalizeStripeConnectAccountId,
+  normalizeStripeCustomerId
+} from "./client-charges-logic.js";
 import { createStripeClient } from "./client-charges-stripe.js";
 import { fetchGhlSaasSubscriptionForLocation } from "./ghl-saas-subscription.js";
 import {
@@ -30,6 +34,7 @@ export type StripeConnectEnv = WorkspaceJwtEnv &
   FRONTEND_BASE_URL?: string;
   GHL_CLIENT_ID?: string;
   GHL_CLIENT_SECRET?: string;
+  CLIENT_CHARGES_CHARGING_ENABLED?: string;
 };
 
 type Bindings = { Bindings: StripeConnectEnv };
@@ -110,10 +115,16 @@ export async function getAdminStripePlatformStatusHandler(c: Context<Bindings>) 
     return c.json({
       configured: true,
       platformAccountMasked: null,
-      chargesEnabled: null
+      chargesEnabled: null,
+      clientChargesChargingEnabled: isClientChargesChargingEnabled(c.env)
     });
   } catch {
-    return c.json({ configured: false, platformAccountMasked: null, chargesEnabled: null });
+    return c.json({
+      configured: false,
+      platformAccountMasked: null,
+      chargesEnabled: null,
+      clientChargesChargingEnabled: isClientChargesChargingEnabled(c.env)
+    });
   }
 }
 

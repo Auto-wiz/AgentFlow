@@ -13,6 +13,7 @@ import { createStripeClientCharge, type ClientChargeStripeEnv } from "./client-c
 import {
   clientChargeIdempotencyKey,
   isChargeRetryable,
+  isClientChargesChargingEnabled,
   normalizeChargeAmount
 } from "./client-charges-logic.js";
 import {
@@ -417,6 +418,16 @@ async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
   if (!me) return c.json({ error: "unauthorized" }, 401);
   if (!canAccessClientCharges(me.email)) return c.json({ error: "forbidden" }, 403);
   if (me.role !== "admin") return c.json({ error: "admin_required" }, 403);
+  if (!isClientChargesChargingEnabled(c.env)) {
+    return c.json(
+      {
+        error: "charging_disabled",
+        message:
+          "Stripe client charges are disabled on the API. GHL sync and billing setup still work. Set CLIENT_CHARGES_CHARGING_ENABLED=true on the Worker to allow charges."
+      },
+      503
+    );
+  }
   const policy = await resolveAccessPolicy(c, c.env);
   if (!policy) return c.json({ error: "unauthorized" }, 401);
 

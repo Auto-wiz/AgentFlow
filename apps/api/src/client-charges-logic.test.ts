@@ -17,6 +17,7 @@ import {
   normalizeStripeCustomerId,
   extractSaasSubscriptionStripeCustomerId,
   summarizeUnknownJsonShape,
+  isClientChargesChargingEnabled,
   pickCanonicalDepositSource,
   stripeConnectedChargeRequestOptions,
   toStripeMinorUnits
@@ -133,6 +134,13 @@ describe("Stripe customer id and GHL SaaS payload", () => {
     }) as Record<string, unknown>;
     assert.ok(shape.subscriptionDetails);
     assert.equal(typeof shape.items, "object");
+  });
+
+  it("requires explicit env opt-in for live charges", () => {
+    assert.equal(isClientChargesChargingEnabled({}), false);
+    assert.equal(isClientChargesChargingEnabled({ CLIENT_CHARGES_CHARGING_ENABLED: "false" }), false);
+    assert.equal(isClientChargesChargingEnabled({ CLIENT_CHARGES_CHARGING_ENABLED: "true" }), true);
+    assert.equal(isClientChargesChargingEnabled({ CLIENT_CHARGES_CHARGING_ENABLED: "1" }), true);
   });
 });
 

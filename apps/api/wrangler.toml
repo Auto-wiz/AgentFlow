@@ -18,6 +18,8 @@ crons = ["*/15 * * * *"]
 
 [vars]
 LOCATION_NAME_CRON_BATCH = "0"
+# Client Charges: omit or "false" blocks Stripe charges; set "true" when ready to bill live.
+CLIENT_CHARGES_CHARGING_ENABLED = "false"
 
 [[queues.producers]]
 binding = "MESSAGE_QUEUE"

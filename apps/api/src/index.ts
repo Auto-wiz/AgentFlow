@@ -188,6 +188,8 @@ type Env = {
   FRONTEND_BASE_URL?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
+  /** When unset or not true/1/yes, POST …/charge and …/retry return 503 (sync/billing still work). */
+  CLIENT_CHARGES_CHARGING_ENABLED?: string;
   MESSAGE_QUEUE: Queue<NormalizedGhlWebhookEvent>;
   JWT_SECRET?: string;
   /**

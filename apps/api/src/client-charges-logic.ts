@@ -77,6 +77,16 @@ export function isValidStripeCustomerId(raw: unknown): boolean {
   return normalizeStripeCustomerId(raw) != null;
 }
 
+export type ClientChargesChargingEnv = {
+  CLIENT_CHARGES_CHARGING_ENABLED?: string;
+};
+
+/** Live charges require explicit opt-in via Worker var (sync/billing setup stay available). */
+export function isClientChargesChargingEnabled(env: ClientChargesChargingEnv): boolean {
+  const v = env.CLIENT_CHARGES_CHARGING_ENABLED?.trim().toLowerCase();
+  return v === "true" || v === "1" || v === "yes";
+}
+
 /** Safe structural summary when GHL does not publish a response schema (no secret values). */
 export function summarizeUnknownJsonShape(
   value: unknown,

@@ -222,15 +222,15 @@ function chargeStatusLabel(row: ClientChargeRow) {
   return row.charge.status;
 }
 
-function canCharge(row: ClientChargeRow, isAdmin: boolean) {
-  if (!isAdmin) return false;
+function canCharge(row: ClientChargeRow, isAdmin: boolean, chargingEnabled: boolean) {
+  if (!isAdmin || !chargingEnabled) return false;
   if (!row.charge) return true;
   const status = row.charge.status.toLowerCase();
   return status !== "succeeded" && status !== "pending";
 }
 
-function canRetry(row: ClientChargeRow, isAdmin: boolean) {
-  if (!isAdmin || !row.charge) return false;
+function canRetry(row: ClientChargeRow, isAdmin: boolean, chargingEnabled: boolean) {
+  if (!isAdmin || !chargingEnabled || !row.charge) return false;
   return row.charge.status.toLowerCase() === "failed";
 }
 
@@ -280,6 +280,7 @@ function ClientChargesLocationDetail({
   locationId,
   range,
   isAdmin,
+  chargingEnabled,
   busyAppointmentId,
   onRequestCharge
 }: {
@@ -287,6 +288,7 @@ function ClientChargesLocationDetail({
   locationId: string;
   range: DateRangeStrings;
   isAdmin: boolean;
+  chargingEnabled: boolean;
   busyAppointmentId: string | null;
   onRequestCharge: (row: ClientChargeRow, mode: "charge" | "retry") => void;
 }) {
@@ -508,7 +510,7 @@ function ClientChargesLocationDetail({
                         </td>
                         {isAdmin ? (
                           <td className="dashboard-th-actions">
-                            {canRetry(row, isAdmin) ? (
+                            {canRetry(row, isAdmin, chargingEnabled) ? (
                               <button
                                 className="button secondary"
                                 disabled={busy}
@@ -517,7 +519,7 @@ function ClientChargesLocationDetail({
                               >
                                 {busy ? "…" : "Retry"}
                               </button>
-                            ) : canCharge(row, isAdmin) ? (
+                            ) : canCharge(row, isAdmin, chargingEnabled) ? (
                               <button
                                 className="button"
                                 disabled={busy}
@@ -528,6 +530,8 @@ function ClientChargesLocationDetail({
                               </button>
                             ) : succeeded || pending ? (
                               <span className="muted">{succeeded ? "Done" : "Pending"}</span>
+                            ) : isAdmin && !chargingEnabled ? (
+                              <span className="muted">Charges paused</span>
                             ) : (
                               <span className="muted">—</span>
                             )}
@@ -617,6 +621,7 @@ export default function ClientChargesPage() {
   const [stripeCustomerDrafts, setStripeCustomerDrafts] = useState<Record<string, string>>({});
   const [syncAllBusy, setSyncAllBusy] = useState(false);
   const [platformStripeLabel, setPlatformStripeLabel] = useState<string | null>(null);
+  const [clientChargesChargingEnabled, setClientChargesChargingEnabled] = useState(false);
 
   const query = useMemo(
     () =>
@@ -721,6 +726,7 @@ export default function ClientChargesPage() {
   const loadPlatformStripeStatus = useCallback(async () => {
     if (!isAdmin) {
       setPlatformStripeLabel(null);
+      setClientChargesChargingEnabled(false);
       return;
     }
     try {
@@ -731,7 +737,9 @@ export default function ClientChargesPage() {
       const payload = (await res.json().catch(() => ({}))) as {
         configured?: boolean;
         platformAccountMasked?: string | null;
+        clientChargesChargingEnabled?: boolean;
       };
+      setClientChargesChargingEnabled(Boolean(payload.clientChargesChargingEnabled));
       if (!res.ok || !payload.configured) {
         setPlatformStripeLabel("Platform Stripe: not configured");
         return;
@@ -743,8 +751,15 @@ export default function ClientChargesPage() {
       );
     } catch {
       setPlatformStripeLabel(null);
+      setClientChargesChargingEnabled(false);
     }
   }, [apiBaseUrl, isAdmin]);
+
+  useEffect(() => {
+    if (isAdmin) {
+      void loadPlatformStripeStatus();
+    }
+  }, [isAdmin, loadPlatformStripeStatus, sessionKey]);
 
   useEffect(() => {
     if (showEligibility) {
@@ -990,9 +1005,14 @@ export default function ClientChargesPage() {
         ambiguous?: boolean;
       };
       if (!res.ok || payload.ok === false) {
+        if (payload.error === "charging_disabled") {
+          throw new Error(
+            "Stripe charges are paused on the API (GHL sync still works). Set CLIENT_CHARGES_CHARGING_ENABLED=true on the Worker when ready."
+          );
+        }
         const billingHint =
           payload.error === "billing_not_ready"
-            ? " Set up Stripe Connect and a saved payment method under Location eligibility."
+            ? " Sync Stripe from GHL or add a payment method under Location eligibility."
             : "";
         throw new Error(
           (payload.message ??
@@ -1114,6 +1134,15 @@ export default function ClientChargesPage() {
         </div>
       ) : null}
       {actionError ? <p className="empty">{actionError}</p> : null}
+      {isAdmin && !clientChargesChargingEnabled ? (
+        <div className="panel" style={{ marginTop: 12, padding: 14, borderLeft: "4px solid var(--warning, #c9a227)" }}>
+          <p style={{ margin: 0 }}>
+            <strong>Stripe charges are paused.</strong> Sync from GHL, verify <code>cus_…</code>, and add payment
+            methods still work. No one can be charged until{" "}
+            <code>CLIENT_CHARGES_CHARGING_ENABLED=true</code> is set on the API Worker.
+          </p>
+        </div>
+      ) : null}
 
       {!overviewLoading && totals ? (
         <div className="dashboard-kpi-grid">
@@ -1345,6 +1374,7 @@ export default function ClientChargesPage() {
                         <ClientChargesLocationDetail
                           apiBaseUrl={apiBaseUrl}
                           busyAppointmentId={busyAppointmentId}
+                          chargingEnabled={clientChargesChargingEnabled}
                           isAdmin={isAdmin}
                           locationId={row.locationId}
                           onRequestCharge={(chargeRow, mode) => {

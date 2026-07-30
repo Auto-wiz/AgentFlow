@@ -1,13 +1,15 @@
 import Stripe from "stripe";
 
 import {
+  isClientChargesChargingEnabled,
   isStripeChargeAmbiguousHttpStatus,
   mapStripeChargeErrorMessage,
   stripeConnectedChargeRequestOptions,
-  toStripeMinorUnits
+  toStripeMinorUnits,
+  type ClientChargesChargingEnv
 } from "./client-charges-logic.js";
 
-export type ClientChargeStripeEnv = {
+export type ClientChargeStripeEnv = ClientChargesChargingEnv & {
   STRIPE_SECRET_KEY?: string;
 };
 
@@ -84,6 +86,16 @@ export async function createStripeClientCharge(
       ambiguous: false,
       status: null,
       error: "STRIPE_SECRET_KEY is not configured",
+      request,
+      response: {}
+    };
+  }
+  if (!isClientChargesChargingEnabled(env)) {
+    return {
+      ok: false,
+      ambiguous: false,
+      status: null,
+      error: "charging_disabled",
       request,
       response: {}
     };
