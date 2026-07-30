@@ -71,6 +71,8 @@ wrangler secret put GHL_API_TOKEN
 wrangler secret put GHL_CLIENT_ID
 wrangler secret put GHL_CLIENT_SECRET
 wrangler secret put JWT_SECRET
+wrangler secret put STRIPE_SECRET_KEY
+wrangler secret put STRIPE_WEBHOOK_SECRET
 ```
 
 Set these Worker variables in the Cloudflare dashboard or as `[vars]` in
@@ -83,6 +85,8 @@ GHL_APP_ID (optional)
 GHL_OAUTH_REDIRECT_URI
 GHL_OAUTH_USER_TYPE
 FRONTEND_BASE_URL
+STRIPE_CONNECT_RETURN_URL (optional)
+STRIPE_CONNECT_REFRESH_URL (optional)
 ```
 
 GoHighLevel OAuth redirect URL:
@@ -146,6 +150,16 @@ Apply migration **`0011_appointment_overrides_and_audit_logs`**.
 4. Audit rows are written today for overrides, provisioning users, admin sub-account seeds, personal picker saves, and legacy viewer-key **`POST /subaccounts/visibility`**.
 
 Appointment counts shown on **`/subaccounts/overview?surface=appointments`** omit hidden-only tallies (**`WHERE hidden_from_ui = false`**).
+
+## Client Charges (Stripe Connect)
+
+Pay-per-result billing charges each enabled subaccount via **Stripe Connect Express** (one connected account per **`locations.id`**) and a **platform Customer** with a saved card. Deposit detection still comes from GHL invoices/orders; Stripe only runs the result fee.
+
+1. Apply migration **`0015_stripe_connect_billing`** (or the latest `stripe_connect` migration in **`packages/db/migrations/`**).
+2. Worker secrets: **`STRIPE_SECRET_KEY`**, **`STRIPE_WEBHOOK_SECRET`**. Vars: **`FRONTEND_BASE_URL`**, optional **`STRIPE_CONNECT_RETURN_URL`** / **`STRIPE_CONNECT_REFRESH_URL`**.
+3. Stripe Dashboard webhook: **`https://api.agentflow.autowiz.net/webhooks/stripe`** — events **`account.updated`**, **`checkout.session.completed`**, **`setup_intent.succeeded`**, **`payment_intent.succeeded`**, **`payment_intent.payment_failed`**.
+4. Start with **`sk_test_…`** and Express test accounts. In the app: **Dashboard → Client Charges → Location eligibility** → **Connect Stripe** → **Add payment method** → enable the subaccount.
+5. OAuth reinstall is **not** required for billing; default Marketplace scopes no longer include **`charges.*`**.
 
 ## Validation
 

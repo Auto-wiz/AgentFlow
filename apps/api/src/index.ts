@@ -113,6 +113,12 @@ import {
   postWorkspaceClientChargeRetryHandler
 } from "./client-charges-handlers.js";
 import {
+  getAdminLocationStripeStatusHandler,
+  postAdminLocationStripeBillingSetupHandler,
+  postAdminLocationStripeConnectHandler
+} from "./stripe-connect-handlers.js";
+import { postStripeWebhookHandler } from "./stripe-webhook-handlers.js";
+import {
   deriveAppointmentCalendarDisplayName,
   hydratePaymentSourcesFromStoredOrdersBatch,
   parsePaymentSourceFromOrderPayload,
@@ -163,8 +169,6 @@ type Env = {
   GHL_CLIENT_ID?: string;
   GHL_CLIENT_SECRET?: string;
   GHL_APP_ID?: string;
-  GHL_CLIENT_CHARGE_METER_ID?: string;
-  GHL_CLIENT_CHARGE_ENDPOINT?: string;
   GHL_INSTALL_URL?: string;
   /**
    * Full "Installation URL" from Developer Portal → your app → Advanced Settings → Auth (Show install link).
@@ -178,6 +182,10 @@ type Env = {
   GHL_OAUTH_REDIRECT_URI?: string;
   GHL_OAUTH_USER_TYPE?: string;
   FRONTEND_BASE_URL?: string;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  STRIPE_CONNECT_RETURN_URL?: string;
+  STRIPE_CONNECT_REFRESH_URL?: string;
   MESSAGE_QUEUE: Queue<NormalizedGhlWebhookEvent>;
   JWT_SECRET?: string;
   /**
@@ -695,6 +703,14 @@ app.post("/workspace/client-charges/:appointmentId/charge", postWorkspaceClientC
 app.post("/workspace/client-charges/:appointmentId/retry", postWorkspaceClientChargeRetryHandler);
 app.get("/admin/client-charges/locations", getAdminClientChargeLocationsHandler);
 app.patch("/admin/client-charges/locations/:locationId", patchAdminClientChargeLocationHandler);
+app.post("/admin/client-charges/locations/:locationId/stripe/connect", postAdminLocationStripeConnectHandler);
+app.get("/admin/client-charges/locations/:locationId/stripe/status", getAdminLocationStripeStatusHandler);
+app.post(
+  "/admin/client-charges/locations/:locationId/stripe/billing-setup",
+  postAdminLocationStripeBillingSetupHandler
+);
+
+app.post("/webhooks/stripe", postStripeWebhookHandler);
 
 app.get("/workspace/dashboard/overview", getWorkspaceDashboardOverviewHandler);
 app.get("/workspace/dashboard/locations/:locationId/detail", getWorkspaceDashboardLocationDetailHandler);

@@ -1,5 +1,4 @@
 import {
-  agencies,
   clientResultChargeEvents,
   clientResultCharges,
   createDb,
@@ -10,7 +9,7 @@ import { AUDIT_ACTION_KINDS, canAccessClientCharges } from "@agentflow/shared";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Context } from "hono";
 
-import { createGhlSubaccountWalletCharge, type ClientChargeGhlEnv } from "./client-charges-ghl.js";
+import { createStripePlatformCharge, type ClientChargeStripeEnv } from "./client-charges-stripe.js";
 import {
   clientChargeIdempotencyKey,
   isChargeRetryable,
@@ -24,6 +23,10 @@ import {
 } from "./client-charges-sql.js";
 import { resolveDashboardBounds } from "./dashboard-handlers.js";
 import {
+  isLocationBillingReady,
+  maskStripeAccountId
+} from "./location-billing-stripe.js";
+import {
   canWorkspaceAccessLocationUuid,
   getHiddenLocationIdsForPolicy,
   jwtWorkspaceAllowedLocationUuidList,
@@ -33,7 +36,7 @@ import {
 } from "./workspace-access.js";
 import { insertWorkspaceAuditLog } from "./workspace-audit.js";
 
-export type ClientChargesEnv = WorkspaceJwtEnv & ClientChargeGhlEnv;
+export type ClientChargesEnv = WorkspaceJwtEnv & ClientChargeStripeEnv;
 type Bindings = { Bindings: ClientChargesEnv };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -193,6 +196,8 @@ function chargePublicRow(row: typeof clientResultCharges.$inferSelect) {
     chargeAmount: row.chargeAmount,
     chargeCurrency: row.chargeCurrency,
     attemptCount: row.attemptCount,
+    stripePaymentIntentId: row.stripePaymentIntentId,
+    stripeChargeId: row.stripeChargeId,
     ghlReferenceId: row.ghlReferenceId,
     ghlTransactionId: row.ghlTransactionId,
     lastError: row.lastError,
@@ -215,19 +220,28 @@ async function writeChargeOutcome(params: {
   const [locationRow] = await db
     .select({
       ghlLocationId: locations.ghlLocationId,
-      companyId: agencies.ghlAgencyId,
-      meterId: locationBillingConfig.ghlMeterId,
       enabled: locationBillingConfig.enabled,
-      configCurrency: locationBillingConfig.currency
+      configCurrency: locationBillingConfig.currency,
+      stripeCustomerId: locationBillingConfig.stripeCustomerId,
+      stripeDefaultPaymentMethodId: locationBillingConfig.stripeDefaultPaymentMethodId,
+      connectChargesEnabled: locationBillingConfig.connectChargesEnabled
     })
     .from(locations)
-    .innerJoin(agencies, eq(locations.agencyId, agencies.id))
     .innerJoin(locationBillingConfig, eq(locationBillingConfig.locationId, locations.id))
     .where(eq(locations.id, candidate.locationId))
     .limit(1);
 
   if (!locationRow?.enabled) {
     throw new Error("location_client_charges_disabled");
+  }
+  if (
+    !isLocationBillingReady({
+      stripeCustomerId: locationRow.stripeCustomerId,
+      stripeDefaultPaymentMethodId: locationRow.stripeDefaultPaymentMethodId,
+      connectChargesEnabled: locationRow.connectChargesEnabled
+    })
+  ) {
+    throw new Error("billing_not_ready");
   }
   const currency = candidate.deposit.currency.toUpperCase();
   if (currency !== locationRow.configCurrency.trim().toUpperCase()) {
@@ -243,22 +257,27 @@ async function writeChargeOutcome(params: {
     attemptNumber,
     actorWorkspaceUserId: actorId,
     payload: {
-      eventId: charge.idempotencyKey,
+      idempotencyKey: charge.idempotencyKey,
       amount: charge.chargeAmount,
       currency: charge.chargeCurrency,
-      retry: isRetry
+      retry: isRetry,
+      provider: "stripe"
     }
   });
 
-  const result = await createGhlSubaccountWalletCharge(c.env, db, {
-    locationId: locationRow.ghlLocationId,
-    companyId: locationRow.companyId,
-    meterId: locationRow.meterId,
-    eventId: charge.idempotencyKey,
-    description: `Result billing for appointment ${candidate.ghlAppointmentId}`,
-    amount: charge.chargeAmount,
+  const result = await createStripePlatformCharge(c.env, {
+    customerId: locationRow.stripeCustomerId!.trim(),
+    paymentMethodId: locationRow.stripeDefaultPaymentMethodId!.trim(),
+    amountMajor: charge.chargeAmount,
     currency: charge.chargeCurrency,
-    eventTime: new Date(candidate.deposit.paidAt ?? candidate.appointmentBookedAt)
+    idempotencyKey: charge.idempotencyKey,
+    description: `Result billing for appointment ${candidate.ghlAppointmentId}`,
+    metadata: {
+      appointmentId: candidate.appointmentId,
+      locationId: candidate.locationId,
+      ghlAppointmentId: candidate.ghlAppointmentId,
+      ghlLocationId: locationRow.ghlLocationId
+    }
   });
 
   const now = new Date();
@@ -269,8 +288,8 @@ async function writeChargeOutcome(params: {
         status: "succeeded",
         requestSnapshot: result.request,
         responseSnapshot: result.response,
-        ghlReferenceId: result.externalReferenceId ?? charge.idempotencyKey,
-        ghlTransactionId: result.transactionId,
+        stripePaymentIntentId: result.paymentIntentId,
+        stripeChargeId: result.chargeId,
         lastError: null,
         succeededAt: now,
         failedAt: null,
@@ -284,7 +303,7 @@ async function writeChargeOutcome(params: {
       eventType: "succeeded",
       attemptNumber,
       actorWorkspaceUserId: actorId,
-      payload: { status: result.status, response: result.response }
+      payload: { status: result.status, response: result.response, provider: "stripe" }
     });
     await insertWorkspaceAuditLog(db, {
       actorWorkspaceUserId: actorId,
@@ -296,8 +315,8 @@ async function writeChargeOutcome(params: {
       details: {
         appointmentId: candidate.appointmentId,
         canonicalDeposit: candidate.deposit,
-        ghlReferenceId: result.externalReferenceId,
-        ghlTransactionId: result.transactionId
+        stripePaymentIntentId: result.paymentIntentId,
+        stripeChargeId: result.chargeId
       }
     });
     return { status: 200 as const, body: { ok: true as const, charge: chargePublicRow(updated!) } };
@@ -305,7 +324,7 @@ async function writeChargeOutcome(params: {
 
   const nextStatus = result.ambiguous ? "pending" : "failed";
   const errorMessage = result.ambiguous
-    ? `Ambiguous GHL outcome — do not retry until reconciled: ${result.error}`
+    ? `Ambiguous Stripe outcome — do not retry until reconciled: ${result.error}`
     : result.error;
   const [updated] = await db
     .update(clientResultCharges)
@@ -313,6 +332,8 @@ async function writeChargeOutcome(params: {
       status: nextStatus,
       requestSnapshot: result.request,
       responseSnapshot: result.response,
+      stripePaymentIntentId:
+        typeof result.response.id === "string" ? result.response.id : charge.stripePaymentIntentId,
       lastError: errorMessage,
       failedAt: result.ambiguous ? null : now,
       updatedAt: now
@@ -328,7 +349,8 @@ async function writeChargeOutcome(params: {
       ambiguous: result.ambiguous,
       status: result.status,
       error: result.error,
-      response: result.response
+      response: result.response,
+      provider: "stripe"
     }
   });
   await insertWorkspaceAuditLog(db, {
@@ -383,7 +405,7 @@ async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
       return c.json(
         {
           error: "charge_not_retryable",
-          message: "Only definitive failed charges can be retried; pending may already have charged the wallet."
+          message: "Only definitive failed charges can be retried; pending may already have reached Stripe."
         },
         409
       );
@@ -427,7 +449,7 @@ async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
         charge: candidate.charge,
         message:
           candidate.charge.status === "pending"
-            ? "A charge is already pending; it may already have reached GHL."
+            ? "A charge is already pending; it may already have reached Stripe."
             : "This appointment already has a client charge ledger entry."
       },
       candidate.charge.status === "succeeded" ? 200 : 409
@@ -510,7 +532,17 @@ export async function postWorkspaceClientChargeHandler(c: Context<Bindings>) {
     return await chargeOrRetryHandler(c, false);
   } catch (error) {
     console.error("[client_charges.charge]", error);
-    return c.json({ error: "client_charge_failed", message: deepError(error) }, 500);
+    const message = deepError(error);
+    if (message.includes("billing_not_ready")) {
+      return c.json(
+        {
+          error: "billing_not_ready",
+          message: "Stripe Connect and a saved payment method are required for this subaccount."
+        },
+        402
+      );
+    }
+    return c.json({ error: "client_charge_failed", message }, 500);
   }
 }
 
@@ -519,7 +551,17 @@ export async function postWorkspaceClientChargeRetryHandler(c: Context<Bindings>
     return await chargeOrRetryHandler(c, true);
   } catch (error) {
     console.error("[client_charges.retry]", error);
-    return c.json({ error: "client_charge_retry_failed", message: deepError(error) }, 500);
+    const message = deepError(error);
+    if (message.includes("billing_not_ready")) {
+      return c.json(
+        {
+          error: "billing_not_ready",
+          message: "Stripe Connect and a saved payment method are required for this subaccount."
+        },
+        402
+      );
+    }
+    return c.json({ error: "client_charge_retry_failed", message }, 500);
   }
 }
 
@@ -540,7 +582,14 @@ export async function getAdminClientChargeLocationsHandler(c: Context<Bindings>)
       locationName: locations.name,
       enabled: locationBillingConfig.enabled,
       currency: locationBillingConfig.currency,
-      meterId: locationBillingConfig.ghlMeterId,
+      stripeAccountId: locationBillingConfig.stripeAccountId,
+      stripeCustomerId: locationBillingConfig.stripeCustomerId,
+      stripeDefaultPaymentMethodId: locationBillingConfig.stripeDefaultPaymentMethodId,
+      connectChargesEnabled: locationBillingConfig.connectChargesEnabled,
+      connectPayoutsEnabled: locationBillingConfig.connectPayoutsEnabled,
+      connectOnboardingStatus: locationBillingConfig.connectOnboardingStatus,
+      connectDetailsSubmitted: locationBillingConfig.connectDetailsSubmitted,
+      billingReadyAt: locationBillingConfig.billingReadyAt,
       updatedAt: locationBillingConfig.updatedAt
     })
     .from(locations)
@@ -548,13 +597,29 @@ export async function getAdminClientChargeLocationsHandler(c: Context<Bindings>)
     .where(filters)
     .orderBy(asc(locations.name), asc(locations.ghlLocationId));
   return c.json({
-    locations: rows.map((row) => ({
-      ...row,
-      enabled: row.enabled ?? false,
-      currency: row.currency ?? "USD",
-      meterId: row.meterId ?? null,
-      updatedAt: row.updatedAt?.toISOString() ?? null
-    }))
+    locations: rows.map((row) => {
+      const billingReady = isLocationBillingReady({
+        stripeCustomerId: row.stripeCustomerId,
+        stripeDefaultPaymentMethodId: row.stripeDefaultPaymentMethodId,
+        connectChargesEnabled: row.connectChargesEnabled ?? false
+      });
+      return {
+        locationId: row.locationId,
+        ghlLocationId: row.ghlLocationId,
+        locationName: row.locationName,
+        enabled: row.enabled ?? false,
+        currency: row.currency ?? "USD",
+        billingReady,
+        stripeAccountMasked: maskStripeAccountId(row.stripeAccountId),
+        connectOnboardingStatus: row.connectOnboardingStatus ?? null,
+        connectDetailsSubmitted: row.connectDetailsSubmitted ?? false,
+        connectChargesEnabled: row.connectChargesEnabled ?? false,
+        connectPayoutsEnabled: row.connectPayoutsEnabled ?? false,
+        hasPaymentMethod: Boolean(row.stripeDefaultPaymentMethodId?.trim()),
+        billingReadyAt: row.billingReadyAt?.toISOString() ?? null,
+        updatedAt: row.updatedAt?.toISOString() ?? null
+      };
+    })
   });
 }
 
@@ -580,8 +645,35 @@ export async function patchAdminClientChargeLocationHandler(c: Context<Bindings>
       typeof body.currency === "string" && /^[A-Za-z]{3}$/.test(body.currency.trim())
         ? body.currency.trim().toUpperCase()
         : "USD";
-    const meterId =
-      typeof body.meterId === "string" && body.meterId.trim() ? body.meterId.trim() : null;
+
+    if (body.enabled) {
+      const [check] = await db
+        .select({
+          stripeCustomerId: locationBillingConfig.stripeCustomerId,
+          stripeDefaultPaymentMethodId: locationBillingConfig.stripeDefaultPaymentMethodId,
+          connectChargesEnabled: locationBillingConfig.connectChargesEnabled
+        })
+        .from(locationBillingConfig)
+        .where(eq(locationBillingConfig.locationId, locationId))
+        .limit(1);
+      if (
+        !check ||
+        !isLocationBillingReady({
+          stripeCustomerId: check.stripeCustomerId,
+          stripeDefaultPaymentMethodId: check.stripeDefaultPaymentMethodId,
+          connectChargesEnabled: check.connectChargesEnabled ?? false
+        })
+      ) {
+        return c.json(
+          {
+            error: "billing_not_ready",
+            message: "Complete Stripe Connect onboarding and add a payment method before enabling."
+          },
+          400
+        );
+      }
+    }
+
     const now = new Date();
     const [row] = await db
       .insert(locationBillingConfig)
@@ -589,7 +681,6 @@ export async function patchAdminClientChargeLocationHandler(c: Context<Bindings>
         locationId,
         enabled: body.enabled,
         currency,
-        ghlMeterId: meterId,
         updatedByWorkspaceUserId: me.id,
         updatedAt: now
       })
@@ -598,7 +689,6 @@ export async function patchAdminClientChargeLocationHandler(c: Context<Bindings>
         set: {
           enabled: body.enabled,
           currency,
-          ghlMeterId: meterId,
           updatedByWorkspaceUserId: me.id,
           updatedAt: now
         }
@@ -610,14 +700,13 @@ export async function patchAdminClientChargeLocationHandler(c: Context<Bindings>
       entityType: "location_billing_config",
       locationId,
       summary: `${body.enabled ? "Enabled" : "Disabled"} Client Charges for subaccount`,
-      details: { enabled: body.enabled, currency, meterId }
+      details: { enabled: body.enabled, currency, provider: "stripe" }
     });
     return c.json({
       config: {
         locationId: row!.locationId,
         enabled: row!.enabled,
         currency: row!.currency,
-        meterId: row!.ghlMeterId,
         updatedAt: row!.updatedAt.toISOString()
       }
     });

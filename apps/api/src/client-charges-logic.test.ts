@@ -10,8 +10,10 @@ import {
   isChargeActionDisabled,
   isChargeRetryable,
   isValidChargeCurrency,
+  mapStripeChargeErrorMessage,
   normalizeChargeAmount,
-  pickCanonicalDepositSource
+  pickCanonicalDepositSource,
+  toStripeMinorUnits
 } from "./client-charges-logic.ts";
 
 describe("canonical deposit precedence", () => {
@@ -91,6 +93,28 @@ describe("idempotency and retry gates", () => {
     assert.equal(isChargeActionDisabled("succeeded"), true);
     assert.equal(isChargeActionDisabled("failed"), false);
     assert.equal(isChargeActionDisabled(null), false);
+  });
+});
+
+describe("Stripe amount and error mapping", () => {
+  it("converts USD major units to cents", () => {
+    assert.equal(toStripeMinorUnits(47.5, "USD"), 4750);
+    assert.equal(toStripeMinorUnits(1, "usd"), 100);
+  });
+
+  it("uses whole units for zero-decimal currencies", () => {
+    assert.equal(toStripeMinorUnits(500, "JPY"), 500);
+  });
+
+  it("rejects invalid amounts", () => {
+    assert.equal(toStripeMinorUnits(0, "USD"), null);
+    assert.equal(toStripeMinorUnits(-2, "USD"), null);
+  });
+
+  it("maps Stripe error codes for UI", () => {
+    assert.match(mapStripeChargeErrorMessage("authentication_required", ""), /authentication/i);
+    assert.equal(mapStripeChargeErrorMessage("card_declined", "Your card was declined."), "Your card was declined.");
+    assert.equal(mapStripeChargeErrorMessage(undefined, "Network error"), "Network error");
   });
 });
 

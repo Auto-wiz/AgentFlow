@@ -52,3 +52,33 @@ export function isChargeActionDisabled(status: string | null | undefined): boole
 export function clientChargeIdempotencyKey(appointmentId: string): string {
   return `agentflow-result-${appointmentId.trim()}`;
 }
+
+/** Ledger amounts are major currency units (e.g. USD dollars). Stripe expects minor units. */
+const ZERO_DECIMAL_CURRENCIES = new Set(["BIF", "CLP", "DJF", "GNF", "JPY", "KMF", "KRW", "MGA", "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF"]);
+
+export function toStripeMinorUnits(majorAmount: number, currency: string): number | null {
+  if (!Number.isFinite(majorAmount) || majorAmount <= 0) return null;
+  const code = currency.trim().toUpperCase();
+  if (ZERO_DECIMAL_CURRENCIES.has(code)) {
+    return Math.round(majorAmount);
+  }
+  return Math.round(majorAmount * 100);
+}
+
+export function mapStripeChargeErrorMessage(code: string | undefined, message: string | undefined): string {
+  const c = (code ?? "").toLowerCase();
+  if (c === "authentication_required") {
+    return "Card requires authentication — add or update the payment method for this subaccount.";
+  }
+  if (c === "card_declined") {
+    return message?.trim() || "Card was declined.";
+  }
+  if (c === "insufficient_funds") {
+    return "Insufficient funds on the saved payment method.";
+  }
+  return message?.trim() || code?.trim() || "Stripe charge failed";
+}
+
+export function isStripeChargeAmbiguousHttpStatus(status: number | undefined): boolean {
+  return status == null || status >= 500;
+}

@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { canAccessClientCharges } from "@agentflow/shared";
 
@@ -121,7 +122,14 @@ type BillingLocationConfig = {
   locationName: string | null;
   enabled: boolean;
   currency: string;
-  meterId: string | null;
+  billingReady: boolean;
+  stripeAccountMasked: string | null;
+  connectOnboardingStatus: string | null;
+  connectDetailsSubmitted: boolean;
+  connectChargesEnabled: boolean;
+  connectPayoutsEnabled: boolean;
+  hasPaymentMethod: boolean;
+  billingReadyAt: string | null;
   updatedAt: string | null;
 };
 
@@ -176,6 +184,14 @@ function depositSourceLabel(deposit: CanonicalDeposit) {
         ? "correlated order"
         : "correlated invoice";
   return `${kind} · ${match}`;
+}
+
+function stripeConnectStatusLabel(loc: BillingLocationConfig) {
+  if (loc.billingReady) return "Ready";
+  if (!loc.stripeAccountMasked) return "Not started";
+  if (!loc.connectDetailsSubmitted || !loc.connectChargesEnabled) return "Onboarding";
+  if (!loc.hasPaymentMethod) return "Needs payment method";
+  return "Onboarding";
 }
 
 function buildGhlPaymentOrderUrl(
@@ -515,6 +531,7 @@ export default function ClientChargesPage() {
   const { user, hydrated, sessionKey } = useWorkspaceAuth();
   const isAdmin = hydrated && user?.role === "admin";
   const canUseClientCharges = hydrated && canAccessClientCharges(user?.email);
+  const searchParams = useSearchParams();
 
   useEffect(() => {
     if (!hydrated) return;
@@ -659,6 +676,13 @@ export default function ClientChargesPage() {
     }
   }, [loadBillingLocations, showEligibility, sessionKey]);
 
+  useEffect(() => {
+    const stripeFlow = searchParams.get("stripe");
+    if (!stripeFlow || !isAdmin) return;
+    setShowEligibility(true);
+    void loadBillingLocations();
+  }, [searchParams, isAdmin, loadBillingLocations]);
+
   function notifyDetailRefresh(locationId?: string) {
     window.dispatchEvent(new CustomEvent("client-charges:refresh-detail", { detail: { locationId } }));
   }
@@ -673,13 +697,20 @@ export default function ClientChargesPage() {
         headers: mergeWorkspaceHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           enabled,
-          currency: loc.currency || "USD",
-          meterId: loc.meterId
+          currency: loc.currency || "USD"
         })
       });
-      const payload = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+      const payload = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        message?: string;
+        code?: string;
+      };
       if (!res.ok) {
-        throw new Error(payload.message ?? payload.error ?? "Update failed");
+        const hint =
+          payload.error === "billing_not_ready" || payload.code === "billing_not_ready"
+            ? " Complete Stripe Connect and add a payment method under Location eligibility."
+            : "";
+        throw new Error((payload.message ?? payload.error ?? "Update failed") + hint);
       }
       await loadBillingLocations();
       await loadOverview();
@@ -687,6 +718,60 @@ export default function ClientChargesPage() {
     } catch (caught) {
       setBillingError(caught instanceof Error ? caught.message : "Update failed");
     } finally {
+      setBillingBusyId(null);
+    }
+  }
+
+  async function startStripeConnect(loc: BillingLocationConfig) {
+    setBillingBusyId(loc.locationId);
+    setBillingError(null);
+    try {
+      const res = await fetch(
+        `${apiBaseUrl}/admin/client-charges/locations/${loc.locationId}/stripe/connect`,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: mergeWorkspaceHeaders()
+        }
+      );
+      const payload = (await res.json().catch(() => ({}))) as {
+        url?: string;
+        error?: string;
+        message?: string;
+      };
+      if (!res.ok || !payload.url) {
+        throw new Error(payload.message ?? payload.error ?? "Unable to start Stripe Connect");
+      }
+      window.location.assign(payload.url);
+    } catch (caught) {
+      setBillingError(caught instanceof Error ? caught.message : "Unable to start Stripe Connect");
+      setBillingBusyId(null);
+    }
+  }
+
+  async function startBillingSetup(loc: BillingLocationConfig) {
+    setBillingBusyId(loc.locationId);
+    setBillingError(null);
+    try {
+      const res = await fetch(
+        `${apiBaseUrl}/admin/client-charges/locations/${loc.locationId}/stripe/billing-setup`,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: mergeWorkspaceHeaders()
+        }
+      );
+      const payload = (await res.json().catch(() => ({}))) as {
+        url?: string;
+        error?: string;
+        message?: string;
+      };
+      if (!res.ok || !payload.url) {
+        throw new Error(payload.message ?? payload.error ?? "Unable to open billing setup");
+      }
+      window.location.assign(payload.url);
+    } catch (caught) {
+      setBillingError(caught instanceof Error ? caught.message : "Unable to open billing setup");
       setBillingBusyId(null);
     }
   }
@@ -711,12 +796,16 @@ export default function ClientChargesPage() {
         ambiguous?: boolean;
       };
       if (!res.ok || payload.ok === false) {
+        const billingHint =
+          payload.error === "billing_not_ready"
+            ? " Set up Stripe Connect and a saved payment method under Location eligibility."
+            : "";
         throw new Error(
-          payload.message ??
+          (payload.message ??
             payload.error ??
             (payload.ambiguous
               ? "Charge outcome is ambiguous — reconcile before retrying."
-              : "Charge failed")
+              : "Charge failed")) + billingHint
         );
       }
       setConfirmRow(null);
@@ -1089,8 +1178,9 @@ export default function ClientChargesPage() {
         <div className="panel" style={{ padding: 18, marginTop: 20 }}>
           <h2 style={{ marginTop: 0 }}>Location eligibility</h2>
           <p className="muted">
-            Client Charges stay off by default. Enable a subaccount only after the GHL dynamic billing meter and wallet
-            scopes are configured. The charge amount always mirrors the lead&apos;s paid deposit for that appointment.
+            Client Charges stay off by default. Each subaccount needs Stripe Connect onboarding and a saved payment
+            method before you enable billing. The charge amount always mirrors the lead&apos;s paid deposit for that
+            appointment.
           </p>
           {billingLoading ? <p className="muted">Loading locations…</p> : null}
           {billingError ? <div className="empty">{billingError}</div> : null}
@@ -1112,24 +1202,53 @@ export default function ClientChargesPage() {
                 value={billingSearch}
               />
               <div className="subaccounts-config-list" style={{ marginTop: 16 }}>
-                {filteredBillingLocs.map((loc) => (
-                  <label className="subaccount-config-row" key={loc.locationId}>
-                    <div>
-                      <strong>{formatLocationName(loc.locationName, loc.ghlLocationId)}</strong>
-                      <div className="muted">
-                        GHL: {loc.ghlLocationId} · {loc.currency}
-                        {loc.meterId ? ` · meter ${loc.meterId}` : " · default meter"}
+                {filteredBillingLocs.map((loc) => {
+                  const status = stripeConnectStatusLabel(loc);
+                  const busy = billingBusyId === loc.locationId;
+                  return (
+                    <div className="subaccount-config-row" key={loc.locationId} style={{ alignItems: "center" }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <strong>{formatLocationName(loc.locationName, loc.ghlLocationId)}</strong>
+                        <div className="muted">
+                          GHL: {loc.ghlLocationId} · {loc.currency} · Stripe: {status}
+                          {loc.stripeAccountMasked ? ` · ${loc.stripeAccountMasked}` : ""}
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                          {!loc.billingReady ? (
+                            <button
+                              className="button secondary"
+                              disabled={busy}
+                              onClick={() => void startStripeConnect(loc)}
+                              type="button"
+                            >
+                              {loc.stripeAccountMasked ? "Continue Connect" : "Connect Stripe"}
+                            </button>
+                          ) : null}
+                          {loc.stripeAccountMasked && !loc.hasPaymentMethod ? (
+                            <button
+                              className="button secondary"
+                              disabled={busy}
+                              onClick={() => void startBillingSetup(loc)}
+                              type="button"
+                            >
+                              Add payment method
+                            </button>
+                          ) : null}
+                        </div>
                       </div>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                        <span className="muted">Enable</span>
+                        <input
+                          aria-label={`Enable Client Charges for ${loc.ghlLocationId}`}
+                          checked={Boolean(loc.enabled)}
+                          disabled={busy || (!loc.billingReady && !loc.enabled)}
+                          onChange={(e) => void patchLocationBilling(loc, e.target.checked)}
+                          type="checkbox"
+                        />
+                      </label>
                     </div>
-                    <input
-                      aria-label={`Enable Client Charges for ${loc.ghlLocationId}`}
-                      checked={Boolean(loc.enabled)}
-                      disabled={billingBusyId === loc.locationId}
-                      onChange={(e) => void patchLocationBilling(loc, e.target.checked)}
-                      type="checkbox"
-                    />
-                  </label>
-                ))}
+                  );
+                })}
               </div>
             </>
           ) : null}
@@ -1157,11 +1276,11 @@ export default function ClientChargesPage() {
         >
           <div className="panel appointments-override-modal panel-narrow">
             <h3 className="appointments-override-modal-title">
-              {confirmMode === "retry" ? "Retry wallet charge" : "Confirm wallet charge"}
+              {confirmMode === "retry" ? "Retry Stripe charge" : "Confirm Stripe charge"}
             </h3>
             <p className="muted appointments-override-subheader">
-              You will charge the sub-account the same amount the lead paid as a deposit. This GHL Marketplace wallet
-              charge is irreversible. Double-check before continuing.
+              You will charge the subaccount the same amount the lead paid as a deposit, using the saved card on file
+              with Stripe. This charge is irreversible. Double-check before continuing.
             </p>
             <dl style={{ margin: "12px 0 0", display: "grid", gap: 8 }}>
               <div>

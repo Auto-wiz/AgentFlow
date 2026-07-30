@@ -619,7 +619,7 @@ export const invoices = pgTable(
   })
 );
 
-/** Per-subaccount opt-in for pay-per-result wallet billing. */
+/** Per-subaccount opt-in for pay-per-result billing (Stripe Connect). */
 export const locationBillingConfig = pgTable(
   "location_billing_config",
   {
@@ -628,7 +628,16 @@ export const locationBillingConfig = pgTable(
       .references(() => locations.id, { onDelete: "cascade" }),
     enabled: boolean("enabled").notNull().default(false),
     currency: text("currency").notNull().default("USD"),
+    /** @deprecated GHL marketplace meter; unused after Stripe Connect migration */
     ghlMeterId: text("ghl_meter_id"),
+    stripeAccountId: text("stripe_account_id"),
+    stripeCustomerId: text("stripe_customer_id"),
+    stripeDefaultPaymentMethodId: text("stripe_default_payment_method_id"),
+    connectChargesEnabled: boolean("connect_charges_enabled").notNull().default(false),
+    connectPayoutsEnabled: boolean("connect_payouts_enabled").notNull().default(false),
+    connectOnboardingStatus: text("connect_onboarding_status"),
+    connectDetailsSubmitted: boolean("connect_details_submitted").notNull().default(false),
+    billingReadyAt: timestamp("billing_ready_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     updatedByWorkspaceUserId: uuid("updated_by_workspace_user_id").references(() => workspaceUsers.id, {
@@ -636,11 +645,12 @@ export const locationBillingConfig = pgTable(
     })
   },
   (table) => ({
-    enabledIdx: index("location_billing_config_enabled_idx").on(table.enabled)
+    enabledIdx: index("location_billing_config_enabled_idx").on(table.enabled),
+    stripeAccountIdx: index("location_billing_config_stripe_account_idx").on(table.stripeAccountId)
   })
 );
 
-/** One idempotent GHL wallet charge per paid appointment. */
+/** One idempotent pay-per-result charge per paid appointment. */
 export const clientResultCharges = pgTable(
   "client_result_charges",
   {
@@ -666,6 +676,8 @@ export const clientResultCharges = pgTable(
     idempotencyKey: text("idempotency_key").notNull(),
     ghlReferenceId: text("ghl_reference_id"),
     ghlTransactionId: text("ghl_transaction_id"),
+    stripePaymentIntentId: text("stripe_payment_intent_id"),
+    stripeChargeId: text("stripe_charge_id"),
     requestSnapshot: jsonb("request_snapshot")
       .$type<Record<string, unknown>>()
       .notNull()
@@ -694,7 +706,8 @@ export const clientResultCharges = pgTable(
     ),
     statusIdx: index("client_result_charges_status_idx").on(table.status),
     paymentOrderIdx: index("client_result_charges_payment_order_idx").on(table.paymentOrderId),
-    invoiceIdx: index("client_result_charges_invoice_idx").on(table.invoiceId)
+    invoiceIdx: index("client_result_charges_invoice_idx").on(table.invoiceId),
+    stripePiIdx: index("client_result_charges_stripe_pi_idx").on(table.stripePaymentIntentId)
   })
 );
 

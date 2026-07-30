@@ -88,6 +88,13 @@
       "when": 1785340800000,
       "tag": "0014_client_result_billing",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1785427200000,
+      "tag": "0015_stripe_connect_billing",
+      "breakpoints": true
     }
   ]
 }
