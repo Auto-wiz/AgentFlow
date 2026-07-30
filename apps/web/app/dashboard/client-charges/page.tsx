@@ -100,6 +100,8 @@ type ClientChargeOverviewRow = {
   failedCount: number;
   currency: string | null;
   mixedCurrencies: boolean;
+  hasStripeCustomer?: boolean;
+  stripeBillingReady?: boolean;
 };
 
 type ClientChargesOverviewResponse = {
@@ -231,6 +233,43 @@ function canRetry(row: ClientChargeRow, isAdmin: boolean) {
 
 function locationLabel(row: Pick<ClientChargeOverviewRow, "locationName" | "ghlLocationId">) {
   return formatLocationName(row.locationName, row.ghlLocationId);
+}
+
+function StripeBillingLinkBadge({
+  hasStripeCustomer,
+  stripeBillingReady
+}: {
+  hasStripeCustomer?: boolean;
+  stripeBillingReady?: boolean;
+}) {
+  if (stripeBillingReady) {
+    return (
+      <span
+        className="client-charges-stripe-badge client-charges-stripe-badge--ready"
+        title="Stripe billing ready (customer and payment method on file)"
+      >
+        Stripe
+      </span>
+    );
+  }
+  if (hasStripeCustomer) {
+    return (
+      <span
+        className="client-charges-stripe-badge client-charges-stripe-badge--partial"
+        title="Stripe customer linked — add or verify payment method in Location eligibility"
+      >
+        Stripe
+      </span>
+    );
+  }
+  return (
+    <span
+      className="client-charges-stripe-badge client-charges-stripe-badge--missing"
+      title="No Stripe customer linked for this subaccount"
+    >
+      Stripe
+    </span>
+  );
 }
 
 function ClientChargesLocationDetail({
@@ -1146,7 +1185,13 @@ export default function ClientChargesPage() {
                         onClick={() => toggleRowDetail(row.locationId)}
                         type="button"
                       >
-                        <span>{locationLabel(row)}</span>
+                        <span className="dashboard-subaccount-expand-label">
+                          <span>{locationLabel(row)}</span>
+                          <StripeBillingLinkBadge
+                            hasStripeCustomer={row.hasStripeCustomer}
+                            stripeBillingReady={row.stripeBillingReady}
+                          />
+                        </span>
                         <span aria-hidden className="dashboard-subaccount-expand-caret">
                           {expandedLocationId === row.locationId ? "\u25BC" : "\u25B6"}
                         </span>

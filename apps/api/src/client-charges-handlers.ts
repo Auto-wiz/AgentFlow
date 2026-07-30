@@ -128,6 +128,34 @@ export async function getWorkspaceClientChargesOverviewHandler(c: Context<Bindin
       sortDirection
     });
 
+    const overviewLocationIds = result.subaccounts.map((row) => row.locationId);
+    if (overviewLocationIds.length > 0) {
+      const billingRows = await scoped.db
+        .select({
+          locationId: locationBillingConfig.locationId,
+          stripeAccountId: locationBillingConfig.stripeAccountId,
+          stripeCustomerId: locationBillingConfig.stripeCustomerId,
+          stripeDefaultPaymentMethodId: locationBillingConfig.stripeDefaultPaymentMethodId,
+          connectChargesEnabled: locationBillingConfig.connectChargesEnabled
+        })
+        .from(locationBillingConfig)
+        .where(inArray(locationBillingConfig.locationId, overviewLocationIds));
+      const billingByLocation = new Map(billingRows.map((row) => [row.locationId, row]));
+      result.subaccounts = result.subaccounts.map((row) => {
+        const billing = billingByLocation.get(row.locationId);
+        const hasStripeCustomer = Boolean(billing?.stripeCustomerId?.trim());
+        const stripeBillingReady = billing
+          ? isLocationBillingReady({
+              stripeAccountId: billing.stripeAccountId,
+              stripeCustomerId: billing.stripeCustomerId,
+              stripeDefaultPaymentMethodId: billing.stripeDefaultPaymentMethodId,
+              connectChargesEnabled: billing.connectChargesEnabled ?? false
+            })
+          : false;
+        return { ...row, hasStripeCustomer, stripeBillingReady };
+      });
+    }
+
     c.header("Cache-Control", "private, no-store, max-age=0");
     return c.json({
       fromInclusive: bounds.from.toISOString(),

@@ -88,6 +88,8 @@ export type ClientChargeOverviewRow = {
   failedCount: number;
   currency: string | null;
   mixedCurrencies: boolean;
+  hasStripeCustomer?: boolean;
+  stripeBillingReady?: boolean;
 };
 
 export type ClientChargeOverviewResult = {
