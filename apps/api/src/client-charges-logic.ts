@@ -189,6 +189,66 @@ export function extractSaasSubscriptionStripeCustomerId(payload: unknown): strin
   return visit(payload, 0);
 }
 
+function saasRowGhlLocationId(row: Record<string, unknown>): string | null {
+  for (const key of ["locationId", "location_id", "id"]) {
+    const v = row[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+/** Pick one SaaS location row from GET /saas/saas-locations/:companyId (v3) list payloads. */
+export function findGhlSaasLocationRecord(
+  payload: unknown,
+  ghlLocationId: string
+): Record<string, unknown> | null {
+  const target = ghlLocationId.trim();
+  if (!target) return null;
+
+  const scanArray = (arr: unknown[]): Record<string, unknown> | null => {
+    for (const item of arr) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const row = item as Record<string, unknown>;
+      if (saasRowGhlLocationId(row) === target) return row;
+    }
+    return null;
+  };
+
+  const visit = (value: unknown, depth: number): Record<string, unknown> | null => {
+    if (depth > 6 || value == null) return null;
+    if (Array.isArray(value)) return scanArray(value);
+    if (typeof value !== "object") return null;
+    const obj = value as Record<string, unknown>;
+    if (saasRowGhlLocationId(obj) === target) return obj;
+    for (const key of ["locations", "saasLocations", "data", "items", "results"]) {
+      const nested = obj[key];
+      if (Array.isArray(nested)) {
+        const found = scanArray(nested);
+        if (found) return found;
+      }
+      if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+        const found = visit(nested, depth + 1);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
+  return visit(payload, 0);
+}
+
+/** True when a v3 saas-locations page has no rows (end of pagination). */
+export function isEmptySaasLocationsPage(payload: unknown): boolean {
+  const row = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : null;
+  if (!row) return true;
+  for (const key of ["locations", "saasLocations", "data", "items", "results"]) {
+    const nested = row[key];
+    if (Array.isArray(nested)) return nested.length === 0;
+  }
+  if (Array.isArray(payload)) return payload.length === 0;
+  return false;
+}
+
 export function pickDefaultPaymentMethodIdFromStripeCustomer(
   customer: {
     invoice_settings?: { default_payment_method?: string | { id?: string } | null } | null;

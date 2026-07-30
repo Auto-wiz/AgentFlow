@@ -16,6 +16,7 @@ import {
   normalizeStripeConnectAccountId,
   normalizeStripeCustomerId,
   extractSaasSubscriptionStripeCustomerId,
+  findGhlSaasLocationRecord,
   summarizeUnknownJsonShape,
   isClientChargesChargingEnabled,
   pickCanonicalDepositSource,
@@ -141,6 +142,20 @@ describe("Stripe customer id and GHL SaaS payload", () => {
     assert.equal(isClientChargesChargingEnabled({ CLIENT_CHARGES_CHARGING_ENABLED: "false" }), false);
     assert.equal(isClientChargesChargingEnabled({ CLIENT_CHARGES_CHARGING_ENABLED: "true" }), true);
     assert.equal(isClientChargesChargingEnabled({ CLIENT_CHARGES_CHARGING_ENABLED: "1" }), true);
+  });
+
+  it("finds a location row in saas-locations v3 list payloads", () => {
+    const row = findGhlSaasLocationRecord(
+      {
+        locations: [
+          { locationId: "loc_a", customerId: "cus_abc123" },
+          { locationId: "loc_b", stripeCustomerId: "cus_other9" }
+        ]
+      },
+      "loc_a"
+    );
+    assert.equal(row?.customerId, "cus_abc123");
+    assert.equal(extractSaasSubscriptionStripeCustomerId(row), "cus_abc123");
   });
 });
 
