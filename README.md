@@ -85,8 +85,6 @@ GHL_APP_ID (optional)
 GHL_OAUTH_REDIRECT_URI
 GHL_OAUTH_USER_TYPE
 FRONTEND_BASE_URL
-STRIPE_CONNECT_RETURN_URL (optional)
-STRIPE_CONNECT_REFRESH_URL (optional)
 ```
 
 GoHighLevel OAuth redirect URL:
@@ -153,13 +151,13 @@ Appointment counts shown on **`/subaccounts/overview?surface=appointments`** omi
 
 ## Client Charges (Stripe Connect)
 
-Pay-per-result billing charges each enabled subaccount via **Stripe Connect Express** (one connected account per **`locations.id`**) and a **platform Customer** with a saved card. Deposit detection still comes from GHL invoices/orders; Stripe only runs the result fee.
+Pay-per-result billing uses **one platform Stripe account** (`STRIPE_SECRET_KEY`) and **existing Connect accounts** you create in the Stripe dashboard. Each GHL subaccount is linked manually by **`acct_…`** in the app; charges are **direct** on that connected account (saved card via Checkout setup on the connected account).
 
-1. Apply migration **`0015_stripe_connect_billing`** (or the latest `stripe_connect` migration in **`packages/db/migrations/`**).
-2. Worker secrets: **`STRIPE_SECRET_KEY`**, **`STRIPE_WEBHOOK_SECRET`**. Vars: **`FRONTEND_BASE_URL`**, optional **`STRIPE_CONNECT_RETURN_URL`** / **`STRIPE_CONNECT_REFRESH_URL`**.
-3. Stripe Dashboard webhook: **`https://api.agentflow.autowiz.net/webhooks/stripe`** — events **`account.updated`**, **`checkout.session.completed`**, **`setup_intent.succeeded`**, **`payment_intent.succeeded`**, **`payment_intent.payment_failed`**.
-4. Start with **`sk_test_…`** and Express test accounts. In the app: **Dashboard → Client Charges → Location eligibility** → **Connect Stripe** → **Add payment method** → enable the subaccount.
-5. OAuth reinstall is **not** required for billing; default Marketplace scopes no longer include **`charges.*`**.
+1. Apply migrations through **`0016_stripe_account_id_unique`** (includes **`0015_stripe_connect_billing`**).
+2. Worker secrets: **`STRIPE_SECRET_KEY`**, **`STRIPE_WEBHOOK_SECRET`**. Var: **`FRONTEND_BASE_URL`** (Checkout return URLs).
+3. Stripe Dashboard webhook on the **platform** account: **`https://api.agentflow.autowiz.net/webhooks/stripe`**. Enable **Connect** (connected account) events: **`account.updated`**, **`checkout.session.completed`**, **`setup_intent.succeeded`**, **`payment_intent.succeeded`**, **`payment_intent.payment_failed`**.
+4. Test with **`sk_test_…`**. In the app: **Dashboard → Client Charges → Location eligibility** → paste **`acct_…`** → **Save / verify** → **Add payment method** → enable the subaccount.
+5. OAuth reinstall is **not** required for billing; default Marketplace scopes omit **`charges.*`**.
 
 ## Validation
 

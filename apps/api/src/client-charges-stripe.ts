@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import {
   isStripeChargeAmbiguousHttpStatus,
   mapStripeChargeErrorMessage,
+  stripeConnectedChargeRequestOptions,
   toStripeMinorUnits
 } from "./client-charges-logic.js";
 
@@ -10,7 +11,8 @@ export type ClientChargeStripeEnv = {
   STRIPE_SECRET_KEY?: string;
 };
 
-export type StripePlatformChargeRequest = {
+export type StripeConnectedChargeRequest = {
+  connectedAccountId: string;
   customerId: string;
   paymentMethodId: string;
   amountMajor: number;
@@ -20,7 +22,7 @@ export type StripePlatformChargeRequest = {
   metadata: Record<string, string>;
 };
 
-export type StripePlatformChargeResult =
+export type StripeConnectedChargeResult =
   | {
       ok: true;
       ambiguous: false;
@@ -55,13 +57,17 @@ export function createStripeClient(env: ClientChargeStripeEnv): Stripe | null {
   return getStripe(env);
 }
 
-export async function createStripePlatformCharge(
+export { stripeConnectedChargeRequestOptions };
+
+export async function createStripeConnectedAccountCharge(
   env: ClientChargeStripeEnv,
-  input: StripePlatformChargeRequest
-): Promise<StripePlatformChargeResult> {
+  input: StripeConnectedChargeRequest
+): Promise<StripeConnectedChargeResult> {
   const stripe = getStripe(env);
+  const connectedAccountId = input.connectedAccountId.trim();
   const minor = toStripeMinorUnits(input.amountMajor, input.currency);
   const request: Record<string, unknown> = {
+    connectedAccountId,
     customerId: input.customerId,
     paymentMethodId: input.paymentMethodId,
     amountMajor: input.amountMajor,
@@ -82,6 +88,16 @@ export async function createStripePlatformCharge(
       response: {}
     };
   }
+  if (!connectedAccountId) {
+    return {
+      ok: false,
+      ambiguous: false,
+      status: null,
+      error: "Stripe Connect account is not linked",
+      request,
+      response: {}
+    };
+  }
   if (minor == null) {
     return {
       ok: false,
@@ -92,6 +108,8 @@ export async function createStripePlatformCharge(
       response: {}
     };
   }
+
+  const stripeOptions = stripeConnectedChargeRequestOptions(connectedAccountId, input.idempotencyKey);
 
   try {
     const intent = await stripe.paymentIntents.create(
@@ -105,7 +123,7 @@ export async function createStripePlatformCharge(
         description: input.description,
         metadata: input.metadata
       },
-      { idempotencyKey: input.idempotencyKey.slice(0, 255) }
+      stripeOptions
     );
 
     const response = asRecord(intent);

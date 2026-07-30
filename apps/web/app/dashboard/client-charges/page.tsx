@@ -123,6 +123,7 @@ type BillingLocationConfig = {
   enabled: boolean;
   currency: string;
   billingReady: boolean;
+  stripeAccountId: string | null;
   stripeAccountMasked: string | null;
   connectOnboardingStatus: string | null;
   connectDetailsSubmitted: boolean;
@@ -188,7 +189,8 @@ function depositSourceLabel(deposit: CanonicalDeposit) {
 
 function stripeConnectStatusLabel(loc: BillingLocationConfig) {
   if (loc.billingReady) return "Ready";
-  if (!loc.stripeAccountMasked) return "Not started";
+  const hasAccount = Boolean(loc.stripeAccountMasked || loc.stripeAccountId?.trim());
+  if (!hasAccount) return "Not started";
   if (!loc.connectDetailsSubmitted || !loc.connectChargesEnabled) return "Onboarding";
   if (!loc.hasPaymentMethod) return "Needs payment method";
   return "Onboarding";
@@ -569,6 +571,8 @@ export default function ClientChargesPage() {
   const [billingBusyId, setBillingBusyId] = useState<string | null>(null);
   const [billingSearch, setBillingSearch] = useState("");
   const [showEligibility, setShowEligibility] = useState(false);
+  const [stripeAccountDrafts, setStripeAccountDrafts] = useState<Record<string, string>>({});
+  const [platformStripeLabel, setPlatformStripeLabel] = useState<string | null>(null);
 
   const query = useMemo(
     () =>
@@ -670,11 +674,40 @@ export default function ClientChargesPage() {
     }
   }, [apiBaseUrl, isAdmin]);
 
+  const loadPlatformStripeStatus = useCallback(async () => {
+    if (!isAdmin) {
+      setPlatformStripeLabel(null);
+      return;
+    }
+    try {
+      const res = await fetch(`${apiBaseUrl}/admin/stripe/platform-status`, {
+        cache: "no-store",
+        headers: mergeWorkspaceHeaders()
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        configured?: boolean;
+        platformAccountMasked?: string | null;
+      };
+      if (!res.ok || !payload.configured) {
+        setPlatformStripeLabel("Platform Stripe: not configured");
+        return;
+      }
+      setPlatformStripeLabel(
+        payload.platformAccountMasked
+          ? `Platform Stripe: ${payload.platformAccountMasked}`
+          : "Platform Stripe: configured"
+      );
+    } catch {
+      setPlatformStripeLabel(null);
+    }
+  }, [apiBaseUrl, isAdmin]);
+
   useEffect(() => {
     if (showEligibility) {
       void loadBillingLocations();
+      void loadPlatformStripeStatus();
     }
-  }, [loadBillingLocations, showEligibility, sessionKey]);
+  }, [loadBillingLocations, loadPlatformStripeStatus, showEligibility, sessionKey]);
 
   useEffect(() => {
     const stripeFlow = searchParams.get("stripe");
@@ -708,7 +741,7 @@ export default function ClientChargesPage() {
       if (!res.ok) {
         const hint =
           payload.error === "billing_not_ready" || payload.code === "billing_not_ready"
-            ? " Complete Stripe Connect and add a payment method under Location eligibility."
+            ? " Link the Stripe Connect account and add a payment method under Location eligibility."
             : "";
         throw new Error((payload.message ?? payload.error ?? "Update failed") + hint);
       }
@@ -722,29 +755,36 @@ export default function ClientChargesPage() {
     }
   }
 
-  async function startStripeConnect(loc: BillingLocationConfig) {
+  async function linkStripeAccount(loc: BillingLocationConfig) {
+    const draft = (stripeAccountDrafts[loc.locationId] ?? loc.stripeAccountId ?? "").trim();
+    if (!draft) {
+      setBillingError("Enter a Stripe Connect account id (acct_…).");
+      return;
+    }
     setBillingBusyId(loc.locationId);
     setBillingError(null);
     try {
       const res = await fetch(
-        `${apiBaseUrl}/admin/client-charges/locations/${loc.locationId}/stripe/connect`,
+        `${apiBaseUrl}/admin/client-charges/locations/${loc.locationId}/stripe/link`,
         {
-          method: "POST",
+          method: "PATCH",
           cache: "no-store",
-          headers: mergeWorkspaceHeaders()
+          headers: mergeWorkspaceHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ stripeAccountId: draft })
         }
       );
       const payload = (await res.json().catch(() => ({}))) as {
-        url?: string;
         error?: string;
         message?: string;
+        stripeAccountId?: string | null;
       };
-      if (!res.ok || !payload.url) {
-        throw new Error(payload.message ?? payload.error ?? "Unable to start Stripe Connect");
+      if (!res.ok) {
+        throw new Error(payload.message ?? payload.error ?? "Unable to link Stripe account");
       }
-      window.location.assign(payload.url);
+      await loadBillingLocations();
     } catch (caught) {
-      setBillingError(caught instanceof Error ? caught.message : "Unable to start Stripe Connect");
+      setBillingError(caught instanceof Error ? caught.message : "Unable to link Stripe account");
+    } finally {
       setBillingBusyId(null);
     }
   }
@@ -1177,10 +1217,11 @@ export default function ClientChargesPage() {
       {isAdmin && showEligibility ? (
         <div className="panel" style={{ padding: 18, marginTop: 20 }}>
           <h2 style={{ marginTop: 0 }}>Location eligibility</h2>
+          {platformStripeLabel ? <p className="muted">{platformStripeLabel}</p> : null}
           <p className="muted">
-            Client Charges stay off by default. Each subaccount needs Stripe Connect onboarding and a saved payment
-            method before you enable billing. The charge amount always mirrors the lead&apos;s paid deposit for that
-            appointment.
+            Client Charges stay off by default. Paste the Stripe Connect account id (acct_…) already created in your
+            Stripe dashboard for each subaccount, verify it, then add a saved payment method before enabling billing.
+            Charges run on that connected account. The amount always mirrors the lead&apos;s paid deposit.
           </p>
           {billingLoading ? <p className="muted">Loading locations…</p> : null}
           {billingError ? <div className="empty">{billingError}</div> : null}
@@ -1213,18 +1254,34 @@ export default function ClientChargesPage() {
                           GHL: {loc.ghlLocationId} · {loc.currency} · Stripe: {status}
                           {loc.stripeAccountMasked ? ` · ${loc.stripeAccountMasked}` : ""}
                         </div>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
-                          {!loc.billingReady ? (
-                            <button
-                              className="button secondary"
-                              disabled={busy}
-                              onClick={() => void startStripeConnect(loc)}
-                              type="button"
-                            >
-                              {loc.stripeAccountMasked ? "Continue Connect" : "Connect Stripe"}
-                            </button>
-                          ) : null}
-                          {loc.stripeAccountMasked && !loc.hasPaymentMethod ? (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8, alignItems: "center" }}>
+                          <input
+                            aria-label={`Stripe account id for ${loc.ghlLocationId}`}
+                            autoCapitalize="off"
+                            autoComplete="off"
+                            className="appointments-filter-select"
+                            disabled={busy}
+                            onChange={(e) =>
+                              setStripeAccountDrafts((prev) => ({
+                                ...prev,
+                                [loc.locationId]: e.target.value
+                              }))
+                            }
+                            placeholder="acct_…"
+                            spellCheck={false}
+                            style={{ maxWidth: 280, minWidth: 180 }}
+                            type="text"
+                            value={stripeAccountDrafts[loc.locationId] ?? loc.stripeAccountId ?? ""}
+                          />
+                          <button
+                            className="button secondary"
+                            disabled={busy}
+                            onClick={() => void linkStripeAccount(loc)}
+                            type="button"
+                          >
+                            Save / verify
+                          </button>
+                          {(loc.stripeAccountMasked || loc.stripeAccountId) && !loc.hasPaymentMethod ? (
                             <button
                               className="button secondary"
                               disabled={busy}

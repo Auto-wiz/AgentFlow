@@ -2,7 +2,6 @@ import type { createDb } from "@agentflow/db";
 import { locationBillingConfig as locationBillingConfigTable } from "@agentflow/db/schema";
 import { eq } from "drizzle-orm";
 import type Stripe from "stripe";
-
 export type AgentFlowDb = ReturnType<typeof createDb>;
 
 export type LocationBillingStripeRow = {
@@ -28,10 +27,11 @@ export function maskStripeAccountId(accountId: string | null | undefined): strin
 
 export function isLocationBillingReady(row: Pick<
   LocationBillingStripeRow,
-  "stripeCustomerId" | "stripeDefaultPaymentMethodId" | "connectChargesEnabled"
+  "stripeAccountId" | "stripeCustomerId" | "stripeDefaultPaymentMethodId" | "connectChargesEnabled"
 >): boolean {
   return Boolean(
-    row.stripeCustomerId?.trim() &&
+    row.stripeAccountId?.trim() &&
+      row.stripeCustomerId?.trim() &&
       row.stripeDefaultPaymentMethodId?.trim() &&
       row.connectChargesEnabled
   );
@@ -63,6 +63,7 @@ export async function applyStripeAccountSnapshot(
 
   const [existing] = await db
     .select({
+      stripeAccountId: locationBillingConfigTable.stripeAccountId,
       stripeCustomerId: locationBillingConfigTable.stripeCustomerId,
       stripeDefaultPaymentMethodId: locationBillingConfigTable.stripeDefaultPaymentMethodId
     })
@@ -70,7 +71,9 @@ export async function applyStripeAccountSnapshot(
     .where(eq(locationBillingConfigTable.locationId, locationId))
     .limit(1);
 
+  const linkedAccountId = account.id;
   const billingReady = isLocationBillingReady({
+    stripeAccountId: linkedAccountId,
     stripeCustomerId: existing?.stripeCustomerId ?? null,
     stripeDefaultPaymentMethodId: existing?.stripeDefaultPaymentMethodId ?? null,
     connectChargesEnabled: chargesEnabled
@@ -98,6 +101,7 @@ export async function setLocationPaymentMethod(
 ) {
   const [row] = await db
     .select({
+      stripeAccountId: locationBillingConfigTable.stripeAccountId,
       stripeCustomerId: locationBillingConfigTable.stripeCustomerId,
       connectChargesEnabled: locationBillingConfigTable.connectChargesEnabled
     })
@@ -106,6 +110,7 @@ export async function setLocationPaymentMethod(
     .limit(1);
 
   const billingReady = isLocationBillingReady({
+    stripeAccountId: row?.stripeAccountId ?? null,
     stripeCustomerId: row?.stripeCustomerId ?? null,
     stripeDefaultPaymentMethodId: paymentMethodId,
     connectChargesEnabled: row?.connectChargesEnabled ?? false
@@ -119,4 +124,18 @@ export async function setLocationPaymentMethod(
       updatedAt: now
     })
     .where(eq(locationBillingConfigTable.locationId, locationId));
+}
+
+export async function findLocationIdByStripeAccountId(
+  db: AgentFlowDb,
+  stripeAccountId: string
+): Promise<string | null> {
+  const id = stripeAccountId.trim();
+  if (!id) return null;
+  const [row] = await db
+    .select({ locationId: locationBillingConfigTable.locationId })
+    .from(locationBillingConfigTable)
+    .where(eq(locationBillingConfigTable.stripeAccountId, id))
+    .limit(1);
+  return row?.locationId ?? null;
 }

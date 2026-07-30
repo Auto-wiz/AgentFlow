@@ -9,7 +9,7 @@ import { AUDIT_ACTION_KINDS, canAccessClientCharges } from "@agentflow/shared";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Context } from "hono";
 
-import { createStripePlatformCharge, type ClientChargeStripeEnv } from "./client-charges-stripe.js";
+import { createStripeConnectedAccountCharge, type ClientChargeStripeEnv } from "./client-charges-stripe.js";
 import {
   clientChargeIdempotencyKey,
   isChargeRetryable,
@@ -222,6 +222,7 @@ async function writeChargeOutcome(params: {
       ghlLocationId: locations.ghlLocationId,
       enabled: locationBillingConfig.enabled,
       configCurrency: locationBillingConfig.currency,
+      stripeAccountId: locationBillingConfig.stripeAccountId,
       stripeCustomerId: locationBillingConfig.stripeCustomerId,
       stripeDefaultPaymentMethodId: locationBillingConfig.stripeDefaultPaymentMethodId,
       connectChargesEnabled: locationBillingConfig.connectChargesEnabled
@@ -236,6 +237,7 @@ async function writeChargeOutcome(params: {
   }
   if (
     !isLocationBillingReady({
+      stripeAccountId: locationRow.stripeAccountId,
       stripeCustomerId: locationRow.stripeCustomerId,
       stripeDefaultPaymentMethodId: locationRow.stripeDefaultPaymentMethodId,
       connectChargesEnabled: locationRow.connectChargesEnabled
@@ -265,7 +267,8 @@ async function writeChargeOutcome(params: {
     }
   });
 
-  const result = await createStripePlatformCharge(c.env, {
+  const result = await createStripeConnectedAccountCharge(c.env, {
+    connectedAccountId: locationRow.stripeAccountId!.trim(),
     customerId: locationRow.stripeCustomerId!.trim(),
     paymentMethodId: locationRow.stripeDefaultPaymentMethodId!.trim(),
     amountMajor: charge.chargeAmount,
@@ -599,6 +602,7 @@ export async function getAdminClientChargeLocationsHandler(c: Context<Bindings>)
   return c.json({
     locations: rows.map((row) => {
       const billingReady = isLocationBillingReady({
+        stripeAccountId: row.stripeAccountId,
         stripeCustomerId: row.stripeCustomerId,
         stripeDefaultPaymentMethodId: row.stripeDefaultPaymentMethodId,
         connectChargesEnabled: row.connectChargesEnabled ?? false
@@ -611,6 +615,7 @@ export async function getAdminClientChargeLocationsHandler(c: Context<Bindings>)
         currency: row.currency ?? "USD",
         billingReady,
         stripeAccountMasked: maskStripeAccountId(row.stripeAccountId),
+        stripeAccountId: row.stripeAccountId ?? null,
         connectOnboardingStatus: row.connectOnboardingStatus ?? null,
         connectDetailsSubmitted: row.connectDetailsSubmitted ?? false,
         connectChargesEnabled: row.connectChargesEnabled ?? false,
@@ -649,6 +654,7 @@ export async function patchAdminClientChargeLocationHandler(c: Context<Bindings>
     if (body.enabled) {
       const [check] = await db
         .select({
+          stripeAccountId: locationBillingConfig.stripeAccountId,
           stripeCustomerId: locationBillingConfig.stripeCustomerId,
           stripeDefaultPaymentMethodId: locationBillingConfig.stripeDefaultPaymentMethodId,
           connectChargesEnabled: locationBillingConfig.connectChargesEnabled
@@ -659,6 +665,7 @@ export async function patchAdminClientChargeLocationHandler(c: Context<Bindings>
       if (
         !check ||
         !isLocationBillingReady({
+          stripeAccountId: check.stripeAccountId,
           stripeCustomerId: check.stripeCustomerId,
           stripeDefaultPaymentMethodId: check.stripeDefaultPaymentMethodId,
           connectChargesEnabled: check.connectChargesEnabled ?? false
@@ -667,7 +674,7 @@ export async function patchAdminClientChargeLocationHandler(c: Context<Bindings>
         return c.json(
           {
             error: "billing_not_ready",
-            message: "Complete Stripe Connect onboarding and add a payment method before enabling."
+            message: "Link Stripe Connect, add a payment method, and verify charges are enabled before enabling."
           },
           400
         );

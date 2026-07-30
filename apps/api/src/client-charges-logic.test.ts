@@ -10,9 +10,12 @@ import {
   isChargeActionDisabled,
   isChargeRetryable,
   isValidChargeCurrency,
+  isValidStripeConnectAccountId,
   mapStripeChargeErrorMessage,
   normalizeChargeAmount,
+  normalizeStripeConnectAccountId,
   pickCanonicalDepositSource,
+  stripeConnectedChargeRequestOptions,
   toStripeMinorUnits
 } from "./client-charges-logic.ts";
 
@@ -93,6 +96,29 @@ describe("idempotency and retry gates", () => {
     assert.equal(isChargeActionDisabled("succeeded"), true);
     assert.equal(isChargeActionDisabled("failed"), false);
     assert.equal(isChargeActionDisabled(null), false);
+  });
+});
+
+describe("Stripe Connect account id", () => {
+  it("accepts acct_ ids and trims whitespace", () => {
+    assert.equal(normalizeStripeConnectAccountId("  acct_1ABCxyz  "), "acct_1ABCxyz");
+    assert.equal(isValidStripeConnectAccountId("acct_test"), true);
+  });
+
+  it("rejects invalid ids", () => {
+    assert.equal(normalizeStripeConnectAccountId("cus_123"), null);
+    assert.equal(normalizeStripeConnectAccountId(""), null);
+    assert.equal(isValidStripeConnectAccountId(null), false);
+  });
+});
+
+describe("stripe connected charge request options", () => {
+  it("passes stripeAccount and truncated idempotency key to the SDK", () => {
+    const key = `agentflow-result-${"a".repeat(300)}`;
+    assert.deepEqual(stripeConnectedChargeRequestOptions(" acct_abc123 ", key), {
+      stripeAccount: "acct_abc123",
+      idempotencyKey: key.slice(0, 255)
+    });
   });
 });
 

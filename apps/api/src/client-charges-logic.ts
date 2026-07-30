@@ -53,6 +53,26 @@ export function clientChargeIdempotencyKey(appointmentId: string): string {
   return `agentflow-result-${appointmentId.trim()}`;
 }
 
+/** Stripe Connect account ids use the acct_ prefix. */
+export function normalizeStripeConnectAccountId(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const id = raw.trim();
+  if (!/^acct_[A-Za-z0-9]+$/.test(id)) return null;
+  return id;
+}
+
+export function isValidStripeConnectAccountId(raw: unknown): boolean {
+  return normalizeStripeConnectAccountId(raw) != null;
+}
+
+/** Stripe SDK request options for direct charges on a connected account. */
+export function stripeConnectedChargeRequestOptions(connectedAccountId: string, idempotencyKey: string) {
+  return {
+    stripeAccount: connectedAccountId.trim(),
+    idempotencyKey: idempotencyKey.slice(0, 255)
+  };
+}
+
 /** Ledger amounts are major currency units (e.g. USD dollars). Stripe expects minor units. */
 const ZERO_DECIMAL_CURRENCIES = new Set(["BIF", "CLP", "DJF", "GNF", "JPY", "KMF", "KRW", "MGA", "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF"]);
 
