@@ -177,6 +177,7 @@ async function getCompanyOAuthInstallationsForLocationInternal(db: AgentFlowDb, 
       userType: ghlOAuthInstallations.userType,
       accessToken: ghlOAuthInstallations.accessToken,
       refreshToken: ghlOAuthInstallations.refreshToken,
+      scope: ghlOAuthInstallations.scope,
       expiresAt: ghlOAuthInstallations.expiresAt,
       updatedAt: ghlOAuthInstallations.updatedAt
     })
@@ -191,6 +192,22 @@ async function getCompanyOAuthInstallationsForLocationInternal(db: AgentFlowDb, 
     .limit(5);
 }
 
+export function oauthInstallationScopeIncludesSaas(scope: string | null | undefined): boolean {
+  const raw = scope?.trim().toLowerCase();
+  if (!raw) return true;
+  return raw.includes("saas/") || raw.includes("saas.");
+}
+
+export async function getCompanyOAuthScopeSnapshotForLocation(db: AgentFlowDb, ghlLocationId: string) {
+  const rows = await getCompanyOAuthInstallationsForLocationInternal(db, ghlLocationId);
+  if (rows[0]?.scope?.trim()) return rows[0].scope.trim();
+  const recent = await getRecentCompanyOAuthInstallations(db, 3);
+  for (const row of recent) {
+    if (row.scope?.trim()) return row.scope.trim();
+  }
+  return null;
+}
+
 async function getRecentCompanyOAuthInstallations(db: AgentFlowDb, limit = 5) {
   const safeLimit = Math.max(1, Math.min(limit, 20));
   return db
@@ -200,6 +217,7 @@ async function getRecentCompanyOAuthInstallations(db: AgentFlowDb, limit = 5) {
       userType: ghlOAuthInstallations.userType,
       accessToken: ghlOAuthInstallations.accessToken,
       refreshToken: ghlOAuthInstallations.refreshToken,
+      scope: ghlOAuthInstallations.scope,
       expiresAt: ghlOAuthInstallations.expiresAt,
       updatedAt: ghlOAuthInstallations.updatedAt
     })

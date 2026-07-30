@@ -7,9 +7,10 @@ import {
   summarizeUnknownJsonShape
 } from "./client-charges-logic.js";
 import {
-  getAccessTokensForLocation,
   getCompanyAccessTokensForGhlLocation,
+  getCompanyOAuthScopeSnapshotForLocation,
   getCompanyOAuthInstallationForLocation,
+  oauthInstallationScopeIncludesSaas,
   resolveGhlCompanyIdForLocation,
   type GhlOAuthTokenEnv
 } from "./ghl-oauth-location-token.js";
@@ -24,6 +25,8 @@ export type GhlSaasSubscriptionFetchResult =
       error: string;
       code: string;
       payloadShape?: unknown;
+      ghlApiMessage?: string;
+      oauthScopeOnFile?: string | null;
     };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -43,14 +46,14 @@ function ghlErrorMessage(payload: unknown, status: number): string {
 function isGhlOAuthScopeFailure(status: number, message: string): boolean {
   const m = message.toLowerCase();
   return (
-    status === 403 ||
     m.includes("not authorized for this scope") ||
-    m.includes("token is not authorized")
+    m.includes("token is not authorized for this scope") ||
+    (status === 401 && m.includes("scope"))
   );
 }
 
 const GHL_SAAS_SCOPE_HELP =
-  "Add scopes saas/location.read (and saas/location.write) to the Autowiz Marketplace app, publish a new version, then reconnect GoHighLevel from Settings so tokens include SaaS access.";
+  "Publish a new Marketplace app version with saas/location.read (and saas/location.write), then use AgentFlow Settings → Connect GoHighLevel at the agency — reinstalling the app on one subaccount alone does not refresh agency OAuth scopes.";
 
 const SAAS_LOCATIONS_V3_PATHS = [
   (companyId: string, page: number) =>
@@ -233,19 +236,30 @@ export async function fetchGhlSaasSubscriptionForLocation(
   const companyTokens = await getCompanyAccessTokensForGhlLocation(env, db, locationId, {
     preemptiveOAuthRefresh: true
   });
-  const locationTokens = await getAccessTokensForLocation(env, db, locationId, {
-    preemptiveOAuthRefresh: false
-  });
-  const tokens = [...new Set([...companyTokens, ...locationTokens])];
+  const oauthScopeOnFile = await getCompanyOAuthScopeSnapshotForLocation(db, locationId);
 
-  if (tokens.length === 0) {
+  if (companyTokens.length === 0) {
     return {
       ok: false,
       status: null,
-      error: "No GHL access token available for this location",
-      code: "ghl_token_missing"
+      error:
+        "No agency-level (Company) OAuth token in AgentFlow. Use Settings → Connect GoHighLevel for the agency. Reinstalling the Marketplace app on a single subaccount does not replace that token.",
+      code: "company_oauth_token_missing",
+      oauthScopeOnFile
     };
   }
+
+  if (oauthScopeOnFile && !oauthInstallationScopeIncludesSaas(oauthScopeOnFile)) {
+    return {
+      ok: false,
+      status: null,
+      error: GHL_SAAS_SCOPE_HELP,
+      code: "oauth_token_missing_saas_scope",
+      oauthScopeOnFile
+    };
+  }
+
+  const tokens = companyTokens;
 
   const baseUrl = (env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com").replace(/\/$/, "");
   const state: AttemptState = { lastStatus: null, lastMessage: "GHL SaaS request failed", sawScopeError: false };
@@ -257,11 +271,17 @@ export async function fetchGhlSaasSubscriptionForLocation(
   if (legacyResult) return legacyResult;
 
   if (state.sawScopeError || isGhlOAuthScopeFailure(state.lastStatus ?? 0, state.lastMessage)) {
+    let error = GHL_SAAS_SCOPE_HELP;
+    if (oauthScopeOnFile && oauthInstallationScopeIncludesSaas(oauthScopeOnFile)) {
+      error = `${GHL_SAAS_SCOPE_HELP} The agency token in AgentFlow already lists saas/* scopes but GHL rejected the API call — use Settings → Connect GoHighLevel again (subaccount reinstall is not enough).`;
+    }
     return {
       ok: false,
       status: state.lastStatus ?? 403,
-      error: `GHL OAuth token lacks SaaS scope. ${GHL_SAAS_SCOPE_HELP}`,
-      code: "ghl_scope_forbidden"
+      error,
+      code: "ghl_scope_forbidden",
+      ghlApiMessage: state.lastMessage,
+      oauthScopeOnFile
     };
   }
 
@@ -269,6 +289,7 @@ export async function fetchGhlSaasSubscriptionForLocation(
     ok: false,
     status: state.lastStatus,
     error: state.lastMessage,
-    code: "ghl_saas_fetch_failed"
+    code: "ghl_saas_fetch_failed",
+    oauthScopeOnFile
   };
 }

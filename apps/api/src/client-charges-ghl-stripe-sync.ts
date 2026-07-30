@@ -27,6 +27,8 @@ export type SyncLocationStripeFromGhlResult =
       error: string;
       code: string;
       payloadShape?: unknown;
+      ghlApiMessage?: string;
+      oauthScopeOnFile?: string | null;
     };
 
 export async function syncLocationStripeFromGhlSaas(
@@ -44,7 +46,9 @@ export async function syncLocationStripeFromGhlSaas(
       code: saas.code,
       ...(saas.code === "customer_id_missing" && saas.payloadShape != null
         ? { payloadShape: saas.payloadShape }
-        : {})
+        : {}),
+      ...(saas.ghlApiMessage ? { ghlApiMessage: saas.ghlApiMessage } : {}),
+      ...(saas.oauthScopeOnFile !== undefined ? { oauthScopeOnFile: saas.oauthScopeOnFile } : {})
     };
   }
 

@@ -814,6 +814,20 @@ export default function ClientChargesPage() {
     }
   }
 
+function formatGhlSyncFailureMessage(payload: {
+  message?: string;
+  error?: string;
+  oauthScopeOnFile?: string | null;
+  ghlApiMessage?: string;
+}) {
+  const msg = payload.message?.trim();
+  if (msg) return msg;
+  if (typeof payload.error === "string" && payload.error !== "ghl_scope_forbidden") {
+    return payload.error;
+  }
+  return "GHL sync failed";
+}
+
   async function syncStripeFromGhl(loc: BillingLocationConfig) {
     setBillingBusyId(loc.locationId);
     setBillingError(null);
@@ -830,13 +844,19 @@ export default function ClientChargesPage() {
         error?: string;
         message?: string;
         payloadShape?: unknown;
+        oauthScopeOnFile?: string | null;
+        ghlApiMessage?: string;
       };
       if (!res.ok) {
         const shapeHint =
           payload.error === "customer_id_missing" && payload.payloadShape != null
             ? ` GHL response shape: ${JSON.stringify(payload.payloadShape)}`
             : "";
-        throw new Error((payload.message ?? payload.error ?? "GHL sync failed") + shapeHint);
+        const scopeHint =
+          payload.oauthScopeOnFile != null
+            ? ` OAuth scopes on file: ${payload.oauthScopeOnFile.includes("saas/") ? "includes saas/*" : "missing saas/* — reconnect agency OAuth"}`
+            : "";
+        throw new Error(formatGhlSyncFailureMessage(payload) + scopeHint + shapeHint);
       }
       await loadBillingLocations();
       await loadOverview();

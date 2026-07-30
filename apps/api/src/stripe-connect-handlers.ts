@@ -321,7 +321,11 @@ export async function postAdminLocationStripeSyncFromGhlHandler(c: Context<Bindi
         message: result.error,
         ...("payloadShape" in result && result.payloadShape != null
           ? { payloadShape: result.payloadShape }
-          : {})
+          : {}),
+        ...("ghlApiMessage" in result && result.ghlApiMessage
+          ? { ghlApiMessage: result.ghlApiMessage }
+          : {}),
+        ...("oauthScopeOnFile" in result ? { oauthScopeOnFile: result.oauthScopeOnFile ?? null } : {})
       },
       errStatus
     );
