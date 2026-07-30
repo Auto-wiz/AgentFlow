@@ -115,8 +115,11 @@ import {
 import {
   getAdminLocationStripeStatusHandler,
   getAdminStripePlatformStatusHandler,
+  patchAdminLocationStripeCustomerLinkHandler,
   patchAdminLocationStripeLinkHandler,
-  postAdminLocationStripeBillingSetupHandler
+  postAdminClientChargesStripeSyncAllFromGhlHandler,
+  postAdminLocationStripeBillingSetupHandler,
+  postAdminLocationStripeSyncFromGhlHandler
 } from "./stripe-connect-handlers.js";
 import { postStripeWebhookHandler } from "./stripe-webhook-handlers.js";
 import {
@@ -704,6 +707,15 @@ app.get("/admin/client-charges/locations", getAdminClientChargeLocationsHandler)
 app.patch("/admin/client-charges/locations/:locationId", patchAdminClientChargeLocationHandler);
 app.get("/admin/stripe/platform-status", getAdminStripePlatformStatusHandler);
 app.patch("/admin/client-charges/locations/:locationId/stripe/link", patchAdminLocationStripeLinkHandler);
+app.patch(
+  "/admin/client-charges/locations/:locationId/stripe/customer-link",
+  patchAdminLocationStripeCustomerLinkHandler
+);
+app.post(
+  "/admin/client-charges/locations/:locationId/stripe/sync-from-ghl",
+  postAdminLocationStripeSyncFromGhlHandler
+);
+app.post("/admin/client-charges/stripe/sync-from-ghl-all", postAdminClientChargesStripeSyncAllFromGhlHandler);
 app.get("/admin/client-charges/locations/:locationId/stripe/status", getAdminLocationStripeStatusHandler);
 app.post(
   "/admin/client-charges/locations/:locationId/stripe/billing-setup",

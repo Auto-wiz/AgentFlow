@@ -65,6 +65,138 @@ export function isValidStripeConnectAccountId(raw: unknown): boolean {
   return normalizeStripeConnectAccountId(raw) != null;
 }
 
+/** Stripe Customer ids use the cus_ prefix (platform or Connect context). */
+export function normalizeStripeCustomerId(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const id = raw.trim();
+  if (/^cus_[A-Za-z0-9]+$/.test(id)) return id;
+  return null;
+}
+
+export function isValidStripeCustomerId(raw: unknown): boolean {
+  return normalizeStripeCustomerId(raw) != null;
+}
+
+/** Safe structural summary when GHL does not publish a response schema (no secret values). */
+export function summarizeUnknownJsonShape(
+  value: unknown,
+  depth = 0,
+  maxDepth = 5,
+  maxKeys = 12
+): unknown {
+  if (depth >= maxDepth) return "…";
+  if (value == null) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^cus_[A-Za-z0-9]+$/.test(trimmed)) return "string(cus_…)";
+    if (/^acct_[A-Za-z0-9]+$/.test(trimmed)) return "string(acct_…)";
+    if (trimmed.length > 64) return "string(…)";
+    return "string";
+  }
+  if (typeof value === "number" || typeof value === "boolean") return typeof value;
+  if (Array.isArray(value)) {
+    if (value.length === 0) return [];
+    return [summarizeUnknownJsonShape(value[0], depth + 1, maxDepth, maxKeys)];
+  }
+  if (typeof value !== "object") return typeof value;
+  const obj = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(obj).slice(0, maxKeys)) {
+    out[key] = summarizeUnknownJsonShape(obj[key], depth + 1, maxDepth, maxKeys);
+  }
+  const extra = Object.keys(obj).length - maxKeys;
+  if (extra > 0) out["…"] = `+${extra} keys`;
+  return out;
+}
+
+const SAAS_STRIPE_CUSTOMER_FIELD_KEYS = [
+  "customerId",
+  "customer_id",
+  "CustomerId",
+  "stripeCustomerId",
+  "stripe_customer_id",
+  "stripeCustomer",
+  "stripe_customer",
+  "billingCustomerId",
+  "billing_customer_id",
+  "saasCustomerId",
+  "saas_customer_id"
+] as const;
+
+function stripeCustomerFromNestedCustomerObject(value: unknown): string | null {
+  const obj = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  if (!obj) return null;
+  for (const key of ["id", "customerId", "customer_id", "stripeCustomerId", "stripe_customer_id"]) {
+    const normalized = normalizeStripeCustomerId(obj[key]);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+export function extractSaasSubscriptionStripeCustomerId(payload: unknown): string | null {
+  const visit = (value: unknown, depth: number): string | null => {
+    if (depth > 8 || value == null) return null;
+    if (typeof value === "string") {
+      return normalizeStripeCustomerId(value);
+    }
+    if (typeof value !== "object") return null;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const found = visit(item, depth + 1);
+        if (found) return found;
+      }
+      return null;
+    }
+    const obj = value as Record<string, unknown>;
+    for (const key of SAAS_STRIPE_CUSTOMER_FIELD_KEYS) {
+      const normalized = normalizeStripeCustomerId(obj[key]);
+      if (normalized) return normalized;
+    }
+    for (const key of ["customer", "stripe", "billing", "paymentProvider", "payment_provider"]) {
+      const fromNested = stripeCustomerFromNestedCustomerObject(obj[key]);
+      if (fromNested) return fromNested;
+    }
+    for (const nested of [
+      obj.data,
+      obj.subscription,
+      obj.saasSubscription,
+      obj.saas_subscription,
+      obj.saas,
+      obj.payload,
+      obj.result,
+      obj.subscriptionDetails,
+      obj.subscription_details
+    ]) {
+      const found = visit(nested, depth + 1);
+      if (found) return found;
+    }
+    for (const child of Object.values(obj)) {
+      const found = visit(child, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  };
+  return visit(payload, 0);
+}
+
+export function pickDefaultPaymentMethodIdFromStripeCustomer(
+  customer: {
+    invoice_settings?: { default_payment_method?: string | { id?: string } | null } | null;
+  },
+  paymentMethodIds: string[]
+): string | null {
+  const raw = customer.invoice_settings?.default_payment_method;
+  const fromSettings =
+    typeof raw === "string"
+      ? raw.trim()
+      : raw && typeof raw === "object" && typeof raw.id === "string"
+        ? raw.id.trim()
+        : "";
+  if (fromSettings.startsWith("pm_")) return fromSettings;
+  if (paymentMethodIds.length === 1) return paymentMethodIds[0] ?? null;
+  return null;
+}
+
 /** Stripe SDK request options for direct charges on a connected account. */
 export function stripeConnectedChargeRequestOptions(connectedAccountId: string, idempotencyKey: string) {
   return {

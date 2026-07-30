@@ -14,6 +14,9 @@ import {
   mapStripeChargeErrorMessage,
   normalizeChargeAmount,
   normalizeStripeConnectAccountId,
+  normalizeStripeCustomerId,
+  extractSaasSubscriptionStripeCustomerId,
+  summarizeUnknownJsonShape,
   pickCanonicalDepositSource,
   stripeConnectedChargeRequestOptions,
   toStripeMinorUnits
@@ -96,6 +99,40 @@ describe("idempotency and retry gates", () => {
     assert.equal(isChargeActionDisabled("succeeded"), true);
     assert.equal(isChargeActionDisabled("failed"), false);
     assert.equal(isChargeActionDisabled(null), false);
+  });
+});
+
+describe("Stripe customer id and GHL SaaS payload", () => {
+  it("accepts cus_ ids and trims whitespace", () => {
+    assert.equal(normalizeStripeCustomerId("  cus_1ABCxyz  "), "cus_1ABCxyz");
+    assert.equal(normalizeStripeCustomerId("acct_1"), null);
+  });
+
+  it("extracts cus_ from known and nested GHL-like shapes", () => {
+    assert.equal(
+      extractSaasSubscriptionStripeCustomerId({ stripeCustomerId: "cus_top" }),
+      "cus_top"
+    );
+    assert.equal(
+      extractSaasSubscriptionStripeCustomerId({
+        data: { subscription: { customer_id: "cus_nested" } }
+      }),
+      "cus_nested"
+    );
+    assert.equal(
+      extractSaasSubscriptionStripeCustomerId({ customer: { id: "cus_obj" } }),
+      "cus_obj"
+    );
+    assert.equal(extractSaasSubscriptionStripeCustomerId({ foo: "bar" }), null);
+  });
+
+  it("summarizes JSON shape without leaking long strings", () => {
+    const shape = summarizeUnknownJsonShape({
+      subscriptionDetails: { billingCustomerId: "not-a-cus" },
+      items: [{ stripe: { customer_id: "cus_hidden" } }]
+    }) as Record<string, unknown>;
+    assert.ok(shape.subscriptionDetails);
+    assert.equal(typeof shape.items, "object");
   });
 });
 

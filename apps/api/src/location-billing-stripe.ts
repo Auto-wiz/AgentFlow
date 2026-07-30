@@ -25,16 +25,26 @@ export function maskStripeAccountId(accountId: string | null | undefined): strin
   return `${v.slice(0, 7)}…${v.slice(-4)}`;
 }
 
+export function maskStripeCustomerId(customerId: string | null | undefined): string | null {
+  const v = customerId?.trim();
+  if (!v) return null;
+  if (v.length <= 10) return v;
+  return `${v.slice(0, 8)}…${v.slice(-4)}`;
+}
+
 export function isLocationBillingReady(row: Pick<
   LocationBillingStripeRow,
   "stripeAccountId" | "stripeCustomerId" | "stripeDefaultPaymentMethodId" | "connectChargesEnabled"
 >): boolean {
-  return Boolean(
-    row.stripeAccountId?.trim() &&
-      row.stripeCustomerId?.trim() &&
-      row.stripeDefaultPaymentMethodId?.trim() &&
-      row.connectChargesEnabled
+  const hasCustomerPm = Boolean(
+    row.stripeCustomerId?.trim() && row.stripeDefaultPaymentMethodId?.trim()
   );
+  if (!hasCustomerPm) return false;
+  const linkedConnect = Boolean(row.stripeAccountId?.trim());
+  if (linkedConnect) {
+    return Boolean(row.connectChargesEnabled);
+  }
+  return true;
 }
 
 export async function ensureLocationBillingConfigRow(db: AgentFlowDb, locationId: string, now = new Date()) {

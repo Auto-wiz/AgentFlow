@@ -9,7 +9,7 @@ import { AUDIT_ACTION_KINDS, canAccessClientCharges } from "@agentflow/shared";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Context } from "hono";
 
-import { createStripeConnectedAccountCharge, type ClientChargeStripeEnv } from "./client-charges-stripe.js";
+import { createStripeClientCharge, type ClientChargeStripeEnv } from "./client-charges-stripe.js";
 import {
   clientChargeIdempotencyKey,
   isChargeRetryable,
@@ -24,7 +24,8 @@ import {
 import { resolveDashboardBounds } from "./dashboard-handlers.js";
 import {
   isLocationBillingReady,
-  maskStripeAccountId
+  maskStripeAccountId,
+  maskStripeCustomerId
 } from "./location-billing-stripe.js";
 import {
   canWorkspaceAccessLocationUuid,
@@ -295,8 +296,8 @@ async function writeChargeOutcome(params: {
     }
   });
 
-  const result = await createStripeConnectedAccountCharge(c.env, {
-    connectedAccountId: locationRow.stripeAccountId!.trim(),
+  const result = await createStripeClientCharge(c.env, {
+    connectedAccountId: locationRow.stripeAccountId,
     customerId: locationRow.stripeCustomerId!.trim(),
     paymentMethodId: locationRow.stripeDefaultPaymentMethodId!.trim(),
     amountMajor: charge.chargeAmount,
@@ -643,6 +644,8 @@ export async function getAdminClientChargeLocationsHandler(c: Context<Bindings>)
         currency: row.currency ?? "USD",
         billingReady,
         stripeAccountMasked: maskStripeAccountId(row.stripeAccountId),
+        stripeCustomerMasked: maskStripeCustomerId(row.stripeCustomerId),
+        hasStripeCustomer: Boolean(row.stripeCustomerId?.trim()),
         stripeAccountId: row.stripeAccountId ?? null,
         connectOnboardingStatus: row.connectOnboardingStatus ?? null,
         connectDetailsSubmitted: row.connectDetailsSubmitted ?? false,

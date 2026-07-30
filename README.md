@@ -149,15 +149,19 @@ Apply migration **`0011_appointment_overrides_and_audit_logs`**.
 
 Appointment counts shown on **`/subaccounts/overview?surface=appointments`** omit hidden-only tallies (**`WHERE hidden_from_ui = false`**).
 
-## Client Charges (Stripe Connect)
+## Client Charges (Stripe)
 
-Pay-per-result billing uses **one platform Stripe account** (`STRIPE_SECRET_KEY`) and **existing Connect accounts** you create in the Stripe dashboard. Each GHL subaccount is linked manually by **`acct_…`** in the app; charges are **direct** on that connected account (saved card via Checkout setup on the connected account).
+Pay-per-result billing uses **one platform Stripe account** (`STRIPE_SECRET_KEY`). Each GHL subaccount needs a **`cus_…`** (SaaS billing customer) and usually a saved card before charges run on the platform account. **Connect (`acct_…`)** is optional legacy path if you still charge on connected accounts.
 
 1. Apply migrations through **`0016_stripe_account_id_unique`** (includes **`0015_stripe_connect_billing`**).
 2. Worker secrets: **`STRIPE_SECRET_KEY`**, **`STRIPE_WEBHOOK_SECRET`**. Var: **`FRONTEND_BASE_URL`** (Checkout return URLs).
-3. Stripe Dashboard webhook on the **platform** account: **`https://api.agentflow.autowiz.net/webhooks/stripe`**. Enable **Connect** (connected account) events: **`account.updated`**, **`checkout.session.completed`**, **`setup_intent.succeeded`**, **`payment_intent.succeeded`**, **`payment_intent.payment_failed`**.
-4. Test with **`sk_test_…`**. In the app: **Dashboard → Client Charges → Location eligibility** → paste **`acct_…`** → **Save / verify** → **Add payment method** → enable the subaccount.
-5. OAuth reinstall is **not** required for billing; default Marketplace scopes omit **`charges.*`**.
+3. Stripe Dashboard webhook on the **platform** account: **`https://api.agentflow.autowiz.net/webhooks/stripe`**. Events: **`checkout.session.completed`**, **`setup_intent.succeeded`**, **`payment_intent.succeeded`**, **`payment_intent.payment_failed`** (plus Connect **`account.updated`** if you use **`acct_…`**).
+4. **GHL SaaS customer sync:** add the Marketplace **SaaS** scope to the Autowiz app and **reinstall OAuth** for the agency. The API calls **`GET /saas/get-saas-subscription/:ghlLocationId`** (GHL does not publish sample JSON). Admin endpoints:
+   - **`POST /admin/client-charges/locations/:locationId/stripe/sync-from-ghl`**
+   - **`POST /admin/client-charges/stripe/sync-from-ghl-all?limit=50`**
+   - **`PATCH /admin/client-charges/locations/:locationId/stripe/customer-link`** with `{ "stripeCustomerId": "cus_…" }` to verify manually.
+   If sync returns **`customer_id_missing`**, the response includes **`payloadShape`** (keys/types only, no secrets) so the parser can be extended.
+5. In the app: **Dashboard → Client Charges → Location eligibility** → **Sync from GHL** or paste **`cus_…`** → **Verify customer** → **Add payment method** → enable the subaccount.
 
 ## Validation
 

@@ -127,6 +127,8 @@ type BillingLocationConfig = {
   billingReady: boolean;
   stripeAccountId: string | null;
   stripeAccountMasked: string | null;
+  stripeCustomerMasked: string | null;
+  hasStripeCustomer: boolean;
   connectOnboardingStatus: string | null;
   connectDetailsSubmitted: boolean;
   connectChargesEnabled: boolean;
@@ -189,13 +191,14 @@ function depositSourceLabel(deposit: CanonicalDeposit) {
   return `${kind} · ${match}`;
 }
 
-function stripeConnectStatusLabel(loc: BillingLocationConfig) {
+function stripeBillingStatusLabel(loc: BillingLocationConfig) {
   if (loc.billingReady) return "Ready";
-  const hasAccount = Boolean(loc.stripeAccountMasked || loc.stripeAccountId?.trim());
-  if (!hasAccount) return "Not started";
-  if (!loc.connectDetailsSubmitted || !loc.connectChargesEnabled) return "Onboarding";
+  const hasCustomer = loc.hasStripeCustomer || Boolean(loc.stripeCustomerMasked);
+  if (!hasCustomer) return "No Stripe customer";
   if (!loc.hasPaymentMethod) return "Needs payment method";
-  return "Onboarding";
+  const hasConnect = Boolean(loc.stripeAccountMasked || loc.stripeAccountId?.trim());
+  if (hasConnect && (!loc.connectDetailsSubmitted || !loc.connectChargesEnabled)) return "Connect onboarding";
+  return "Almost ready";
 }
 
 function buildGhlPaymentOrderUrl(
@@ -611,6 +614,8 @@ export default function ClientChargesPage() {
   const [billingSearch, setBillingSearch] = useState("");
   const [showEligibility, setShowEligibility] = useState(false);
   const [stripeAccountDrafts, setStripeAccountDrafts] = useState<Record<string, string>>({});
+  const [stripeCustomerDrafts, setStripeCustomerDrafts] = useState<Record<string, string>>({});
+  const [syncAllBusy, setSyncAllBusy] = useState(false);
   const [platformStripeLabel, setPlatformStripeLabel] = useState<string | null>(null);
 
   const query = useMemo(
@@ -780,7 +785,7 @@ export default function ClientChargesPage() {
       if (!res.ok) {
         const hint =
           payload.error === "billing_not_ready" || payload.code === "billing_not_ready"
-            ? " Link the Stripe Connect account and add a payment method under Location eligibility."
+            ? " Sync Stripe from GHL or link cus_… and add a payment method under Location eligibility."
             : "";
         throw new Error((payload.message ?? payload.error ?? "Update failed") + hint);
       }
@@ -789,6 +794,116 @@ export default function ClientChargesPage() {
       notifyDetailRefresh();
     } catch (caught) {
       setBillingError(caught instanceof Error ? caught.message : "Update failed");
+    } finally {
+      setBillingBusyId(null);
+    }
+  }
+
+  async function syncStripeFromGhl(loc: BillingLocationConfig) {
+    setBillingBusyId(loc.locationId);
+    setBillingError(null);
+    try {
+      const res = await fetch(
+        `${apiBaseUrl}/admin/client-charges/locations/${loc.locationId}/stripe/sync-from-ghl`,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: mergeWorkspaceHeaders()
+        }
+      );
+      const payload = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        message?: string;
+        payloadShape?: unknown;
+      };
+      if (!res.ok) {
+        const shapeHint =
+          payload.error === "customer_id_missing" && payload.payloadShape != null
+            ? ` GHL response shape: ${JSON.stringify(payload.payloadShape)}`
+            : "";
+        throw new Error((payload.message ?? payload.error ?? "GHL sync failed") + shapeHint);
+      }
+      await loadBillingLocations();
+      await loadOverview();
+      notifyDetailRefresh();
+    } catch (caught) {
+      setBillingError(caught instanceof Error ? caught.message : "GHL sync failed");
+    } finally {
+      setBillingBusyId(null);
+    }
+  }
+
+  async function syncAllStripeFromGhl() {
+    setSyncAllBusy(true);
+    setBillingError(null);
+    try {
+      const res = await fetch(`${apiBaseUrl}/admin/client-charges/stripe/sync-from-ghl-all?limit=50`, {
+        method: "POST",
+        cache: "no-store",
+        headers: mergeWorkspaceHeaders()
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        message?: string;
+        syncedCount?: number;
+        failedCount?: number;
+        results?: Array<{
+          ok: boolean;
+          ghlLocationId: string;
+          code?: string;
+          error?: string;
+          payloadShape?: unknown;
+        }>;
+      };
+      if (!res.ok) {
+        throw new Error(payload.message ?? payload.error ?? "Bulk sync failed");
+      }
+      const missing = (payload.results ?? []).find((r) => !r.ok && r.code === "customer_id_missing");
+      const shapeHint =
+        missing?.payloadShape != null
+          ? ` Example GHL shape (no cus_ found): ${JSON.stringify(missing.payloadShape)}`
+          : "";
+      const summary = `Synced ${payload.syncedCount ?? 0}, failed ${payload.failedCount ?? 0}.${shapeHint}`;
+      if ((payload.failedCount ?? 0) > 0) {
+        setBillingError(summary);
+      }
+      await loadBillingLocations();
+      await loadOverview();
+      notifyDetailRefresh();
+    } catch (caught) {
+      setBillingError(caught instanceof Error ? caught.message : "Bulk sync failed");
+    } finally {
+      setSyncAllBusy(false);
+    }
+  }
+
+  async function linkStripeCustomer(loc: BillingLocationConfig) {
+    const draft = (stripeCustomerDrafts[loc.locationId] ?? "").trim();
+    if (!draft) {
+      setBillingError("Enter a Stripe customer id (cus_…) or use Sync from GHL.");
+      return;
+    }
+    setBillingBusyId(loc.locationId);
+    setBillingError(null);
+    try {
+      const res = await fetch(
+        `${apiBaseUrl}/admin/client-charges/locations/${loc.locationId}/stripe/customer-link`,
+        {
+          method: "PATCH",
+          cache: "no-store",
+          headers: mergeWorkspaceHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ stripeCustomerId: draft })
+        }
+      );
+      const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+      if (!res.ok) {
+        throw new Error(body.message ?? body.error ?? "Unable to link Stripe customer");
+      }
+      await loadBillingLocations();
+      await loadOverview();
+      notifyDetailRefresh();
+    } catch (caught) {
+      setBillingError(caught instanceof Error ? caught.message : "Unable to link Stripe customer");
     } finally {
       setBillingBusyId(null);
     }
@@ -1264,10 +1379,21 @@ export default function ClientChargesPage() {
           <h2 style={{ marginTop: 0 }}>Location eligibility</h2>
           {platformStripeLabel ? <p className="muted">{platformStripeLabel}</p> : null}
           <p className="muted">
-            Client Charges stay off by default. Paste the Stripe Connect account id (acct_…) already created in your
-            Stripe dashboard for each subaccount, verify it, then add a saved payment method before enabling billing.
-            Charges run on that connected account. The amount always mirrors the lead&apos;s paid deposit.
+            Client Charges stay off by default. Sync each subaccount&apos;s Stripe customer from GHL SaaS billing
+            (requires SaaS OAuth scope), or paste a platform <code>cus_…</code> and verify. Add a saved payment method
+            when needed, then enable billing. Charges use your platform Stripe account and mirror the lead&apos;s paid
+            deposit. Optional: legacy Connect <code>acct_…</code> if you still use connected accounts.
           </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+            <button
+              className="button secondary"
+              disabled={syncAllBusy || billingLoading}
+              onClick={() => void syncAllStripeFromGhl()}
+              type="button"
+            >
+              {syncAllBusy ? "Syncing…" : "Sync all from GHL (max 50)"}
+            </button>
+          </div>
           {billingLoading ? <p className="muted">Loading locations…</p> : null}
           {billingError ? <div className="empty">{billingError}</div> : null}
           {!billingLoading && billingLocs.length > 0 ? (
@@ -1289,44 +1415,55 @@ export default function ClientChargesPage() {
               />
               <div className="subaccounts-config-list" style={{ marginTop: 16 }}>
                 {filteredBillingLocs.map((loc) => {
-                  const status = stripeConnectStatusLabel(loc);
+                  const status = stripeBillingStatusLabel(loc);
                   const busy = billingBusyId === loc.locationId;
+                  const canAddPm =
+                    (loc.hasStripeCustomer || loc.stripeCustomerMasked) && !loc.hasPaymentMethod;
                   return (
                     <div className="subaccount-config-row" key={loc.locationId} style={{ alignItems: "center" }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <strong>{formatLocationName(loc.locationName, loc.ghlLocationId)}</strong>
                         <div className="muted">
                           GHL: {loc.ghlLocationId} · {loc.currency} · Stripe: {status}
-                          {loc.stripeAccountMasked ? ` · ${loc.stripeAccountMasked}` : ""}
+                          {loc.stripeCustomerMasked ? ` · ${loc.stripeCustomerMasked}` : ""}
+                          {loc.stripeAccountMasked ? ` · Connect ${loc.stripeAccountMasked}` : ""}
                         </div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8, alignItems: "center" }}>
+                          <button
+                            className="button secondary"
+                            disabled={busy}
+                            onClick={() => void syncStripeFromGhl(loc)}
+                            type="button"
+                          >
+                            Sync from GHL
+                          </button>
                           <input
-                            aria-label={`Stripe account id for ${loc.ghlLocationId}`}
+                            aria-label={`Stripe customer id for ${loc.ghlLocationId}`}
                             autoCapitalize="off"
                             autoComplete="off"
                             className="appointments-filter-select"
                             disabled={busy}
                             onChange={(e) =>
-                              setStripeAccountDrafts((prev) => ({
+                              setStripeCustomerDrafts((prev) => ({
                                 ...prev,
                                 [loc.locationId]: e.target.value
                               }))
                             }
-                            placeholder="acct_…"
+                            placeholder="cus_…"
                             spellCheck={false}
                             style={{ maxWidth: 280, minWidth: 180 }}
                             type="text"
-                            value={stripeAccountDrafts[loc.locationId] ?? loc.stripeAccountId ?? ""}
+                            value={stripeCustomerDrafts[loc.locationId] ?? ""}
                           />
                           <button
                             className="button secondary"
                             disabled={busy}
-                            onClick={() => void linkStripeAccount(loc)}
+                            onClick={() => void linkStripeCustomer(loc)}
                             type="button"
                           >
-                            Save / verify
+                            Verify customer
                           </button>
-                          {(loc.stripeAccountMasked || loc.stripeAccountId) && !loc.hasPaymentMethod ? (
+                          {canAddPm ? (
                             <button
                               className="button secondary"
                               disabled={busy}
@@ -1337,6 +1474,39 @@ export default function ClientChargesPage() {
                             </button>
                           ) : null}
                         </div>
+                        <details style={{ marginTop: 8 }}>
+                          <summary className="muted" style={{ cursor: "pointer" }}>
+                            Optional Stripe Connect (acct_…)
+                          </summary>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8, alignItems: "center" }}>
+                            <input
+                              aria-label={`Stripe Connect account id for ${loc.ghlLocationId}`}
+                              autoCapitalize="off"
+                              autoComplete="off"
+                              className="appointments-filter-select"
+                              disabled={busy}
+                              onChange={(e) =>
+                                setStripeAccountDrafts((prev) => ({
+                                  ...prev,
+                                  [loc.locationId]: e.target.value
+                                }))
+                              }
+                              placeholder="acct_…"
+                              spellCheck={false}
+                              style={{ maxWidth: 280, minWidth: 180 }}
+                              type="text"
+                              value={stripeAccountDrafts[loc.locationId] ?? loc.stripeAccountId ?? ""}
+                            />
+                            <button
+                              className="button secondary"
+                              disabled={busy}
+                              onClick={() => void linkStripeAccount(loc)}
+                              type="button"
+                            >
+                              Save / verify Connect
+                            </button>
+                          </div>
+                        </details>
                       </div>
                       <label style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                         <span className="muted">Enable</span>

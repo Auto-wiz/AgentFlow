@@ -11,8 +11,8 @@ export type ClientChargeStripeEnv = {
   STRIPE_SECRET_KEY?: string;
 };
 
-export type StripeConnectedChargeRequest = {
-  connectedAccountId: string;
+export type StripeClientChargeRequest = {
+  connectedAccountId?: string | null;
   customerId: string;
   paymentMethodId: string;
   amountMajor: number;
@@ -22,7 +22,7 @@ export type StripeConnectedChargeRequest = {
   metadata: Record<string, string>;
 };
 
-export type StripeConnectedChargeResult =
+export type StripeChargeResult =
   | {
       ok: true;
       ambiguous: false;
@@ -59,15 +59,15 @@ export function createStripeClient(env: ClientChargeStripeEnv): Stripe | null {
 
 export { stripeConnectedChargeRequestOptions };
 
-export async function createStripeConnectedAccountCharge(
+export async function createStripeClientCharge(
   env: ClientChargeStripeEnv,
-  input: StripeConnectedChargeRequest
-): Promise<StripeConnectedChargeResult> {
+  input: StripeClientChargeRequest
+): Promise<StripeChargeResult> {
   const stripe = getStripe(env);
-  const connectedAccountId = input.connectedAccountId.trim();
+  const connectedAccountId = input.connectedAccountId?.trim() ?? "";
   const minor = toStripeMinorUnits(input.amountMajor, input.currency);
   const request: Record<string, unknown> = {
-    connectedAccountId,
+    connectedAccountId: connectedAccountId || null,
     customerId: input.customerId,
     paymentMethodId: input.paymentMethodId,
     amountMajor: input.amountMajor,
@@ -88,16 +88,6 @@ export async function createStripeConnectedAccountCharge(
       response: {}
     };
   }
-  if (!connectedAccountId) {
-    return {
-      ok: false,
-      ambiguous: false,
-      status: null,
-      error: "Stripe Connect account is not linked",
-      request,
-      response: {}
-    };
-  }
   if (minor == null) {
     return {
       ok: false,
@@ -109,7 +99,9 @@ export async function createStripeConnectedAccountCharge(
     };
   }
 
-  const stripeOptions = stripeConnectedChargeRequestOptions(connectedAccountId, input.idempotencyKey);
+  const stripeOptions = connectedAccountId
+    ? stripeConnectedChargeRequestOptions(connectedAccountId, input.idempotencyKey)
+    : { idempotencyKey: input.idempotencyKey.slice(0, 255) };
 
   try {
     const intent = await stripe.paymentIntents.create(
@@ -196,4 +188,12 @@ export async function createStripeConnectedAccountCharge(
       response: {}
     };
   }
+}
+
+/** @deprecated Use createStripeClientCharge */
+export async function createStripeConnectedAccountCharge(
+  env: ClientChargeStripeEnv,
+  input: StripeClientChargeRequest & { connectedAccountId: string }
+): Promise<StripeChargeResult> {
+  return createStripeClientCharge(env, input);
 }
