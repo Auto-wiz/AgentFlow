@@ -10,6 +10,7 @@ import {
 } from "./client-charges-logic.js";
 import { createStripeClient } from "./client-charges-stripe.js";
 import { syncLocationStripeFromGhlSaas } from "./client-charges-ghl-stripe-sync.js";
+import { GHL_SAAS_FETCH_BULK_OPTS } from "./ghl-saas-subscription.js";
 import {
   applyStripeAccountSnapshot,
   ensureLocationBillingConfigRow,
@@ -348,8 +349,8 @@ export async function postAdminClientChargesStripeSyncAllFromGhlHandler(c: Conte
   const filters =
     allowed === null ? undefined : allowed.length ? inArray(locations.id, allowed) : sql`false`;
 
-  const limitRaw = Number.parseInt(c.req.query("limit") ?? "25", 10);
-  const limit = Math.min(50, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 25));
+  const limitRaw = Number.parseInt(c.req.query("limit") ?? "5", 10);
+  const limit = Math.min(5, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 5));
 
   const locRows = await db
     .select({ locationId: locations.id, ghlLocationId: locations.ghlLocationId, name: locations.name })
@@ -370,7 +371,13 @@ export async function postAdminClientChargesStripeSyncAllFromGhlHandler(c: Conte
   }> = [];
 
   for (const loc of locRows) {
-    const synced = await syncLocationStripeFromGhlSaas(c.env, db, loc.locationId, loc.ghlLocationId);
+    const synced = await syncLocationStripeFromGhlSaas(
+      c.env,
+      db,
+      loc.locationId,
+      loc.ghlLocationId,
+      GHL_SAAS_FETCH_BULK_OPTS
+    );
     if (synced.ok) {
       results.push({
         locationId: loc.locationId,
@@ -403,6 +410,8 @@ export async function postAdminClientChargesStripeSyncAllFromGhlHandler(c: Conte
     syncedCount,
     billingReadyCount: readyCount,
     failedCount: results.length - syncedCount,
+    limit,
+    note: "Bulk sync is capped per request to stay within Cloudflare Worker subrequest limits. Run again to process more subaccounts.",
     results
   });
 }

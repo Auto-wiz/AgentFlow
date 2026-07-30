@@ -872,7 +872,7 @@ function formatGhlSyncFailureMessage(payload: {
     setSyncAllBusy(true);
     setBillingError(null);
     try {
-      const res = await fetch(`${apiBaseUrl}/admin/client-charges/stripe/sync-from-ghl-all?limit=50`, {
+      const res = await fetch(`${apiBaseUrl}/admin/client-charges/stripe/sync-from-ghl-all?limit=5`, {
         method: "POST",
         cache: "no-store",
         headers: mergeWorkspaceHeaders()
@@ -1441,7 +1441,7 @@ function formatGhlSyncFailureMessage(payload: {
               onClick={() => void syncAllStripeFromGhl()}
               type="button"
             >
-              {syncAllBusy ? "Syncing…" : "Sync all from GHL (max 50)"}
+              {syncAllBusy ? "Syncing…" : "Sync all from GHL (max 5 per run)"}
             </button>
           </div>
           {billingLoading ? <p className="muted">Loading locations…</p> : null}

@@ -1,7 +1,10 @@
 import { createDb } from "@agentflow/db";
 
 import { createStripeClient } from "./client-charges-stripe.js";
-import { fetchGhlSaasSubscriptionForLocation } from "./ghl-saas-subscription.js";
+import {
+  fetchGhlSaasSubscriptionForLocation,
+  type GhlSaasFetchOptions
+} from "./ghl-saas-subscription.js";
 import type { GhlOAuthTokenEnv } from "./ghl-oauth-location-token.js";
 import { maskStripeCustomerId } from "./location-billing-stripe.js";
 import { applyPlatformStripeCustomerToLocation } from "./stripe-platform-customer.js";
@@ -35,9 +38,10 @@ export async function syncLocationStripeFromGhlSaas(
   env: GhlStripeSyncEnv,
   db: ReturnType<typeof createDb>,
   locationId: string,
-  ghlLocationId: string
+  ghlLocationId: string,
+  ghlFetchOpts?: GhlSaasFetchOptions
 ): Promise<SyncLocationStripeFromGhlResult> {
-  const saas = await fetchGhlSaasSubscriptionForLocation(env, db, ghlLocationId);
+  const saas = await fetchGhlSaasSubscriptionForLocation(env, db, ghlLocationId, ghlFetchOpts);
   if (!saas.ok) {
     return {
       ok: false,
