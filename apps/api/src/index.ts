@@ -88,10 +88,8 @@ import {
   getHiddenLocationIdsForPolicy,
   jwtWorkspaceAllowedLocationUuidList,
   meHandler,
-  provisionWorkspaceUserFromGhlAccount,
   resolveAccessPolicy,
   resolveSessionUser,
-  signSessionForProvisionedUser,
   type AccessPolicy
 } from "./workspace-access.js";
 import {
@@ -782,7 +780,7 @@ app.get("/oauth/gohighlevel/callback", async (c) => {
   const storedState = getCookie(c.req.raw.headers, "ghl_oauth_state");
 
   if (error) {
-    return redirectToFrontend(c, `/settings/integrations?ghl=error&reason=${encodeURIComponent(error)}`);
+    return redirectToFrontend(c, `/settings?ghl=error&reason=${encodeURIComponent(error)}`);
   }
 
   if (!code) {
@@ -809,7 +807,7 @@ app.get("/oauth/gohighlevel/callback", async (c) => {
     if (establishedCompanyIds.size > 0 && !establishedCompanyIds.has(incomingCompanyId)) {
       return redirectToFrontend(
         c,
-        `/login?ghl=error&reason=${encodeURIComponent("wrong_agency")}`
+        `/settings?ghl=error&reason=${encodeURIComponent("wrong_agency")}`
       );
     }
 
@@ -852,34 +850,23 @@ app.get("/oauth/gohighlevel/callback", async (c) => {
       });
 
     const ghlUserId = tokenResponse.userId?.trim() ?? "";
+    if (ghlUserId) {
+      console.info("[ghl.oauth.callback] tokens stored", { companyId: incomingCompanyId, ghlUserId });
+    } else {
+      console.warn("[ghl.oauth.callback] tokens stored without userId in token response");
+    }
 
-    let nextPath = "/settings/integrations?ghl=connected";
-    if (jwtConfiguredForWorkspace(c.env)) {
-      if (!ghlUserId) {
-        nextPath = "/login?ghl=error&reason=no_ghl_user_id";
-      } else {
-        const provisioned = await provisionWorkspaceUserFromGhlAccount(db, ghlUserId);
-        if (!provisioned) {
-          nextPath = "/login?ghl=error&reason=provision_failed";
-        } else {
-          try {
-            const sessionToken = await signSessionForProvisionedUser(c.env, {
-              ...provisioned,
-              role: provisioned.role === "admin" ? "admin" : "user"
-            });
-            nextPath = `/login#session=${encodeURIComponent(sessionToken)}`;
-          } catch {
-            nextPath = "/login?ghl=error&reason=jwt_issue_failed";
-          }
-        }
-      }
+    // OAuth only persists installation tokens. Workspace users are created by admins (email/password).
+    let nextPath = "/settings?ghl=connected";
+    if (!ghlUserId) {
+      nextPath = "/settings?ghl=connected&warn=no_ghl_user_id";
     }
 
     return redirectToFrontend(c, nextPath);
   } catch (error) {
     console.error("Failed to complete GoHighLevel OAuth callback", error);
     const reason = error instanceof Error ? error.message : "oauth_callback_failed";
-    return redirectToFrontend(c, `/settings/integrations?ghl=error&reason=${encodeURIComponent(reason)}`);
+    return redirectToFrontend(c, `/settings?ghl=error&reason=${encodeURIComponent(reason)}`);
   }
 });
 

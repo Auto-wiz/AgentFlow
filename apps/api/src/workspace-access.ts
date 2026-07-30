@@ -137,7 +137,7 @@ export async function canWorkspaceAccessLocationUuid(
   return false;
 }
 
-// --- GoHighLevel -> workspace user provisioning (OAuth callback only) ---
+// --- GoHighLevel user id lookup (admin linking; OAuth callback does not auto-create users) ---
 export async function provisionWorkspaceUserFromGhlAccount(
   db: ReturnType<typeof createDb>,
   ghlUserId: string

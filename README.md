@@ -52,11 +52,9 @@ If Postgres was only **partially** migrated manually, fix objects in Neon’s SQ
 
 With `JWT_SECRET` set on the Worker, users **sign in at `/login`** with **email and password** (`POST /auth/login`). Create `workspace_users` rows in Postgres (email, bcrypt `password_hash`, role, etc.); the API uses the same bcrypt cost as `apps/api/src/auth-lib.ts` (`hashPassword`).
 
-**GoHighLevel OAuth** on the Worker is still used to store installation tokens and (optionally) provision a user tied to a GHL `userId` — for example from **Settings → Integrations** or when you wire Marketplace install flows. It is **not** the primary app login. Configure **`GHL_OAUTH_START_URL`** (Installation URL from Developer Portal → your app → Advanced Settings → Auth) or **`GHL_INSTALL_URL`** as a fallback.
+**GoHighLevel OAuth** on the Worker stores installation tokens when an admin connects from **Settings → Connect GoHighLevel**. It does **not** create workspace users or replace your login session — use **email/password** (admin-provisioned accounts) to sign in.
 
-When OAuth completes successfully, the Worker issues a session JWT and redirects to **`/login#session=<jwt>`** (hash consumed by the web app). GHL-only provisioned users default to role `user`; set `role=admin` in Postgres when needed.
-
-OAuth remains scoped to the **same HighLevel agency** already in your database: `agencies.ghl_agency_id` and/or `ghl_oauth_installations.company_id`. If both are empty, the **first** successful OAuth defines the tenant; later flows must use that same agency company id (otherwise the callback returns `wrong_agency`).
+OAuth remains scoped to the **same HighLevel agency** already in your database: `agencies.ghl_agency_id` and/or `ghl_oauth_installations.company_id`. If both are empty, the **first** successful OAuth defines the tenant; later flows must use that same agency company id (otherwise the callback returns `wrong_agency` and redirects to login with that error).
 
 Configure **Settings → Workspace admin** to choose default picked locations (`role=user`), and **Settings → Team selections** read-only overview of selections across everyone.
 

@@ -206,9 +206,10 @@ export default function WorkspaceAdminSettingsPage() {
         <p className="eyebrow">Workspace</p>
         <h2 style={{ marginTop: 8 }}>User access</h2>
         <p className="muted">
-          Workspace users can sign in via GoHighLevel OAuth (provisioned automatically) or with email/password when an
-          admin creates them under <strong>Create users</strong>. Here you configure which subaccounts each standard user{" "}
-          (<code className="muted">role=user</code>) can see until they personalize their picker.
+          Workspace users sign in with email and password after an admin creates them under{" "}
+          <strong>Create users</strong>. Connecting GoHighLevel under Settings only saves API tokens — it does not
+          create users. Here you configure which subaccounts each standard user (
+          <code className="muted">role=user</code>) can see until they personalize their picker.
         </p>
         {headerNote ? <p className="muted" style={{ marginTop: 10 }}>{headerNote}</p> : null}
       </div>
