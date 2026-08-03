@@ -182,16 +182,27 @@ Production API (`https://api.agentflow.autowiz.net`) is Worker **`agenflow-back`
 
 ### Cloudflare Workers Builds (production deploy)
 
-In **Cloudflare Dashboard → Workers → agenflow-back → Settings → Build**, connect **GitHub `Auto-wiz/AgentFlow`**, branch **`main`**, root **`/`**:
+**Stripe webhooks** (`/webhooks/stripe`) and the REST API are **`agenflow-back`** (`apps/api`). **Cloudflare Pages** (`agentflow-web`) is only the Next.js dashboard — a Pages deploy does **not** update webhook handling.
+
+In **Cloudflare Dashboard → Workers → agenflow-back → Settings → Build** (not Pages), connect **GitHub `Auto-wiz/AgentFlow`**, branch **`main`**, root **`/`**:
 
 - **Build:** `npm ci && npm run check -w @agentflow/api`
 - **Deploy:** `cd apps/api && npx wrangler deploy`
 
-Each push to **`main`** should run build then deploy. If production does not update, open **Deployments** and read the build log (failed `check` skips deploy). Runtime secrets (`DATABASE_URL`, `STRIPE_*`, etc.) live under **Worker → Settings → Variables and Secrets**, not under Build “Variables and secrets”.
+After each push, confirm a new deployment under **Workers → agenflow-back → Deployments** (not under Pages). Failed `check` skips deploy.
 
-### GitHub Actions (CI only)
+Runtime secrets (`DATABASE_URL`, `STRIPE_*`, etc.) live under **Worker → Settings → Variables and Secrets**.
 
-[`.github/workflows/ci-api-worker.yml`](.github/workflows/ci-api-worker.yml) runs `npm ci`, typecheck, and API tests on push/PR — the green check on GitHub. It does **not** deploy (avoids needing Cloudflare tokens in GitHub while Builds already deploys).
+### GitHub Actions (check + optional deploy)
+
+[`.github/workflows/api-worker.yml`](.github/workflows/api-worker.yml) typechecks/tests on every push/PR. On push to **`main`**, it also runs **`wrangler deploy`** for `apps/api` **if** these repo secrets exist:
+
+- **`CLOUDFLARE_API_TOKEN`** — Workers Edit (you can reuse the same token as Cloudflare Builds)
+- **`CLOUDFLARE_ACCOUNT_ID`**
+
+Without those secrets, the workflow stays green but **skips deploy** (use Cloudflare Builds or manual `wrangler deploy`).
+
+Use **either** Cloudflare Builds deploy **or** GitHub Actions deploy routinely, not both, to avoid double deploys.
 
 ### Manual fallback
 
