@@ -9,7 +9,8 @@
   ],
   "scripts": {
     "check": "npm run check --workspaces --if-present",
-    "build": "npm run build --workspaces --if-present"
+    "build": "npm run build --workspaces --if-present",
+    "cf-build-api": "npm ci && npm run check -w @agentflow/api"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

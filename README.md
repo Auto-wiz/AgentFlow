@@ -186,23 +186,27 @@ Production API (`https://api.agentflow.autowiz.net`) is Worker **`agenflow-back`
 
 In **Cloudflare Dashboard → Workers → agenflow-back → Settings → Build** (not Pages), connect **GitHub `Auto-wiz/AgentFlow`**, branch **`main`**, root **`/`**:
 
-- **Build:** `npm ci && npm run check -w @agentflow/api`
+- **Build:** `npm run cf-build-api` (or `npm ci && npm run check -w @agentflow/api`)
 - **Deploy:** `cd apps/api && npx wrangler deploy`
 
-After each push, confirm a new deployment under **Workers → agenflow-back → Deployments** (not under Pages). Failed `check` skips deploy.
+Every push to **`main`** should create a row under **Workers → agenflow-back → Deployments**. If the last deploy is older than your latest commit, the GitHub→Cloudflare webhook may have stopped — use **Manage** on the Git connection to reconnect, or use the GitHub Actions deploy hook below.
 
 Runtime secrets (`DATABASE_URL`, `STRIPE_*`, etc.) live under **Worker → Settings → Variables and Secrets**.
 
-### GitHub Actions (check + optional deploy)
+### GitHub Actions (reliable trigger on every push)
 
-[`.github/workflows/api-worker.yml`](.github/workflows/api-worker.yml) typechecks/tests on every push/PR. On push to **`main`**, it also runs **`wrangler deploy`** for `apps/api` **if** these repo secrets exist:
+[`.github/workflows/api-worker.yml`](.github/workflows/api-worker.yml) runs the same check as Cloudflare, then **must** deploy via one of:
 
-- **`CLOUDFLARE_API_TOKEN`** — Workers Edit (you can reuse the same token as Cloudflare Builds)
-- **`CLOUDFLARE_ACCOUNT_ID`**
+1. **Recommended — Deploy Hook** (reuses Cloudflare Builds; no API token in GitHub):  
+   - Cloudflare → **agenflow-back → Builds → Deploy Hooks** → create hook for **`main`**  
+   - GitHub → **Settings → Secrets → Actions** → `CLOUDFLARE_WORKER_DEPLOY_HOOK_URL` = hook URL  
 
-Without those secrets, the workflow stays green but **skips deploy** (use Cloudflare Builds or manual `wrangler deploy`).
+2. **Alternative — wrangler from GitHub:**  
+   `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`
 
-Use **either** Cloudflare Builds deploy **or** GitHub Actions deploy routinely, not both, to avoid double deploys.
+Until one of these secrets exists, the workflow **fails on purpose** after check so you know the API did not deploy (Pages may still update separately).
+
+Use **either** hook/wrangler from GitHub **or** rely only on Cloudflare git push builds — not both routinely (double deploy).
 
 ### Manual fallback
 
