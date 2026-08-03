@@ -180,22 +180,18 @@ npm run pages:build -w @agentflow/web
 
 Production API (`https://api.agentflow.autowiz.net`) is Worker **`agenflow-back`** (`apps/api`).
 
-### Option A — Cloudflare Workers Builds (Dashboard)
+### Cloudflare Workers Builds (production deploy)
 
-Connect **GitHub → `Auto-wiz/AgentFlow`**, production branch **`main`**, root **`/`**. Typical commands (match your Dashboard):
+In **Cloudflare Dashboard → Workers → agenflow-back → Settings → Build**, connect **GitHub `Auto-wiz/AgentFlow`**, branch **`main`**, root **`/`**:
 
-- **Build:** `npm ci && npm run check -w @agentflow/api` (prefer `npm ci` over `npm install`)
+- **Build:** `npm ci && npm run check -w @agentflow/api`
 - **Deploy:** `cd apps/api && npx wrangler deploy`
 
-Every push to **`main`** should start a build; if production does not update, open **Workers → agenflow-back → Deployments** and read the failed build log (a failed `check` skips deploy). Runtime secrets (`DATABASE_URL`, `STRIPE_*`, etc.) stay under **Worker → Settings → Variables and Secrets**, not under Build “Variables and secrets”.
+Each push to **`main`** should run build then deploy. If production does not update, open **Deployments** and read the build log (failed `check` skips deploy). Runtime secrets (`DATABASE_URL`, `STRIPE_*`, etc.) live under **Worker → Settings → Variables and Secrets**, not under Build “Variables and secrets”.
 
-### Option B — GitHub Actions (in this repo)
+### GitHub Actions (CI only)
 
-Workflow [`.github/workflows/deploy-api-worker.yml`](.github/workflows/deploy-api-worker.yml) runs the same **check + wrangler deploy** on each push to **`main`**.
-
-One-time: **GitHub → Settings → Secrets and variables → Actions** → add **`CLOUDFLARE_API_TOKEN`** and **`CLOUDFLARE_ACCOUNT_ID`**.
-
-Use **either** Cloudflare Deploy **or** GitHub Actions for deploy, not both (otherwise each push deploys twice). Many teams keep Dashboard git connected for visibility but leave Deploy empty and rely on Actions.
+[`.github/workflows/ci-api-worker.yml`](.github/workflows/ci-api-worker.yml) runs `npm ci`, typecheck, and API tests on push/PR — the green check on GitHub. It does **not** deploy (avoids needing Cloudflare tokens in GitHub while Builds already deploys).
 
 ### Manual fallback
 

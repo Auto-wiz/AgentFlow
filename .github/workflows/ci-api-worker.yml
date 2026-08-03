@@ -1,0 +1,31 @@
+# Validates API on every push to main. Production deploy is Cloudflare Workers Builds
+# (Dashboard: Build + Deploy on push to main). Do not duplicate deploy here unless you
+# add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID to GitHub Actions secrets.
+
+name: CI API Worker
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck API
+        run: npm run check -w @agentflow/api
+
+      - name: API unit tests
+        run: npm run test -w @agentflow/api
