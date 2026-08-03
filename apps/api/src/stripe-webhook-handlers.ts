@@ -176,7 +176,7 @@ export async function postStripeWebhookHandler(c: Context<Bindings>) {
   const rawBody = await c.req.text();
   let event: Stripe.Event;
   try {
-    event = stripe.webhooks.constructEvent(rawBody, signature, secret) as Stripe.Event;
+    event = (await stripe.webhooks.constructEventAsync(rawBody, signature, secret)) as Stripe.Event;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return c.json({ error: "invalid_signature", message }, 400);
