@@ -21,6 +21,8 @@ import {
   extractGhlCompanyIdFromStripeMetadata,
   findGhlSaasLocationRecord,
   listGhlSaasLocationRowsFromPage,
+  stripeCustomerDisplayName,
+  stripeCustomerEmail,
   summarizeUnknownJsonShape,
   isClientChargesChargingEnabled,
   pickCanonicalDepositSource,
@@ -185,6 +187,17 @@ describe("Stripe customer id and GHL SaaS payload", () => {
     assert.equal(extractGhlLocationIdFromStripeMetadata({ location_id: "loc_y" }), "loc_y");
     assert.equal(extractGhlCompanyIdFromStripeMetadata({ companyId: "co_z" }), "co_z");
     assert.equal(extractGhlLocationIdFromStripeMetadata({}), null);
+  });
+
+  it("builds Stripe customer display name from name or individual fields", () => {
+    assert.equal(stripeCustomerDisplayName({ name: "Acme Co" }), "Acme Co");
+    assert.equal(
+      stripeCustomerDisplayName({
+        individual: { first_name: "Jane", last_name: "Doe" }
+      }),
+      "Jane Doe"
+    );
+    assert.equal(stripeCustomerEmail({ email: " j@x.com " }), "j@x.com");
   });
 });
 

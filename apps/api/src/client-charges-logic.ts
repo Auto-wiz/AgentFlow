@@ -90,6 +90,24 @@ export function isValidStripeCustomerId(raw: unknown): boolean {
   return normalizeStripeCustomerId(raw) != null;
 }
 
+/** Display name from a Stripe Customer (name field or individual first/last). */
+export function stripeCustomerDisplayName(customer: {
+  name?: string | null;
+  individual?: { first_name?: string | null; last_name?: string | null } | null;
+}): string | null {
+  const full = customer.name?.trim();
+  if (full) return full;
+  const ind = customer.individual;
+  if (!ind || typeof ind !== "object") return null;
+  const parts = [ind.first_name?.trim(), ind.last_name?.trim()].filter(Boolean);
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
+export function stripeCustomerEmail(customer: { email?: string | null }): string | null {
+  const email = customer.email?.trim();
+  return email || null;
+}
+
 const GHL_LOCATION_METADATA_KEYS = [
   "locationId",
   "location_id",

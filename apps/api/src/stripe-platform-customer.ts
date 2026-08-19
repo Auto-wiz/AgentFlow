@@ -4,7 +4,9 @@ import type Stripe from "stripe";
 
 import {
   normalizeStripeCustomerId,
-  pickDefaultPaymentMethodIdFromStripeCustomer
+  pickDefaultPaymentMethodIdFromStripeCustomer,
+  stripeCustomerDisplayName,
+  stripeCustomerEmail
 } from "./client-charges-logic.js";
 import {
   ensureLocationBillingConfigRow,
@@ -107,6 +109,8 @@ export async function applyPlatformStripeCustomerToLocation(
     .update(locationBillingConfigTable)
     .set({
       stripeCustomerId,
+      stripeCustomerName: stripeCustomerDisplayName(customer),
+      stripeCustomerEmail: stripeCustomerEmail(customer),
       stripeDefaultPaymentMethodId: defaultPm,
       billingReadyAt: billingReady ? now : null,
       updatedAt: now
@@ -118,7 +122,7 @@ export async function applyPlatformStripeCustomerToLocation(
     stripeCustomerId,
     stripeDefaultPaymentMethodId: defaultPm,
     billingReady,
-    customerEmail: typeof customer.email === "string" ? customer.email : null,
-    customerName: typeof customer.name === "string" ? customer.name : null
+    customerEmail: stripeCustomerEmail(customer),
+    customerName: stripeCustomerDisplayName(customer)
   };
 }

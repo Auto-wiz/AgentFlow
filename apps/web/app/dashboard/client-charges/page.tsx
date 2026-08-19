@@ -129,6 +129,8 @@ type BillingLocationConfig = {
   stripeAccountId: string | null;
   stripeAccountMasked: string | null;
   stripeCustomerMasked: string | null;
+  stripeCustomerName: string | null;
+  stripeCustomerEmail: string | null;
   hasStripeCustomer: boolean;
   connectOnboardingStatus: string | null;
   connectDetailsSubmitted: boolean;
@@ -244,6 +246,14 @@ function canRetry(row: ClientChargeRow, isAdmin: boolean, chargingEnabled: boole
 
 function locationLabel(row: Pick<ClientChargeOverviewRow, "locationName" | "ghlLocationId">) {
   return formatLocationName(row.locationName, row.ghlLocationId);
+}
+
+function stripeClientLabel(loc: Pick<BillingLocationConfig, "stripeCustomerName" | "stripeCustomerEmail">) {
+  const name = loc.stripeCustomerName?.trim();
+  if (name) return name;
+  const email = loc.stripeCustomerEmail?.trim();
+  if (email) return email;
+  return "—";
 }
 
 function StripeBillingLinkBadge({
@@ -1070,8 +1080,12 @@ function formatGhlSyncFailureMessage(payload: {
     if (!needle) return sorted;
     return sorted.filter((loc) => {
       const name = (loc.locationName ?? "").toLowerCase();
+      const clientName = (loc.stripeCustomerName ?? "").toLowerCase();
+      const clientEmail = (loc.stripeCustomerEmail ?? "").toLowerCase();
       return (
         name.includes(needle) ||
+        clientName.includes(needle) ||
+        clientEmail.includes(needle) ||
         loc.ghlLocationId.toLowerCase().includes(needle) ||
         loc.locationId.toLowerCase().includes(needle)
       );
@@ -1465,28 +1479,67 @@ function formatGhlSyncFailureMessage(payload: {
                 className="appointments-filter-select"
                 id="client-charges-eligibility-search"
                 onChange={(e) => setBillingSearch(e.target.value)}
-                placeholder="Name, GHL id, or uuid…"
+                placeholder="Client name, subaccount, GHL id…"
                 spellCheck={false}
                 style={{ display: "block", marginTop: 6, maxWidth: 400, width: "100%" }}
                 type="search"
                 value={billingSearch}
               />
-              <div className="subaccounts-config-list" style={{ marginTop: 16 }}>
+              <div className="dashboard-table-wrap" style={{ marginTop: 16 }}>
+                <table className="dashboard-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Client (Stripe)</th>
+                      <th scope="col">Subaccount</th>
+                      <th scope="col">GHL location</th>
+                      <th scope="col">Stripe billing</th>
+                      <th scope="col">Enable</th>
+                      <th scope="col">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
                 {filteredBillingLocs.map((loc) => {
                   const status = stripeBillingStatusLabel(loc);
                   const busy = billingBusyId === loc.locationId;
                   const canAddPm =
                     (loc.hasStripeCustomer || loc.stripeCustomerMasked) && !loc.hasPaymentMethod;
+                  const clientName = loc.stripeCustomerName?.trim() || null;
+                  const clientEmail = loc.stripeCustomerEmail?.trim() || null;
                   return (
-                    <div className="subaccount-config-row" key={loc.locationId} style={{ alignItems: "center" }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
+                    <tr key={loc.locationId}>
+                      <td>
+                        <strong>{stripeClientLabel(loc)}</strong>
+                        {clientName && clientEmail ? (
+                          <div className="muted">{clientEmail}</div>
+                        ) : null}
+                        {loc.stripeCustomerMasked ? (
+                          <div className="muted">{loc.stripeCustomerMasked}</div>
+                        ) : null}
+                      </td>
+                      <td>
                         <strong>{formatLocationName(loc.locationName, loc.ghlLocationId)}</strong>
-                        <div className="muted">
-                          GHL: {loc.ghlLocationId} · {loc.currency} · Stripe: {status}
-                          {loc.stripeCustomerMasked ? ` · ${loc.stripeCustomerMasked}` : ""}
-                          {loc.stripeAccountMasked ? ` · Connect ${loc.stripeAccountMasked}` : ""}
-                        </div>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8, alignItems: "center" }}>
+                        <div className="muted">{loc.currency}</div>
+                      </td>
+                      <td>
+                        <code>{loc.ghlLocationId}</code>
+                      </td>
+                      <td>
+                        {status}
+                        {loc.stripeAccountMasked ? (
+                          <div className="muted">Connect {loc.stripeAccountMasked}</div>
+                        ) : null}
+                      </td>
+                      <td>
+                        <input
+                          aria-label={`Enable Client Charges for ${loc.ghlLocationId}`}
+                          checked={Boolean(loc.enabled)}
+                          disabled={busy || (!loc.billingReady && !loc.enabled)}
+                          onChange={(e) => void patchLocationBilling(loc, e.target.checked)}
+                          type="checkbox"
+                        />
+                      </td>
+                      <td>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
                           <button
                             className="button secondary"
                             disabled={busy}
@@ -1509,7 +1562,7 @@ function formatGhlSyncFailureMessage(payload: {
                             }
                             placeholder="cus_…"
                             spellCheck={false}
-                            style={{ maxWidth: 280, minWidth: 180 }}
+                            style={{ maxWidth: 220, minWidth: 140 }}
                             type="text"
                             value={stripeCustomerDrafts[loc.locationId] ?? ""}
                           />
@@ -1565,20 +1618,12 @@ function formatGhlSyncFailureMessage(payload: {
                             </button>
                           </div>
                         </details>
-                      </div>
-                      <label style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                        <span className="muted">Enable</span>
-                        <input
-                          aria-label={`Enable Client Charges for ${loc.ghlLocationId}`}
-                          checked={Boolean(loc.enabled)}
-                          disabled={busy || (!loc.billingReady && !loc.enabled)}
-                          onChange={(e) => void patchLocationBilling(loc, e.target.checked)}
-                          type="checkbox"
-                        />
-                      </label>
-                    </div>
+                      </td>
+                    </tr>
                   );
                 })}
+                  </tbody>
+                </table>
               </div>
             </>
           ) : null}

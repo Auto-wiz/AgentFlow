@@ -632,6 +632,8 @@ export const locationBillingConfig = pgTable(
     ghlMeterId: text("ghl_meter_id"),
     stripeAccountId: text("stripe_account_id"),
     stripeCustomerId: text("stripe_customer_id"),
+    stripeCustomerName: text("stripe_customer_name"),
+    stripeCustomerEmail: text("stripe_customer_email"),
     stripeDefaultPaymentMethodId: text("stripe_default_payment_method_id"),
     connectChargesEnabled: boolean("connect_charges_enabled").notNull().default(false),
     connectPayoutsEnabled: boolean("connect_payouts_enabled").notNull().default(false),

@@ -10,6 +10,8 @@ export type LocationBillingStripeRow = {
   currency: string;
   stripeAccountId: string | null;
   stripeCustomerId: string | null;
+  stripeCustomerName: string | null;
+  stripeCustomerEmail: string | null;
   stripeDefaultPaymentMethodId: string | null;
   connectChargesEnabled: boolean;
   connectPayoutsEnabled: boolean;
