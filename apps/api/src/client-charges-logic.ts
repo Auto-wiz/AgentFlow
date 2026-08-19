@@ -210,6 +210,54 @@ function saasRowGhlLocationId(row: Record<string, unknown>): string | null {
   return null;
 }
 
+/** Collect every SaaS location row from one GET /saas/saas-locations/:companyId page (v3). */
+export function listGhlSaasLocationRowsFromPage(payload: unknown): Array<{
+  ghlLocationId: string;
+  name: string | null;
+  row: Record<string, unknown>;
+}> {
+  const out: Array<{ ghlLocationId: string; name: string | null; row: Record<string, unknown> }> = [];
+  const seen = new Set<string>();
+
+  const pushRow = (row: Record<string, unknown>) => {
+    const ghlLocationId = saasRowGhlLocationId(row);
+    if (!ghlLocationId || seen.has(ghlLocationId)) return;
+    seen.add(ghlLocationId);
+    const nameRaw =
+      (typeof row.name === "string" && row.name) ||
+      (typeof row.locationName === "string" && row.locationName) ||
+      (typeof row.businessName === "string" && row.businessName) ||
+      null;
+    out.push({ ghlLocationId, name: nameRaw?.trim() || null, row });
+  };
+
+  const scanArray = (arr: unknown[]) => {
+    for (const item of arr) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      pushRow(item as Record<string, unknown>);
+    }
+  };
+
+  const visit = (value: unknown, depth: number) => {
+    if (depth > 6 || value == null) return;
+    if (Array.isArray(value)) {
+      scanArray(value);
+      return;
+    }
+    if (typeof value !== "object") return;
+    const obj = value as Record<string, unknown>;
+    pushRow(obj);
+    for (const key of ["locations", "saasLocations", "data", "items", "results"]) {
+      const nested = obj[key];
+      if (Array.isArray(nested)) scanArray(nested);
+      else if (nested && typeof nested === "object") visit(nested, depth + 1);
+    }
+  };
+
+  visit(payload, 0);
+  return out;
+}
+
 /** Pick one SaaS location row from GET /saas/saas-locations/:companyId (v3) list payloads. */
 export function findGhlSaasLocationRecord(
   payload: unknown,

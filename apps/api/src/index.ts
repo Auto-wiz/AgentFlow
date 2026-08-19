@@ -117,6 +117,7 @@ import {
   patchAdminLocationStripeCustomerLinkHandler,
   patchAdminLocationStripeLinkHandler,
   postAdminClientChargesStripeSyncAllFromGhlHandler,
+  postAdminClientChargesStripeSyncSaasCatalogFromGhlHandler,
   postAdminLocationStripeBillingSetupHandler,
   postAdminLocationStripeSyncFromGhlHandler
 } from "./stripe-connect-handlers.js";
@@ -718,6 +719,10 @@ app.post(
   postAdminLocationStripeSyncFromGhlHandler
 );
 app.post("/admin/client-charges/stripe/sync-from-ghl-all", postAdminClientChargesStripeSyncAllFromGhlHandler);
+app.post(
+  "/admin/client-charges/stripe/sync-saas-catalog-from-ghl",
+  postAdminClientChargesStripeSyncSaasCatalogFromGhlHandler
+);
 app.get("/admin/client-charges/locations/:locationId/stripe/status", getAdminLocationStripeStatusHandler);
 app.post(
   "/admin/client-charges/locations/:locationId/stripe/billing-setup",
@@ -5329,7 +5334,11 @@ async function normalizeGhlWebhook(
 }
 
 function isSaasBillingWebhookEvent(eventLower: string) {
-  return eventLower.includes("saasplan") || eventLower.includes("locationcreate");
+  if (eventLower.includes("saasplan")) return true;
+  if (eventLower.includes("saaslocation")) return true;
+  if (eventLower.includes("locationcreate")) return true;
+  if (eventLower === "planchange") return true;
+  return false;
 }
 
 async function normalizeSaasBillingWebhook(

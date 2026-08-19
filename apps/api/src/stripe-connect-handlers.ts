@@ -1,4 +1,4 @@
-import { createDb, locationBillingConfig, locations } from "@agentflow/db";
+import { createDb, locationBillingConfig, locations, agencies } from "@agentflow/db";
 import { canAccessClientCharges } from "@agentflow/shared";
 import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Context } from "hono";
@@ -10,6 +10,7 @@ import {
 } from "./client-charges-logic.js";
 import { createStripeClient } from "./client-charges-stripe.js";
 import { syncLocationStripeFromGhlSaas } from "./client-charges-ghl-stripe-sync.js";
+import { syncGhlSaasCatalogPage } from "./ghl-saas-catalog-sync.js";
 import { GHL_SAAS_FETCH_BULK_OPTS } from "./ghl-saas-subscription.js";
 import {
   applyStripeAccountSnapshot,
@@ -414,6 +415,58 @@ export async function postAdminClientChargesStripeSyncAllFromGhlHandler(c: Conte
     note: "Bulk sync is capped per request to stay within Cloudflare Worker subrequest limits. Run again to process more subaccounts.",
     results
   });
+}
+
+export async function postAdminClientChargesStripeSyncSaasCatalogFromGhlHandler(c: Context<Bindings>) {
+  const auth = await assertAdminClientCharges(c);
+  if (!auth) return c.json({ error: "forbidden" }, 403);
+
+  const db = createDb(c.env.DATABASE_URL);
+  const companyIdRaw = (c.req.query("companyId") ?? c.req.query("ghlCompanyId") ?? "").trim();
+  let ghlCompanyId = companyIdRaw;
+
+  if (!ghlCompanyId) {
+    const [agency] = await db
+      .select({ ghlAgencyId: agencies.ghlAgencyId })
+      .from(agencies)
+      .orderBy(asc(agencies.ghlAgencyId))
+      .limit(1);
+    ghlCompanyId = agency?.ghlAgencyId?.trim() ?? "";
+  }
+
+  if (!ghlCompanyId) {
+    return c.json(
+      {
+        error: "company_id_missing",
+        message: "Pass ?companyId=GHL_COMPANY_ID or connect an agency with OAuth first."
+      },
+      400
+    );
+  }
+
+  const pageRaw = Number.parseInt(c.req.query("page") ?? "1", 10);
+  const limitRaw = Number.parseInt(c.req.query("limit") ?? "8", 10);
+  const page = Number.isFinite(pageRaw) ? Math.max(1, pageRaw) : 1;
+  const maxLocations = Number.isFinite(limitRaw) ? Math.min(12, Math.max(1, limitRaw)) : 8;
+
+  const result = await syncGhlSaasCatalogPage(c.env, db, {
+    ghlCompanyId,
+    page,
+    maxLocations
+  });
+
+  if ("code" in result && "error" in result && !("processed" in result)) {
+    const fail = result as { code: string; error: string };
+    const status =
+      fail.code === "company_oauth_token_missing" || fail.code === "ghl_saas_list_failed"
+        ? 502
+        : fail.code === "stripe_not_configured"
+          ? 500
+          : 400;
+    return c.json({ error: fail.code, message: fail.error }, status);
+  }
+
+  return c.json(result);
 }
 
 export async function patchAdminLocationStripeCustomerLinkHandler(c: Context<Bindings>) {

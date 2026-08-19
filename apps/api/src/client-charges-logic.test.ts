@@ -18,6 +18,7 @@ import {
   normalizeStripeCustomerId,
   extractSaasSubscriptionStripeCustomerId,
   findGhlSaasLocationRecord,
+  listGhlSaasLocationRowsFromPage,
   summarizeUnknownJsonShape,
   isClientChargesChargingEnabled,
   pickCanonicalDepositSource,
@@ -163,6 +164,18 @@ describe("Stripe customer id and GHL SaaS payload", () => {
     );
     assert.equal(row?.customerId, "cus_abc123");
     assert.equal(extractSaasSubscriptionStripeCustomerId(row), "cus_abc123");
+  });
+
+  it("lists all SaaS location rows on a v3 page", () => {
+    const rows = listGhlSaasLocationRowsFromPage({
+      locations: [
+        { locationId: "loc_a", customerId: "cus_a", name: "A" },
+        { locationId: "loc_b", name: "B" }
+      ]
+    });
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0]?.ghlLocationId, "loc_a");
+    assert.equal(extractSaasSubscriptionStripeCustomerId(rows[0]?.row), "cus_a");
   });
 });
 
