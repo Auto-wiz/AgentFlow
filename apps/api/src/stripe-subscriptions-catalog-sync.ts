@@ -225,6 +225,7 @@ export async function syncStripeActiveSubscriptionsPage(
 
     let ghlLocationId = pickGhlLocationId(subscription, customer);
     let lookupSource = ghlLocationId ? "stripe_metadata" : "";
+    let lookupDiagnostics: string | undefined;
 
     if (!ghlLocationId) {
       const lookup = await fetchGhlLocationIdsForStripeBilling(env, db, {
@@ -232,13 +233,29 @@ export async function syncStripeActiveSubscriptionsPage(
         stripeCustomerId: customerId,
         stripeSubscriptionId: subscription.id
       });
-      if (lookup.ok && lookup.ghlLocationIds[0]) {
+      if (!lookup.ok) {
+        results.push({
+          subscriptionId: subscription.id,
+          ghlLocationId: null,
+          locationId: "",
+          locationName: typeof customer.name === "string" ? customer.name : null,
+          stripeCustomerMasked: maskStripeCustomerId(customerId),
+          billingReady: false,
+          ok: false,
+          code: lookup.code,
+          error: lookup.error
+        });
+        continue;
+      }
+      lookupDiagnostics = lookup.diagnostics;
+      if (lookup.ghlLocationIds[0]) {
         ghlLocationId = lookup.ghlLocationIds[0]!;
         lookupSource = lookup.source;
       }
     }
 
     if (!ghlLocationId) {
+      const ghlDetail = lookupDiagnostics ? ` GHL: ${lookupDiagnostics}` : "";
       results.push({
         subscriptionId: subscription.id,
         ghlLocationId: null,
@@ -248,8 +265,7 @@ export async function syncStripeActiveSubscriptionsPage(
         billingReady: false,
         ok: false,
         code: "no_ghl_location_mapping",
-        error:
-          "Could not map subscription to a GHL subaccount (no Stripe metadata and GHL /saas/locations lookup returned nothing)."
+        error: `No Stripe metadata and GHL /saas/locations returned no subaccount.${ghlDetail} Run sync-ghl-saas-billing-catalog.mjs first.`
       });
       continue;
     }

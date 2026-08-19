@@ -27,7 +27,7 @@ export async function fetchGhlLocationIdsForStripeBilling(
     stripeSubscriptionId?: string | null;
   }
 ): Promise<
-  | { ok: true; ghlLocationIds: string[]; source: string }
+  | { ok: true; ghlLocationIds: string[]; source: string; diagnostics?: string }
   | { ok: false; code: string; error: string }
 > {
   const companyId = opts.ghlCompanyId.trim();
@@ -63,40 +63,56 @@ export async function fetchGhlLocationIdsForStripeBilling(
   }
 
   const baseUrl = (env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com").replace(/\/$/, "");
-  const params = new URLSearchParams({ companyId });
-  if (customerId) params.set("customerId", customerId);
-  if (subscriptionId) params.set("subscriptionId", subscriptionId);
-
   const pathPrefixes = ["/saas/locations", "/saas-api/public-api/locations"] as const;
   const versions = ["2021-04-15", "v3"] as const;
-  let lastError = "GHL SaaS location lookup returned no rows";
+  const attemptErrors: string[] = [];
 
-  for (const pathPrefix of pathPrefixes) {
-    for (const version of versions) {
-      const url = `${baseUrl}${pathPrefix}?${params.toString()}`;
-      try {
-        const response = await fetch(url, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: "application/json",
-            Version: version
+  const paramSets: URLSearchParams[] = [];
+  {
+    const both = new URLSearchParams({ companyId });
+    if (customerId) both.set("customerId", customerId);
+    if (subscriptionId) both.set("subscriptionId", subscriptionId);
+    paramSets.push(both);
+  }
+  if (customerId) {
+    paramSets.push(new URLSearchParams({ companyId, customerId }));
+  }
+  if (subscriptionId) {
+    paramSets.push(new URLSearchParams({ companyId, subscriptionId }));
+  }
+
+  for (const params of paramSets) {
+    for (const pathPrefix of pathPrefixes) {
+      for (const version of versions) {
+        const url = `${baseUrl}${pathPrefix}?${params.toString()}`;
+        try {
+          const response = await fetch(url, {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/json",
+              Version: version
+            }
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            attemptErrors.push(`${pathPrefix} (${version}): ${ghlErrorMessage(payload, response.status)}`);
+            continue;
           }
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          lastError = ghlErrorMessage(payload, response.status);
-          continue;
+          const ghlLocationIds = parseGhlLocationIdsFromSaasLocationsLookupPayload(payload);
+          if (ghlLocationIds.length > 0) {
+            return { ok: true, ghlLocationIds, source: `${pathPrefix} (${version})` };
+          }
+          attemptErrors.push(`${pathPrefix} (${version}): empty result`);
+        } catch (err) {
+          attemptErrors.push(
+            `${pathPrefix} (${version}): ${err instanceof Error ? err.message : String(err)}`
+          );
         }
-        const ghlLocationIds = parseGhlLocationIdsFromSaasLocationsLookupPayload(payload);
-        if (ghlLocationIds.length > 0) {
-          return { ok: true, ghlLocationIds, source: `${pathPrefix} (${version})` };
-        }
-      } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err);
       }
     }
   }
 
-  return { ok: true, ghlLocationIds: [], source: "none" };
+  const diagnostics = attemptErrors.slice(-4).join(" | ") || "GHL SaaS location lookup returned no rows";
+  return { ok: true, ghlLocationIds: [], source: "none", diagnostics };
 }
