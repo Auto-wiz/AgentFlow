@@ -505,28 +505,40 @@ export async function postAdminClientChargesStripeSyncFromStripeSubscriptionsHan
     );
   }
 
-  const limitRaw = Number.parseInt(c.req.query("limit") ?? "8", 10);
-  const limit = Number.isFinite(limitRaw) ? Math.min(10, Math.max(1, limitRaw)) : 8;
+  const limitRaw = Number.parseInt(c.req.query("limit") ?? "4", 10);
+  const limit = Number.isFinite(limitRaw) ? Math.min(6, Math.max(1, limitRaw)) : 4;
   const startingAfter = (c.req.query("starting_after") ?? c.req.query("startingAfter") ?? "").trim() || null;
 
-  const result = await syncStripeActiveSubscriptionsPage(c.env, db, {
-    ghlCompanyId,
-    limit,
-    startingAfter
-  });
+  try {
+    const result = await syncStripeActiveSubscriptionsPage(c.env, db, {
+      ghlCompanyId,
+      limit,
+      startingAfter
+    });
 
-  if ("code" in result && "error" in result && !("processed" in result)) {
-    const fail = result as { code: string; error: string };
-    const status =
-      fail.code === "stripe_subscriptions_list_failed"
-        ? 502
-        : fail.code === "stripe_not_configured"
-          ? 500
-          : 400;
-    return c.json({ error: fail.code, message: fail.error }, status);
+    if ("code" in result && "error" in result && !("processed" in result)) {
+      const fail = result as { code: string; error: string };
+      const status =
+        fail.code === "stripe_subscriptions_list_failed"
+          ? 502
+          : fail.code === "stripe_not_configured"
+            ? 500
+            : 400;
+      return c.json({ error: fail.code, message: fail.error }, status);
+    }
+
+    return c.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const subrequestHint =
+      /subrequest|too many|fetch/i.test(message) || message.includes("1102")
+        ? " Worker subrequest limit — retry with ?limit=2 or run sync-ghl-saas-billing-catalog.mjs first."
+        : "";
+    return c.json(
+      { error: "stripe_subscriptions_sync_failed", message: `${message}${subrequestHint}` },
+      500
+    );
   }
-
-  return c.json(result);
 }
 
 export async function postAdminRefreshStripeCustomerProfilesHandler(c: Context<Bindings>) {

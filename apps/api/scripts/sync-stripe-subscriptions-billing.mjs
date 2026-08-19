@@ -6,7 +6,7 @@
  *   AGENTFLOW_ADMIN_JWT=eyJ...
  * Optional:
  *   GHL_COMPANY_ID=e0Z1AzINaqYtX9mJe2m8
- *   SYNC_LIMIT=8  (1–10 subscriptions per Worker request)
+ *   SYNC_LIMIT=4  (1–6 subscriptions per Worker request; lower if you see 500)
  *
  * Usage:
  *   node apps/api/scripts/sync-stripe-subscriptions-billing.mjs
@@ -21,8 +21,8 @@ if (!token) {
   process.exit(1);
 }
 
-const syncLimitRaw = Number.parseInt(process.env.SYNC_LIMIT ?? "8", 10);
-const syncLimit = Number.isFinite(syncLimitRaw) ? Math.min(10, Math.max(1, syncLimitRaw)) : 8;
+const syncLimitRaw = Number.parseInt(process.env.SYNC_LIMIT ?? "4", 10);
+const syncLimit = Number.isFinite(syncLimitRaw) ? Math.min(6, Math.max(1, syncLimitRaw)) : 4;
 
 const totals = {
   batches: 0,
@@ -51,7 +51,13 @@ while (true) {
     }
   );
 
-  const body = await res.json().catch(() => ({}));
+  const rawText = await res.text();
+  let body = {};
+  try {
+    body = rawText ? JSON.parse(rawText) : {};
+  } catch {
+    body = { raw: rawText.slice(0, 500) };
+  }
   if (!res.ok) {
     console.error("Request failed", res.status, body);
     process.exit(1);

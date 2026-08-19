@@ -116,7 +116,7 @@ export async function syncStripeActiveSubscriptionsPage(
     return { ok: false, code: "stripe_not_configured", error: "STRIPE_SECRET_KEY is not configured on the Worker" };
   }
 
-  const limit = Math.min(10, Math.max(1, Math.floor(opts.limit ?? 8)));
+  const limit = Math.min(6, Math.max(1, Math.floor(opts.limit ?? 4)));
   const startingAfter = opts.startingAfter?.trim() || undefined;
 
   let subscriptions: Stripe.ApiList<Stripe.Subscription>;
