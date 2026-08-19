@@ -113,7 +113,9 @@ const GHL_LOCATION_METADATA_KEYS = [
   "location_id",
   "ghlLocationId",
   "ghl_location_id",
-  "LocationId"
+  "LocationId",
+  "subAccountId",
+  "sub_account_id"
 ] as const;
 
 const GHL_COMPANY_METADATA_KEYS = ["companyId", "company_id", "ghlCompanyId", "ghl_company_id"] as const;
@@ -258,6 +260,48 @@ function saasRowGhlLocationId(row: Record<string, unknown>): string | null {
     if (typeof v === "string" && v.trim()) return v.trim();
   }
   return null;
+}
+
+/** Parse GET /saas/locations?customerId=… (GHL SaaS) — array of location ids or objects. */
+export function parseGhlLocationIdsFromSaasLocationsLookupPayload(payload: unknown): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string | null | undefined) => {
+    const id = raw?.trim();
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    out.push(id);
+  };
+
+  const scanArray = (arr: unknown[]) => {
+    for (const item of arr) {
+      if (typeof item === "string") {
+        push(item);
+        continue;
+      }
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      push(saasRowGhlLocationId(item as Record<string, unknown>));
+    }
+  };
+
+  const visit = (value: unknown, depth: number) => {
+    if (depth > 5 || value == null) return;
+    if (Array.isArray(value)) {
+      scanArray(value);
+      return;
+    }
+    if (typeof value !== "object") return;
+    const obj = value as Record<string, unknown>;
+    push(saasRowGhlLocationId(obj));
+    for (const key of ["locations", "data", "items", "results"]) {
+      const nested = obj[key];
+      if (Array.isArray(nested)) scanArray(nested);
+      else if (nested && typeof nested === "object") visit(nested, depth + 1);
+    }
+  };
+
+  visit(payload, 0);
+  return out;
 }
 
 /** Collect every SaaS location row from one GET /saas/saas-locations/:companyId page (v3). */

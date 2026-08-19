@@ -1,6 +1,7 @@
 import type Stripe from "stripe";
 
-import { createDb } from "@agentflow/db";
+import { createDb, locationBillingConfig, locations } from "@agentflow/db";
+import { eq } from "drizzle-orm";
 
 import {
   extractGhlCompanyIdFromStripeMetadata,
@@ -8,9 +9,13 @@ import {
   normalizeStripeCustomerId
 } from "./client-charges-logic.js";
 import { createStripeClient, type ClientChargeStripeEnv } from "./client-charges-stripe.js";
+import { fetchGhlLocationIdsForStripeBilling } from "./ghl-saas-stripe-location-lookup.js";
 import { upsertAgencyLocationFromGhl } from "./ghl-saas-catalog-sync.js";
 import { maskStripeCustomerId } from "./location-billing-stripe.js";
-import { applyPlatformStripeCustomerToLocation } from "./stripe-platform-customer.js";
+import {
+  applyPlatformStripeCustomerToLocation,
+  refreshStripeCustomerProfileOnLocation
+} from "./stripe-platform-customer.js";
 
 export type AgentFlowDb = ReturnType<typeof createDb>;
 
@@ -24,6 +29,7 @@ export type StripeSubscriptionsSyncRowResult = {
   ok: boolean;
   code?: string;
   error?: string;
+  lookupSource?: string;
 };
 
 export type StripeSubscriptionsSyncPageResult = {
@@ -34,6 +40,7 @@ export type StripeSubscriptionsSyncPageResult = {
   summary: {
     linkedOk: number;
     billingReady: number;
+    refreshedExisting: number;
     skipped: number;
     failed: number;
   };
@@ -71,6 +78,20 @@ function pickGhlCompanyId(
     extractGhlCompanyIdFromStripeMetadata(customer.metadata) ??
     fallbackCompanyId
   ).trim();
+}
+
+async function findLinkedLocationByStripeCustomerId(db: AgentFlowDb, stripeCustomerId: string) {
+  const [row] = await db
+    .select({
+      locationId: locationBillingConfig.locationId,
+      ghlLocationId: locations.ghlLocationId,
+      locationName: locations.name
+    })
+    .from(locationBillingConfig)
+    .innerJoin(locations, eq(locations.id, locationBillingConfig.locationId))
+    .where(eq(locationBillingConfig.stripeCustomerId, stripeCustomerId))
+    .limit(1);
+  return row ?? null;
 }
 
 export async function syncStripeActiveSubscriptionsPage(
@@ -166,7 +187,57 @@ export async function syncStripeActiveSubscriptionsPage(
       continue;
     }
 
-    const ghlLocationId = pickGhlLocationId(subscription, customer);
+    const existingLink = await findLinkedLocationByStripeCustomerId(db, customerId);
+    if (existingLink) {
+      const refreshed = await refreshStripeCustomerProfileOnLocation(
+        stripe,
+        db,
+        existingLink.locationId,
+        customerId
+      );
+      if (refreshed.ok) {
+        results.push({
+          subscriptionId: subscription.id,
+          ghlLocationId: existingLink.ghlLocationId,
+          locationId: existingLink.locationId,
+          locationName: existingLink.locationName,
+          stripeCustomerMasked: maskStripeCustomerId(refreshed.stripeCustomerId),
+          billingReady: false,
+          ok: true,
+          lookupSource: "existing_db_link",
+          code: "refreshed_existing"
+        });
+      } else {
+        results.push({
+          subscriptionId: subscription.id,
+          ghlLocationId: existingLink.ghlLocationId,
+          locationId: existingLink.locationId,
+          locationName: existingLink.locationName,
+          stripeCustomerMasked: maskStripeCustomerId(customerId),
+          billingReady: false,
+          ok: false,
+          code: refreshed.code,
+          error: refreshed.error
+        });
+      }
+      continue;
+    }
+
+    let ghlLocationId = pickGhlLocationId(subscription, customer);
+    let lookupSource = ghlLocationId ? "stripe_metadata" : "";
+
+    if (!ghlLocationId) {
+      const lookup = await fetchGhlLocationIdsForStripeBilling(env, db, {
+        ghlCompanyId,
+        stripeCustomerId: customerId,
+        stripeSubscriptionId: subscription.id
+      });
+      if (lookup.ok && lookup.ghlLocationIds[0]) {
+        ghlLocationId = lookup.ghlLocationIds[0]!;
+        lookupSource = lookup.source;
+      }
+    }
+
     if (!ghlLocationId) {
       results.push({
         subscriptionId: subscription.id,
@@ -176,9 +247,9 @@ export async function syncStripeActiveSubscriptionsPage(
         stripeCustomerMasked: maskStripeCustomerId(customerId),
         billingReady: false,
         ok: false,
-        code: "no_ghl_location_metadata",
+        code: "no_ghl_location_mapping",
         error:
-          "Active subscription has no GHL locationId in Stripe customer/subscription metadata — cannot map to a subaccount."
+          "Could not map subscription to a GHL subaccount (no Stripe metadata and GHL /saas/locations lookup returned nothing)."
       });
       continue;
     }
@@ -208,7 +279,8 @@ export async function syncStripeActiveSubscriptionsPage(
           billingReady: false,
           ok: false,
           code: applied.code,
-          error: applied.error
+          error: applied.error,
+          lookupSource
         });
         continue;
       }
@@ -220,7 +292,8 @@ export async function syncStripeActiveSubscriptionsPage(
         locationName: location.name,
         stripeCustomerMasked: maskStripeCustomerId(applied.stripeCustomerId),
         billingReady: applied.billingReady,
-        ok: true
+        ok: true,
+        lookupSource
       });
     } catch (err) {
       results.push({
@@ -232,15 +305,17 @@ export async function syncStripeActiveSubscriptionsPage(
         billingReady: false,
         ok: false,
         code: "row_sync_failed",
-        error: err instanceof Error ? err.message : String(err)
+        error: err instanceof Error ? err.message : String(err),
+        lookupSource
       });
     }
   }
 
   const summary = {
-    linkedOk: results.filter((r) => r.ok).length,
+    linkedOk: results.filter((r) => r.ok && r.code !== "refreshed_existing").length,
     billingReady: results.filter((r) => r.billingReady).length,
-    skipped: results.filter((r) => r.code === "no_ghl_location_metadata").length,
+    refreshedExisting: results.filter((r) => r.code === "refreshed_existing").length,
+    skipped: results.filter((r) => r.code === "no_ghl_location_mapping").length,
     failed: results.filter((r) => !r.ok).length
   };
 
@@ -255,6 +330,6 @@ export async function syncStripeActiveSubscriptionsPage(
     summary,
     results,
     note:
-      "Links platform Stripe active subscriptions to subaccounts via customer/subscription metadata.locationId. POST again with starting_after=nextStartingAfter until hasMore is false. Use alongside GHL catalog sync — Stripe is the source of truth when GHL list omits cus_."
+      "Links active Stripe subscriptions via metadata, GHL GET /saas/locations?customerId=…, or refreshes rows already linked in DB. Run GHL catalog sync separately to upsert all subaccounts."
   };
 }

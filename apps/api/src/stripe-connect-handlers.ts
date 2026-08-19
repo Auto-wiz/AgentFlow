@@ -12,6 +12,7 @@ import { createStripeClient } from "./client-charges-stripe.js";
 import { syncLocationStripeFromGhlSaas } from "./client-charges-ghl-stripe-sync.js";
 import { syncGhlSaasCatalogPage } from "./ghl-saas-catalog-sync.js";
 import { syncStripeActiveSubscriptionsPage } from "./stripe-subscriptions-catalog-sync.js";
+import { refreshStripeCustomerProfilesPage } from "./stripe-customer-profile-sync.js";
 import { GHL_SAAS_FETCH_BULK_OPTS } from "./ghl-saas-subscription.js";
 import {
   applyStripeAccountSnapshot,
@@ -523,6 +524,28 @@ export async function postAdminClientChargesStripeSyncFromStripeSubscriptionsHan
           ? 500
           : 400;
     return c.json({ error: fail.code, message: fail.error }, status);
+  }
+
+  return c.json(result);
+}
+
+export async function postAdminRefreshStripeCustomerProfilesHandler(c: Context<Bindings>) {
+  const auth = await assertAdminClientCharges(c);
+  if (!auth) return c.json({ error: "forbidden" }, 403);
+
+  const db = createDb(c.env.DATABASE_URL);
+  const limitRaw = Number.parseInt(c.req.query("limit") ?? "10", 10);
+  const limit = Number.isFinite(limitRaw) ? Math.min(15, Math.max(1, limitRaw)) : 10;
+  const after = (c.req.query("after") ?? c.req.query("afterLocationId") ?? "").trim() || null;
+
+  const result = await refreshStripeCustomerProfilesPage(c.env, db, {
+    limit,
+    afterLocationId: after
+  });
+
+  if ("code" in result && "error" in result && !("processed" in result)) {
+    const fail = result as { code: string; error: string };
+    return c.json({ error: fail.code, message: fail.error }, fail.code === "stripe_not_configured" ? 500 : 400);
   }
 
   return c.json(result);

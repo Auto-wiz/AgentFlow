@@ -21,6 +21,7 @@ import {
   extractGhlCompanyIdFromStripeMetadata,
   findGhlSaasLocationRecord,
   listGhlSaasLocationRowsFromPage,
+  parseGhlLocationIdsFromSaasLocationsLookupPayload,
   stripeCustomerDisplayName,
   stripeCustomerEmail,
   summarizeUnknownJsonShape,
@@ -198,6 +199,19 @@ describe("Stripe customer id and GHL SaaS payload", () => {
       "Jane Doe"
     );
     assert.equal(stripeCustomerEmail({ email: " j@x.com " }), "j@x.com");
+  });
+
+  it("parses GHL location ids from /saas/locations lookup payloads", () => {
+    assert.deepEqual(parseGhlLocationIdsFromSaasLocationsLookupPayload(["loc_a", "loc_b"]), [
+      "loc_a",
+      "loc_b"
+    ]);
+    assert.deepEqual(
+      parseGhlLocationIdsFromSaasLocationsLookupPayload({
+        locations: [{ locationId: "loc_x" }, { id: "loc_y" }]
+      }),
+      ["loc_x", "loc_y"]
+    );
   });
 });
 
