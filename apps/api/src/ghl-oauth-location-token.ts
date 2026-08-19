@@ -373,6 +373,134 @@ export async function refreshOAuthAccessTokensForLocation(
   return refreshedCount;
 }
 
+/** Rotate Company OAuth rows for a GHL agency id (used when catalog sync has no location row yet). */
+export async function refreshOAuthAccessTokensForCompany(
+  env: GhlOAuthRefreshCredentialEnv,
+  db: AgentFlowDb,
+  ghlCompanyId: string
+): Promise<number> {
+  const clientId = env.GHL_CLIENT_ID?.trim();
+  const clientSecret = env.GHL_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret) {
+    return 0;
+  }
+
+  const companyId = ghlCompanyId.trim();
+  if (!companyId) {
+    return 0;
+  }
+
+  const installations = await db
+    .select({
+      id: ghlOAuthInstallations.id,
+      refreshToken: ghlOAuthInstallations.refreshToken,
+      userType: ghlOAuthInstallations.userType
+    })
+    .from(ghlOAuthInstallations)
+    .where(
+      and(eq(ghlOAuthInstallations.companyId, companyId), eq(ghlOAuthInstallations.userType, "Company"))
+    )
+    .orderBy(desc(ghlOAuthInstallations.updatedAt))
+    .limit(8);
+
+  let refreshedCount = 0;
+  for (const installation of installations) {
+    const rt = installation.refreshToken?.trim();
+    if (!rt) {
+      continue;
+    }
+    const refreshed = await refreshGhlAccessTokenWithRefreshToken(env, rt, installation.userType);
+    if (!refreshed) {
+      continue;
+    }
+    await db
+      .update(ghlOAuthInstallations)
+      .set({
+        accessToken: refreshed.accessToken,
+        refreshToken: refreshed.refreshToken,
+        expiresAt: addSecondsToNow(refreshed.expiresIn),
+        updatedAt: new Date()
+      })
+      .where(eq(ghlOAuthInstallations.id, installation.id));
+    refreshedCount += 1;
+  }
+
+  return refreshedCount;
+}
+
+/**
+ * Company OAuth bearer tokens for SaaS APIs keyed by GHL agency id.
+ * Mirrors per-location fetch: optional preemptive refresh when rows are expired.
+ */
+export async function getCompanyAccessTokensForGhlCompanyId(
+  env: GhlOAuthTokenEnv,
+  db: AgentFlowDb,
+  ghlCompanyId: string,
+  options?: { preemptiveOAuthRefresh?: boolean }
+) {
+  const companyId = ghlCompanyId.trim();
+  if (!companyId) {
+    return [];
+  }
+
+  const [anyLoc] = await db
+    .select({ ghlLocationId: locations.ghlLocationId })
+    .from(locations)
+    .innerJoin(agencies, eq(locations.agencyId, agencies.id))
+    .where(eq(agencies.ghlAgencyId, companyId))
+    .limit(1);
+
+  if (anyLoc?.ghlLocationId) {
+    return getCompanyAccessTokensForGhlLocation(env, db, anyLoc.ghlLocationId, options);
+  }
+
+  const credentialEnv = env as GhlOAuthRefreshCredentialEnv;
+  if (options?.preemptiveOAuthRefresh === true) {
+    const cid = credentialEnv.GHL_CLIENT_ID?.trim();
+    const csec = credentialEnv.GHL_CLIENT_SECRET?.trim();
+    if (cid && csec) {
+      await refreshOAuthAccessTokensForCompany(credentialEnv, db, companyId);
+    }
+  }
+
+  const isStillValid = (expiresAt: Date | null | undefined) => {
+    if (!expiresAt) return true;
+    return expiresAt.getTime() > Date.now() + 60_000;
+  };
+
+  const tokenCandidates = new Set<string>();
+  const installs = await db
+    .select({
+      accessToken: ghlOAuthInstallations.accessToken,
+      expiresAt: ghlOAuthInstallations.expiresAt
+    })
+    .from(ghlOAuthInstallations)
+    .where(
+      and(eq(ghlOAuthInstallations.companyId, companyId), eq(ghlOAuthInstallations.userType, "Company"))
+    )
+    .orderBy(desc(ghlOAuthInstallations.updatedAt))
+    .limit(5);
+
+  for (const row of installs) {
+    if (!isStillValid(row.expiresAt)) continue;
+    const token = row.accessToken?.trim();
+    if (token) tokenCandidates.add(token);
+  }
+
+  if (tokenCandidates.size === 0) {
+    for (const row of await getRecentCompanyOAuthInstallations(db, 5)) {
+      if (row.companyId?.trim() !== companyId) continue;
+      if (!isStillValid(row.expiresAt)) continue;
+      const token = row.accessToken?.trim();
+      if (token) tokenCandidates.add(token);
+    }
+  }
+
+  const envToken = env.GHL_API_TOKEN?.trim();
+  if (envToken) tokenCandidates.add(envToken);
+  return Array.from(tokenCandidates);
+}
+
 /** Same precedence as conversational / contact fetch paths (`index.ts` historically). */
 export async function getCompanyOAuthInstallationForLocation(db: AgentFlowDb, ghlLocationId: string) {
   const rows = await getCompanyOAuthInstallationsForLocationInternal(db, ghlLocationId);

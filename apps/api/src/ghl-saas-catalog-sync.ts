@@ -1,5 +1,4 @@
-import { agencies, createDb, ghlOAuthInstallations, locations } from "@agentflow/db";
-import { and, desc, eq } from "drizzle-orm";
+import { agencies, createDb, locations } from "@agentflow/db";
 
 import { createStripeClient } from "./client-charges-stripe.js";
 import {
@@ -9,7 +8,10 @@ import {
 } from "./client-charges-logic.js";
 import { syncLocationStripeFromGhlSaas, type GhlStripeSyncEnv } from "./client-charges-ghl-stripe-sync.js";
 import { GHL_SAAS_FETCH_BULK_OPTS } from "./ghl-saas-subscription.js";
-import type { GhlOAuthTokenEnv } from "./ghl-oauth-location-token.js";
+import {
+  getCompanyAccessTokensForGhlCompanyId,
+  type GhlOAuthTokenEnv
+} from "./ghl-oauth-location-token.js";
 import {
   ensureLocationBillingConfigRow,
   maskStripeCustomerId
@@ -54,45 +56,15 @@ async function resolveCompanyAccessToken(
   db: AgentFlowDb,
   ghlCompanyId: string
 ): Promise<string | null> {
-  const companyId = ghlCompanyId.trim();
-  if (!companyId) return null;
-
-  const [anyLoc] = await db
-    .select({ ghlLocationId: locations.ghlLocationId })
-    .from(locations)
-    .innerJoin(agencies, eq(locations.agencyId, agencies.id))
-    .where(eq(agencies.ghlAgencyId, companyId))
-    .limit(1);
-
-  if (anyLoc?.ghlLocationId) {
-    const { getCompanyAccessTokensForGhlLocation } = await import("./ghl-oauth-location-token.js");
-    const tokens = await getCompanyAccessTokensForGhlLocation(env, db, anyLoc.ghlLocationId, {
-      preemptiveOAuthRefresh: false
+  let tokens = await getCompanyAccessTokensForGhlCompanyId(env, db, ghlCompanyId, {
+    preemptiveOAuthRefresh: false
+  });
+  if (tokens.length === 0) {
+    tokens = await getCompanyAccessTokensForGhlCompanyId(env, db, ghlCompanyId, {
+      preemptiveOAuthRefresh: true
     });
-    if (tokens[0]) return tokens[0];
   }
-
-  const installs = await db
-    .select({
-      accessToken: ghlOAuthInstallations.accessToken,
-      expiresAt: ghlOAuthInstallations.expiresAt
-    })
-    .from(ghlOAuthInstallations)
-    .where(
-      and(eq(ghlOAuthInstallations.companyId, companyId), eq(ghlOAuthInstallations.userType, "Company"))
-    )
-    .orderBy(desc(ghlOAuthInstallations.updatedAt))
-    .limit(3);
-
-  const now = Date.now() + 60_000;
-  for (const row of installs) {
-    const token = row.accessToken?.trim();
-    if (!token) continue;
-    if (row.expiresAt && row.expiresAt.getTime() <= now) continue;
-    return token;
-  }
-
-  return env.GHL_API_TOKEN?.trim() ?? null;
+  return tokens[0] ?? null;
 }
 
 async function upsertAgencyLocation(
@@ -168,7 +140,8 @@ export async function syncGhlSaasCatalogPage(
     return {
       ok: false,
       code: "company_oauth_token_missing",
-      error: "No agency Company OAuth token for this companyId — connect GoHighLevel for the agency."
+      error:
+        "No usable agency Company OAuth token for this companyId. If Settings already shows connected, the stored token may be expired or ?companyId= may not match the agency id from OAuth — per-location Sync from GHL refreshes tokens automatically; catalog sync retries refresh on the next attempt."
     };
   }
 
