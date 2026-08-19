@@ -117,6 +117,7 @@ import {
   patchAdminLocationStripeCustomerLinkHandler,
   patchAdminLocationStripeLinkHandler,
   postAdminClientChargesStripeSyncAllFromGhlHandler,
+  postAdminClientChargesStripeSyncFromStripeSubscriptionsHandler,
   postAdminClientChargesStripeSyncSaasCatalogFromGhlHandler,
   postAdminLocationStripeBillingSetupHandler,
   postAdminLocationStripeSyncFromGhlHandler
@@ -722,6 +723,10 @@ app.post("/admin/client-charges/stripe/sync-from-ghl-all", postAdminClientCharge
 app.post(
   "/admin/client-charges/stripe/sync-saas-catalog-from-ghl",
   postAdminClientChargesStripeSyncSaasCatalogFromGhlHandler
+);
+app.post(
+  "/admin/client-charges/stripe/sync-from-stripe-subscriptions",
+  postAdminClientChargesStripeSyncFromStripeSubscriptionsHandler
 );
 app.get("/admin/client-charges/locations/:locationId/stripe/status", getAdminLocationStripeStatusHandler);
 app.post(

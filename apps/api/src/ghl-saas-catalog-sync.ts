@@ -36,7 +36,11 @@ export type SaasCatalogSyncRowResult = {
 export type SaasCatalogSyncPageResult = {
   ghlCompanyId: string;
   page: number;
+  /** Row offset within the current GHL API page (for batches smaller than rowsOnPage). */
+  pageOffset: number;
   nextPage: number | null;
+  /** Pass as ?offset= on the next request (0 when advancing to nextPage). */
+  nextPageOffset: number | null;
   hasMore: boolean;
   rowsOnPage: number;
   processed: number;
@@ -67,7 +71,7 @@ async function resolveCompanyAccessToken(
   return tokens[0] ?? null;
 }
 
-async function upsertAgencyLocation(
+export async function upsertAgencyLocationFromGhl(
   db: AgentFlowDb,
   ghlCompanyId: string,
   ghlLocationId: string,
@@ -114,6 +118,8 @@ export async function syncGhlSaasCatalogPage(
   opts: {
     ghlCompanyId: string;
     page?: number;
+    /** Slice start within the current GHL page (default 0). */
+    pageOffset?: number;
     maxLocations?: number;
   }
 ): Promise<SaasCatalogSyncPageResult | { ok: false; code: string; error: string }> {
@@ -146,6 +152,7 @@ export async function syncGhlSaasCatalogPage(
   }
 
   const page = Math.max(1, Math.floor(opts.page ?? 1));
+  const pageOffset = Math.max(0, Math.floor(opts.pageOffset ?? 0));
   const maxLocations = Math.min(12, Math.max(1, Math.floor(opts.maxLocations ?? 8)));
   const baseUrl = (env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com").replace(/\/$/, "");
   const url = `${baseUrl}/saas/saas-locations/${encodeURIComponent(ghlCompanyId)}?page=${page}`;
@@ -181,9 +188,10 @@ export async function syncGhlSaasCatalogPage(
   const now = new Date();
   const results: SaasCatalogSyncRowResult[] = [];
 
-  for (const row of catalogRows.slice(0, maxLocations)) {
+  const batchRows = catalogRows.slice(pageOffset, pageOffset + maxLocations);
+  for (const row of batchRows) {
     try {
-      const location = await upsertAgencyLocation(
+      const location = await upsertAgencyLocationFromGhl(
         db,
         ghlCompanyId,
         row.ghlLocationId,
@@ -275,7 +283,12 @@ export async function syncGhlSaasCatalogPage(
     }
   }
 
-  const hasMore = !pageEmpty && catalogRows.length > 0;
+  const consumedOnPage = pageOffset + batchRows.length;
+  const hasMoreRowsOnPage = consumedOnPage < catalogRows.length;
+  const hasMore =
+    hasMoreRowsOnPage || (!pageEmpty && catalogRows.length > 0 && consumedOnPage >= catalogRows.length);
+  const nextPage = hasMore ? (hasMoreRowsOnPage ? page : page + 1) : null;
+  const nextPageOffset = hasMore ? (hasMoreRowsOnPage ? consumedOnPage : 0) : null;
   const summary = {
     syncedOk: results.filter((r) => r.ok).length,
     billingReady: results.filter((r) => r.billingReady).length,
@@ -287,13 +300,15 @@ export async function syncGhlSaasCatalogPage(
   return {
     ghlCompanyId,
     page,
-    nextPage: hasMore ? page + 1 : null,
+    pageOffset,
+    nextPage,
+    nextPageOffset,
     hasMore,
     rowsOnPage: catalogRows.length,
     processed: results.length,
     summary,
     results,
     note:
-      "Lists SaaS subaccounts from GHL (v3 saas-locations). POST again with page=nextPage until hasMore is false. Rows without cus_ in the list fall back to per-location SaaS sync."
+      "Lists SaaS subaccounts from GHL (v3 saas-locations). POST again with page=nextPage&offset=nextPageOffset until hasMore is false. limit caps rows per Worker request (subrequest budget); rowsOnPage may exceed processed when batching within a GHL page. Rows without cus_ in the list fall back to per-location SaaS sync."
   };
 }

@@ -6,6 +6,8 @@
  *   AGENTFLOW_ADMIN_JWT=eyJ...
  * Optional:
  *   GHL_COMPANY_ID=e0Z1AzINaqYtX9mJe2m8  (defaults to API picking first agency)
+ *   SYNC_LIMIT=8  (max rows per Worker request, 1–12; script loops until hasMore is false)
+ *   START_PAGE=1
  *
  * Usage (PowerShell):
  *   $env:AGENTFLOW_ADMIN_JWT = "..."
@@ -24,6 +26,9 @@ if (!token) {
 
 let page = Number.parseInt(process.env.START_PAGE ?? "1", 10);
 if (!Number.isFinite(page) || page < 1) page = 1;
+let pageOffset = 0;
+const syncLimitRaw = Number.parseInt(process.env.SYNC_LIMIT ?? "8", 10);
+const syncLimit = Number.isFinite(syncLimitRaw) ? Math.min(12, Math.max(1, syncLimitRaw)) : 8;
 
 const totals = {
   pages: 0,
@@ -36,7 +41,11 @@ const totals = {
 };
 
 while (true) {
-  const params = new URLSearchParams({ page: String(page), limit: "8" });
+  const params = new URLSearchParams({
+    page: String(page),
+    offset: String(pageOffset),
+    limit: String(syncLimit)
+  });
   if (companyId) params.set("companyId", companyId);
 
   const res = await fetch(
@@ -68,11 +77,13 @@ while (true) {
     JSON.stringify(
       {
         page: body.page,
+        pageOffset: body.pageOffset,
         rowsOnPage: body.rowsOnPage,
         processed: body.processed,
         summary: body.summary,
         hasMore: body.hasMore,
-        nextPage: body.nextPage
+        nextPage: body.nextPage,
+        nextPageOffset: body.nextPageOffset
       },
       null,
       2
@@ -93,6 +104,7 @@ while (true) {
 
   if (!body.hasMore || body.nextPage == null) break;
   page = body.nextPage;
+  pageOffset = body.nextPageOffset ?? 0;
 }
 
 console.log("\nDone.", totals);

@@ -17,6 +17,8 @@ import {
   normalizeStripeConnectAccountId,
   normalizeStripeCustomerId,
   extractSaasSubscriptionStripeCustomerId,
+  extractGhlLocationIdFromStripeMetadata,
+  extractGhlCompanyIdFromStripeMetadata,
   findGhlSaasLocationRecord,
   listGhlSaasLocationRowsFromPage,
   summarizeUnknownJsonShape,
@@ -176,6 +178,13 @@ describe("Stripe customer id and GHL SaaS payload", () => {
     assert.equal(rows.length, 2);
     assert.equal(rows[0]?.ghlLocationId, "loc_a");
     assert.equal(extractSaasSubscriptionStripeCustomerId(rows[0]?.row), "cus_a");
+  });
+
+  it("reads GHL location/company ids from Stripe metadata", () => {
+    assert.equal(extractGhlLocationIdFromStripeMetadata({ locationId: "loc_x" }), "loc_x");
+    assert.equal(extractGhlLocationIdFromStripeMetadata({ location_id: "loc_y" }), "loc_y");
+    assert.equal(extractGhlCompanyIdFromStripeMetadata({ companyId: "co_z" }), "co_z");
+    assert.equal(extractGhlLocationIdFromStripeMetadata({}), null);
   });
 });
 

@@ -90,6 +90,38 @@ export function isValidStripeCustomerId(raw: unknown): boolean {
   return normalizeStripeCustomerId(raw) != null;
 }
 
+const GHL_LOCATION_METADATA_KEYS = [
+  "locationId",
+  "location_id",
+  "ghlLocationId",
+  "ghl_location_id",
+  "LocationId"
+] as const;
+
+const GHL_COMPANY_METADATA_KEYS = ["companyId", "company_id", "ghlCompanyId", "ghl_company_id"] as const;
+
+function metadataStringValue(metadata: Record<string, unknown> | null | undefined, keys: readonly string[]) {
+  if (!metadata) return null;
+  for (const key of keys) {
+    const raw = metadata[key];
+    if (typeof raw === "string" && raw.trim()) return raw.trim();
+  }
+  return null;
+}
+
+/** GHL SaaS Stripe customers/subscriptions usually carry the subaccount id in metadata. */
+export function extractGhlLocationIdFromStripeMetadata(
+  metadata: Record<string, string> | null | undefined
+): string | null {
+  return metadataStringValue(metadata, GHL_LOCATION_METADATA_KEYS);
+}
+
+export function extractGhlCompanyIdFromStripeMetadata(
+  metadata: Record<string, string> | null | undefined
+): string | null {
+  return metadataStringValue(metadata, GHL_COMPANY_METADATA_KEYS);
+}
+
 export type ClientChargesChargingEnv = {
   CLIENT_CHARGES_CHARGING_ENABLED?: string;
 };
