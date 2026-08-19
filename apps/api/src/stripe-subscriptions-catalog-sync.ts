@@ -10,6 +10,7 @@ import {
 } from "./client-charges-logic.js";
 import { createStripeClient, type ClientChargeStripeEnv } from "./client-charges-stripe.js";
 import { fetchGhlLocationIdsForStripeBilling } from "./ghl-saas-stripe-location-lookup.js";
+import type { GhlOAuthRefreshCredentialEnv } from "./ghl-oauth-location-token.js";
 import { upsertAgencyLocationFromGhl } from "./ghl-saas-catalog-sync.js";
 import { maskStripeCustomerId } from "./location-billing-stripe.js";
 import {
@@ -18,6 +19,8 @@ import {
 } from "./stripe-platform-customer.js";
 
 export type AgentFlowDb = ReturnType<typeof createDb>;
+
+export type StripeSubscriptionsSyncEnv = ClientChargeStripeEnv & GhlOAuthRefreshCredentialEnv;
 
 export type StripeSubscriptionsSyncRowResult = {
   subscriptionId: string;
@@ -95,7 +98,7 @@ async function findLinkedLocationByStripeCustomerId(db: AgentFlowDb, stripeCusto
 }
 
 export async function syncStripeActiveSubscriptionsPage(
-  env: ClientChargeStripeEnv,
+  env: StripeSubscriptionsSyncEnv,
   db: AgentFlowDb,
   opts: {
     ghlCompanyId: string;
