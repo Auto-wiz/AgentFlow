@@ -7,6 +7,7 @@
  * Optional:
  *   GHL_COMPANY_ID=e0Z1AzINaqYtX9mJe2m8
  *   SYNC_LIMIT=4  (1–6 subscriptions per Worker request; lower if you see 500)
+ *   STARTING_AFTER=sub_…  (resume after a partial run)
  *
  * Usage:
  *   node apps/api/scripts/sync-stripe-subscriptions-billing.mjs

@@ -157,20 +157,26 @@ async function upsertLocationOAuthInstallationFromExchange(
 }
 
 async function getCompanyOAuthInstallationsForLocationInternal(db: AgentFlowDb, ghlLocationId: string) {
-  const [locationWithAgency] = await db
-    .select({
-      ghlAgencyId: agencies.ghlAgencyId
-    })
-    .from(locations)
-    .innerJoin(agencies, eq(locations.agencyId, agencies.id))
-    .where(eq(locations.ghlLocationId, ghlLocationId))
-    .limit(1);
+  let locationWithAgency: { ghlAgencyId: string } | undefined;
+  try {
+    [locationWithAgency] = await db
+      .select({
+        ghlAgencyId: agencies.ghlAgencyId
+      })
+      .from(locations)
+      .innerJoin(agencies, eq(locations.agencyId, agencies.id))
+      .where(eq(locations.ghlLocationId, ghlLocationId))
+      .limit(1);
+  } catch {
+    return [];
+  }
 
   if (!locationWithAgency?.ghlAgencyId) {
     return [];
   }
 
-  return db
+  try {
+    return await db
     .select({
       companyId: ghlOAuthInstallations.companyId,
       locationId: ghlOAuthInstallations.locationId,
@@ -190,6 +196,9 @@ async function getCompanyOAuthInstallationsForLocationInternal(db: AgentFlowDb, 
     )
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
     .limit(5);
+  } catch {
+    return [];
+  }
 }
 
 export function oauthInstallationScopeIncludesSaas(scope: string | null | undefined): boolean {
@@ -441,17 +450,6 @@ export async function getCompanyAccessTokensForGhlCompanyId(
   const companyId = ghlCompanyId.trim();
   if (!companyId) {
     return [];
-  }
-
-  const [anyLoc] = await db
-    .select({ ghlLocationId: locations.ghlLocationId })
-    .from(locations)
-    .innerJoin(agencies, eq(locations.agencyId, agencies.id))
-    .where(eq(agencies.ghlAgencyId, companyId))
-    .limit(1);
-
-  if (anyLoc?.ghlLocationId) {
-    return getCompanyAccessTokensForGhlLocation(env, db, anyLoc.ghlLocationId, options);
   }
 
   const credentialEnv = env as GhlOAuthRefreshCredentialEnv;

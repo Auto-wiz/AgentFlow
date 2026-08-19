@@ -1,5 +1,5 @@
 import type { createDb } from "@agentflow/db";
-import { locationBillingConfig as locationBillingConfigTable } from "@agentflow/db/schema";
+import { locationBillingConfig as locationBillingConfigTable, locations } from "@agentflow/db/schema";
 import { eq } from "drizzle-orm";
 import type Stripe from "stripe";
 export type AgentFlowDb = ReturnType<typeof createDb>;
@@ -50,10 +50,31 @@ export function isLocationBillingReady(row: Pick<
 }
 
 export async function ensureLocationBillingConfigRow(db: AgentFlowDb, locationId: string, now = new Date()) {
-  await db
-    .insert(locationBillingConfigTable)
-    .values({ locationId, updatedAt: now })
-    .onConflictDoNothing();
+  try {
+    await db
+      .insert(locationBillingConfigTable)
+      .values({ locationId, updatedAt: now })
+      .onConflictDoNothing();
+    return;
+  } catch (err) {
+    const [existing] = await db
+      .select({ locationId: locationBillingConfigTable.locationId })
+      .from(locationBillingConfigTable)
+      .where(eq(locationBillingConfigTable.locationId, locationId))
+      .limit(1);
+    if (existing) return;
+
+    const [locationRow] = await db
+      .select({ id: locations.id })
+      .from(locations)
+      .where(eq(locations.id, locationId))
+      .limit(1);
+    const detail = err instanceof Error ? err.message : String(err);
+    if (!locationRow) {
+      throw new Error(`location_billing_config_insert_failed: location ${locationId} not found (${detail})`);
+    }
+    throw new Error(`location_billing_config_insert_failed: ${detail}`);
+  }
 }
 
 export async function applyStripeAccountSnapshot(

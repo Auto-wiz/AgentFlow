@@ -231,11 +231,22 @@ export async function syncStripeActiveSubscriptionsPage(
     let lookupDiagnostics: string | undefined;
 
     if (!ghlLocationId) {
-      const lookup = await fetchGhlLocationIdsForStripeBilling(env, db, {
-        ghlCompanyId,
-        stripeCustomerId: customerId,
-        stripeSubscriptionId: subscription.id
-      });
+      let lookup:
+        | Awaited<ReturnType<typeof fetchGhlLocationIdsForStripeBilling>>
+        | { ok: false; code: string; error: string };
+      try {
+        lookup = await fetchGhlLocationIdsForStripeBilling(env, db, {
+          ghlCompanyId,
+          stripeCustomerId: customerId,
+          stripeSubscriptionId: subscription.id
+        });
+      } catch (err) {
+        lookup = {
+          ok: false,
+          code: "ghl_location_lookup_failed",
+          error: err instanceof Error ? err.message : String(err)
+        };
+      }
       if (!lookup.ok) {
         results.push({
           subscriptionId: subscription.id,

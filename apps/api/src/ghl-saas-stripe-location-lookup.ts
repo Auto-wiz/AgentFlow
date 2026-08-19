@@ -45,13 +45,22 @@ export async function fetchGhlLocationIdsForStripeBilling(
     };
   }
 
-  let tokens = await getCompanyAccessTokensForGhlCompanyId(env, db, companyId, {
-    preemptiveOAuthRefresh: false
-  });
-  if (tokens.length === 0) {
+  let tokens: string[] = [];
+  try {
     tokens = await getCompanyAccessTokensForGhlCompanyId(env, db, companyId, {
-      preemptiveOAuthRefresh: true
+      preemptiveOAuthRefresh: false
     });
+    if (tokens.length === 0) {
+      tokens = await getCompanyAccessTokensForGhlCompanyId(env, db, companyId, {
+        preemptiveOAuthRefresh: true
+      });
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      code: "company_oauth_token_lookup_failed",
+      error: err instanceof Error ? err.message : String(err)
+    };
   }
   const token = tokens[0];
   if (!token) {
