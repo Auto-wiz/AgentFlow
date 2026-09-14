@@ -40,6 +40,8 @@ import {
 import {
   AUDIT_ACTION_KINDS,
   DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE,
+  GHL_MARKETPLACE_APP_VERSION_ID,
+  applyGhlMarketplaceVersionId,
   normalizeGhlMarketplaceOAuthScope
 } from "@agentflow/shared";
 import type {
@@ -2472,6 +2474,11 @@ function prepareGhlOAuthRedirectFromPortalStartUrl(env: Env, rawPortalUrl: strin
     installUrl.searchParams.set("user_type", env.GHL_OAUTH_USER_TYPE.trim());
   }
 
+  applyGhlMarketplaceVersionId(
+    installUrl,
+    env.GHL_VERSION_ID?.trim() || GHL_MARKETPLACE_APP_VERSION_ID
+  );
+
   installUrl.searchParams.set("state", state);
   assertAllowedGhlMarketplaceHost(installUrl);
   return installUrl;
@@ -2482,10 +2489,10 @@ function prepareGhlOAuthRedirectFromLegacyInstallUrl(env: Env, rawInstallUrl: st
   normalizeGhlMarketplaceInstallUrl(installUrl);
 
   let versionId =
-    getNonEmptyQueryParam(installUrl, "versionId") ?? getNonEmptyQueryParam(installUrl, "version_id");
-  if (!versionId && env.GHL_VERSION_ID?.trim()) {
-    versionId = env.GHL_VERSION_ID.trim();
-  }
+    env.GHL_VERSION_ID?.trim() ||
+    getNonEmptyQueryParam(installUrl, "versionId") ||
+    getNonEmptyQueryParam(installUrl, "version_id") ||
+    GHL_MARKETPLACE_APP_VERSION_ID;
 
   const clientId =
     getNonEmptyQueryParam(installUrl, "client_id") ?? env.GHL_CLIENT_ID?.trim() ?? null;

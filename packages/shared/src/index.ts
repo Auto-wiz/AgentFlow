@@ -317,19 +317,12 @@ export type SubaccountsOverviewResponse = {
   subaccounts: SubaccountOverview[];
 };
 
-/** Space-separated OAuth scopes for HighLevel Marketplace install / chooselocation (keep in sync with app settings). */
-export const DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE =
-  "contacts.readonly conversations.readonly conversations.write conversations/message.readonly conversations/message.write conversations/reports.readonly conversations/livechat.write locations.readonly locations/tags.readonly locations/tags.write locations/customValues.readonly oauth.write oauth.readonly invoices.readonly invoices/schedule.readonly payments/orders.readonly payments/orders.collectPayment payments/integration.readonly payments/transactions.readonly payments/subscriptions.readonly payments/coupons.readonly payments/custom-provider.readonly opportunities.readonly opportunities.write calendars.readonly calendars/events.readonly calendars/groups.readonly calendars/resources.readonly saas/location.read saas/location.write";
-
-export function normalizeGhlMarketplaceOAuthScope(raw: string): string {
-  return raw
-    .trim()
-    .replace(/%2F/gi, "/")
-    .replace(/\+/g, " ")
-    .split(/\s+/)
-    .filter(Boolean)
-    .join(" ");
-}
+export {
+  GHL_MARKETPLACE_APP_VERSION_ID,
+  DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE,
+  normalizeGhlMarketplaceOAuthScope,
+  applyGhlMarketplaceVersionId
+} from "./ghl-marketplace-oauth";
 
 export {
   AUDIT_ACTION_KINDS,

@@ -2,7 +2,7 @@
 export const GHL_SAAS_API_VERSION = "2021-04-15";
 
 export const GHL_SAAS_SCOPE_HELP =
-  "Publish a new Marketplace app version with saas/location.read (and saas/location.write), then use AgentFlow Settings → Connect GoHighLevel at the agency — reinstalling the app on one subaccount alone does not refresh agency OAuth scopes.";
+  "Publish a new Marketplace app version with saas/location.read and saas/company.read, then use AgentFlow Settings → Connect GoHighLevel at the agency — reinstalling the app on one subaccount alone does not refresh agency OAuth scopes.";
 
 function scopeSnapshotIncludesSaas(scope: string | null | undefined): boolean {
   const raw = scope?.trim().toLowerCase();
