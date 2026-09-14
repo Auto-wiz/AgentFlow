@@ -12,6 +12,7 @@ import {
   getCompanyOAuthInstallationForLocation,
   oauthInstallationScopeIncludesSaas,
   resolveGhlCompanyIdForLocation,
+  writeGhlOAuthDebugLog,
   type GhlOAuthTokenEnv
 } from "./ghl-oauth-location-token.js";
 
@@ -252,12 +253,29 @@ export async function fetchGhlSaasSubscriptionForLocation(
   let companyTokens = await getCompanyAccessTokensForGhlLocation(env, db, locationId, {
     preemptiveOAuthRefresh: false
   });
+  const initialCompanyTokenCount = companyTokens.length;
   if (companyTokens.length === 0) {
     companyTokens = await getCompanyAccessTokensForGhlLocation(env, db, locationId, {
       preemptiveOAuthRefresh: true
     });
   }
   const oauthScopeOnFile = await getCompanyOAuthScopeSnapshotForLocation(db, locationId);
+  // #region agent log
+  writeGhlOAuthDebugLog({
+    hypothesisId: "A,B,C,D",
+    location: "ghl-saas-subscription.ts:fetchGhlSaasSubscriptionForLocation",
+    message: "saas_sync_oauth_resolution",
+    data: {
+      ghlLocationId: locationId,
+      resolvedCompanyId: companyId,
+      initialCompanyTokenCount,
+      finalCompanyTokenCount: companyTokens.length,
+      refreshedBecauseInitiallyEmpty: initialCompanyTokenCount === 0,
+      scopeIncludesSaas: oauthInstallationScopeIncludesSaas(oauthScopeOnFile),
+      hasScopeSnapshot: Boolean(oauthScopeOnFile)
+    }
+  });
+  // #endregion
 
   if (companyTokens.length === 0) {
     return {

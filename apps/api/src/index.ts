@@ -143,7 +143,8 @@ import {
   addSecondsToNow,
   getAccessTokensForLocation,
   getCompanyOAuthInstallationForLocation,
-  refreshOAuthAccessTokensForLocation
+  refreshOAuthAccessTokensForLocation,
+  writeGhlOAuthDebugLog
 } from "./ghl-oauth-location-token.js";
 import { fetchSelectionLocationRows, rowsToNullableSelectionSet } from "./workspace-selection-db.js";
 import {
@@ -818,6 +819,21 @@ app.get("/oauth/gohighlevel/callback", async (c) => {
   try {
     const tokenResponse = await exchangeGhlOAuthCode(c.env, code);
     const db = createDb(c.env.DATABASE_URL);
+    // #region agent log
+    writeGhlOAuthDebugLog({
+      hypothesisId: "B,C",
+      location: "index.ts:/oauth/gohighlevel/callback",
+      message: "oauth_callback_token_metadata",
+      data: {
+        userType: tokenResponse.userType,
+        companyId: tokenResponse.companyId,
+        locationId: tokenResponse.locationId,
+        expiresIn: tokenResponse.expiresIn,
+        scopeIncludesSaas: tokenResponse.scope?.toLowerCase().includes("saas/") ?? false,
+        hasRefreshToken: Boolean(tokenResponse.refreshToken)
+      }
+    });
+    // #endregion
 
     const establishedCompanyIds = await loadEstablishedGhlCompanyIds(db);
     const incomingCompanyId = tokenResponse.companyId.trim();
