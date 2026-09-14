@@ -39,7 +39,17 @@ export function explainGhlSaasFetchFailure(input: {
   sawScopeError: boolean;
   listCompletedWithoutMatch: boolean;
   oauthScopeOnFile: string | null;
+  jwtLooksLikeLocation?: boolean;
+  jwtAuthClass?: string | null;
 }): { error: string; code: string; status: number | null } {
+  if (input.jwtLooksLikeLocation) {
+    return {
+      status: 403,
+      code: "oauth_token_is_location_typed",
+      error:
+        "The OAuth token on file is Location (subaccount), not Company (agency). Use Settings → Connect GoHighLevel and choose the agency — a subaccount reinstall cannot call SaaS APIs."
+    };
+  }
   if (input.listCompletedWithoutMatch) {
     return {
       status: 404,
@@ -49,11 +59,12 @@ export function explainGhlSaasFetchFailure(input: {
   }
   if (input.sawScopeError || shouldTreatAsGhlSaasAuthFailure(input.lastStatus, input.lastMessage)) {
     const hasSaasOnFile = scopeSnapshotIncludesSaas(input.oauthScopeOnFile);
+    const tokenHint = input.jwtAuthClass ? ` Token authClass=${input.jwtAuthClass}.` : "";
     return {
       status: input.lastStatus ?? 403,
       code: "ghl_scope_forbidden",
       error: hasSaasOnFile
-        ? `${GHL_SAAS_SCOPE_HELP} AgentFlow already lists saas/* on the agency token, but GHL still returned "${input.lastMessage}". Reconnect Settings → Connect GoHighLevel at the agency (a single-subaccount Marketplace reinstall is not enough).`
+        ? `${GHL_SAAS_SCOPE_HELP} AgentFlow already lists saas/* on the agency token, but GHL still returned "${input.lastMessage}".${tokenHint} Reconnect Settings → Connect GoHighLevel at the agency (a single-subaccount Marketplace reinstall is not enough).`
         : GHL_SAAS_SCOPE_HELP
     };
   }

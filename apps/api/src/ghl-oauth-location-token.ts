@@ -2,6 +2,8 @@ import { agencies, ghlOAuthInstallations, locations } from "@agentflow/db";
 import type { AgentFlowDb } from "@agentflow/db";
 import { and, desc, eq, or } from "drizzle-orm";
 
+import { pickCompanyTypedAccessTokens } from "./ghl-access-token-claims.js";
+
 /** Bindings touched by OAuth token retrieval (compatible with Workers `Env` in index.ts). */
 export type GhlOAuthTokenEnv = {
   GHL_API_BASE_URL?: string;
@@ -536,7 +538,7 @@ export async function getCompanyAccessTokensForGhlCompanyId(
 
   const envToken = env.GHL_API_TOKEN?.trim();
   if (envToken) tokenCandidates.add(envToken);
-  return Array.from(tokenCandidates);
+  return pickCompanyTypedAccessTokens(Array.from(tokenCandidates)).tokens;
 }
 
 /** Same precedence as conversational / contact fetch paths (`index.ts` historically). */
@@ -672,6 +674,7 @@ function collectCompanyAccessTokens(
   return tokenCandidates;
 }
 
+/** Agency Company OAuth tokens; Location-typed JWTs are dropped so SaaS APIs are not called with them. */
 export async function getCompanyAccessTokensForGhlLocation(
   env: GhlOAuthTokenEnv,
   db: AgentFlowDb,
@@ -713,7 +716,7 @@ export async function getCompanyAccessTokensForGhlLocation(
     tokenCandidates = collectCompanyAccessTokens(companyInstallations, { includeExpired: true });
   }
 
-  return Array.from(tokenCandidates);
+  return pickCompanyTypedAccessTokens(Array.from(tokenCandidates));
 }
 
 export async function resolveGhlCompanyIdForLocation(db: AgentFlowDb, ghlLocationId: string) {

@@ -42,6 +42,7 @@ import {
   DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE,
   GHL_MARKETPLACE_APP_VERSION_ID,
   applyGhlMarketplaceVersionId,
+  applyGhlMarketplaceUserType,
   normalizeGhlMarketplaceOAuthScope
 } from "@agentflow/shared";
 import type {
@@ -2470,14 +2471,11 @@ function prepareGhlOAuthRedirectFromPortalStartUrl(env: Env, rawPortalUrl: strin
     installUrl.searchParams.set("redirect_uri", env.GHL_OAUTH_REDIRECT_URI.trim());
   }
 
-  if (!getNonEmptyQueryParam(installUrl, "user_type") && env.GHL_OAUTH_USER_TYPE?.trim()) {
-    installUrl.searchParams.set("user_type", env.GHL_OAUTH_USER_TYPE.trim());
-  }
-
   applyGhlMarketplaceVersionId(
     installUrl,
     env.GHL_VERSION_ID?.trim() || GHL_MARKETPLACE_APP_VERSION_ID
   );
+  applyGhlMarketplaceUserType(installUrl, env.GHL_OAUTH_USER_TYPE);
 
   installUrl.searchParams.set("state", state);
   assertAllowedGhlMarketplaceHost(installUrl);
@@ -2519,10 +2517,7 @@ function prepareGhlOAuthRedirectFromLegacyInstallUrl(env: Env, rawInstallUrl: st
     installUrl.searchParams.set("version_id", versionId);
   }
 
-  if (!getNonEmptyQueryParam(installUrl, "user_type") && env.GHL_OAUTH_USER_TYPE?.trim()) {
-    installUrl.searchParams.set("user_type", env.GHL_OAUTH_USER_TYPE.trim());
-  }
-
+  applyGhlMarketplaceUserType(installUrl, env.GHL_OAUTH_USER_TYPE);
   installUrl.searchParams.set("state", state);
 
   if (env.GHL_OAUTH_REDIRECT_URI) {

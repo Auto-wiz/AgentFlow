@@ -42,4 +42,35 @@ describe("GHL SaaS error classification", () => {
     assert.match(explained.error, /Forbidden resource/);
     assert.match(explained.error, /already lists saas\/\*/);
   });
+
+  it("tells the operator to reconnect as Company when the JWT is Location-typed", () => {
+    const explained = explainGhlSaasFetchFailure({
+      ghlLocationId: "tKQSyxgMagrV5lEVSX7Q",
+      lastStatus: 403,
+      lastMessage: "Forbidden resource",
+      sawScopeError: true,
+      listCompletedWithoutMatch: false,
+      oauthScopeOnFile: "saas/location.read saas/company.read",
+      jwtLooksLikeLocation: true,
+      jwtAuthClass: "Location"
+    });
+    assert.equal(explained.code, "oauth_token_is_location_typed");
+    assert.match(explained.error, /Location \(subaccount\)/);
+  });
+
+  it("includes JWT authClass on a remaining Forbidden resource after a Company token was used", () => {
+    const explained = explainGhlSaasFetchFailure({
+      ghlLocationId: "tKQSyxgMagrV5lEVSX7Q",
+      lastStatus: 403,
+      lastMessage: "Forbidden resource",
+      sawScopeError: true,
+      listCompletedWithoutMatch: false,
+      oauthScopeOnFile: "saas/company.read",
+      jwtLooksLikeLocation: false,
+      jwtAuthClass: "Company"
+    });
+    assert.equal(explained.code, "ghl_scope_forbidden");
+    assert.match(explained.error, /authClass=Company/);
+  });
 });
+

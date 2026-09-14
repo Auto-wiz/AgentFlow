@@ -875,7 +875,9 @@ function formatGhlSyncFailureMessage(payload: {
             ? ` GHL said: ${payload.ghlApiMessage}`
             : "";
         const scopeHint =
-          payload.error === "ghl_scope_forbidden" || payload.error === "oauth_token_missing_saas_scope"
+          payload.error === "ghl_scope_forbidden" ||
+          payload.error === "oauth_token_missing_saas_scope" ||
+          payload.error === "oauth_token_is_location_typed"
             ? payload.oauthScopeOnFile != null
               ? ` OAuth scopes on file: ${payload.oauthScopeOnFile.includes("saas/") ? "includes saas/*" : "missing saas/* — reconnect agency OAuth"}`
               : ""

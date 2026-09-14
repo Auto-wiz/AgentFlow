@@ -24,3 +24,8 @@ export function applyGhlMarketplaceVersionId(url: URL, versionId: string | null 
   url.searchParams.delete("versionId");
   url.searchParams.set("version_id", id);
 }
+
+/** Agency SaaS APIs need a Company token. Always set user_type so Connect cannot default to Location. */
+export function applyGhlMarketplaceUserType(url: URL, userType?: string | null) {
+  url.searchParams.set("user_type", userType?.trim() || "Company");
+}
