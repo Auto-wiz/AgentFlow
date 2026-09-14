@@ -452,3 +452,61 @@ export function mapStripeChargeErrorMessage(code: string | undefined, message: s
 export function isStripeChargeAmbiguousHttpStatus(status: number | undefined): boolean {
   return status == null || status >= 500;
 }
+
+/** Overview table: all billing-enabled subaccounts, or only those with activity in the period. */
+export const OVERVIEW_ACCOUNT_VIEWS = [
+  "all",
+  "unbilled",
+  "charged",
+  "failed",
+  "pending",
+  "activity"
+] as const;
+
+export type OverviewAccountView = (typeof OVERVIEW_ACCOUNT_VIEWS)[number];
+
+export function parseOverviewAccountView(raw: string | undefined): OverviewAccountView {
+  const v = (raw ?? "all").trim().toLowerCase();
+  if (v === "unbilled" || v === "charged" || v === "failed" || v === "pending" || v === "activity") {
+    return v;
+  }
+  return "all";
+}
+
+export type OverviewAccountCounts = {
+  eligibleCount: number;
+  unbilledCount: number;
+  chargedCount: number;
+  failedCount: number;
+  pendingCount: number;
+};
+
+export function overviewAccountMatchesView(row: OverviewAccountCounts, view: OverviewAccountView): boolean {
+  if (view === "all") return true;
+  if (view === "unbilled") return row.unbilledCount > 0;
+  if (view === "charged") return row.chargedCount > 0;
+  if (view === "failed") return row.failedCount > 0;
+  if (view === "pending") return row.pendingCount > 0;
+  return row.eligibleCount > 0;
+}
+
+export function emptyOverviewAccountRow(loc: {
+  locationId: string;
+  ghlLocationId: string;
+  locationName: string | null;
+}) {
+  return {
+    locationId: loc.locationId,
+    ghlLocationId: loc.ghlLocationId,
+    locationName: loc.locationName,
+    eligibleCount: 0,
+    unbilledCount: 0,
+    unbilledAmount: 0,
+    chargedCount: 0,
+    chargedAmount: 0,
+    pendingCount: 0,
+    failedCount: 0,
+    currency: null,
+    mixedCurrencies: false
+  };
+}

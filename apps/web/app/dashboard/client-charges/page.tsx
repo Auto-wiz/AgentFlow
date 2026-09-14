@@ -20,6 +20,7 @@ import { DashboardSubnav } from "../dashboard-subnav";
 type PresetKey = "7" | "30" | "90" | "custom";
 type StatusFilter = "all" | "unbilled" | "pending" | "succeeded" | "failed";
 type OverviewSortColumn = "subaccount" | "unbilled" | "charged" | "eligible";
+type OverviewAccountView = "all" | "unbilled" | "charged" | "failed" | "pending" | "activity";
 
 type CanonicalDeposit = {
   kind: "payment_order" | "invoice";
@@ -149,6 +150,35 @@ type OverviewSortState = {
 
 const OVERVIEW_PAGE_SIZE = 50;
 const DETAIL_PAGE_SIZE = 50;
+
+function overviewViewLabel(view: OverviewAccountView): string {
+  if (view === "unbilled") return "to charge";
+  if (view === "charged") return "charged in period";
+  if (view === "failed") return "failed";
+  if (view === "pending") return "pending";
+  if (view === "activity") return "activity in period";
+  return "all eligible";
+}
+
+function overviewEmptyMessage(view: OverviewAccountView, hasSearch: boolean): string {
+  const searchSuffix = hasSearch ? " (or no subaccounts match your search)." : ".";
+  if (view === "unbilled") {
+    return `No eligible subaccounts have something to charge in this period${searchSuffix}`;
+  }
+  if (view === "charged") {
+    return `No eligible subaccounts were charged in this period${searchSuffix}`;
+  }
+  if (view === "failed") {
+    return `No eligible subaccounts have failed charges in this period${searchSuffix}`;
+  }
+  if (view === "pending") {
+    return `No eligible subaccounts have pending charges in this period${searchSuffix}`;
+  }
+  if (view === "activity") {
+    return `No eligible subaccounts have billable appointments in this period${searchSuffix}`;
+  }
+  return `No eligible subaccounts${searchSuffix}`;
+}
 
 function formatMoney(amount: number, currency: string | null | undefined) {
   if (!Number.isFinite(amount)) return "—";
@@ -618,6 +648,7 @@ export default function ClientChargesPage() {
     column: "unbilled",
     direction: "desc"
   });
+  const [overviewView, setOverviewView] = useState<OverviewAccountView>("all");
   const [expandedLocationId, setExpandedLocationId] = useState<string | null>(null);
 
   const [overviewLoading, setOverviewLoading] = useState(false);
@@ -661,11 +692,11 @@ export default function ClientChargesPage() {
 
   useEffect(() => {
     setOverviewPage(1);
-  }, [range.fromInclusive, range.toInclusive]);
+  }, [range.fromInclusive, range.toInclusive, overviewView]);
 
   useEffect(() => {
     setExpandedLocationId(null);
-  }, [range.fromInclusive, range.toInclusive, debouncedOverviewQ]);
+  }, [range.fromInclusive, range.toInclusive, debouncedOverviewQ, overviewView]);
 
   const buildOverviewParams = useCallback(() => {
     const params = new URLSearchParams(query);
@@ -674,8 +705,9 @@ export default function ClientChargesPage() {
     if (debouncedOverviewQ) params.set("q", debouncedOverviewQ);
     params.set("sort", overviewSort.column);
     params.set("order", overviewSort.direction);
+    if (overviewView !== "all") params.set("view", overviewView);
     return params;
-  }, [query, overviewPage, debouncedOverviewQ, overviewSort]);
+  }, [query, overviewPage, debouncedOverviewQ, overviewSort, overviewView]);
 
   const loadOverview = useCallback(async () => {
     if (!hydrated || !canUseClientCharges) return;
@@ -1253,6 +1285,25 @@ function formatGhlSyncFailureMessage(payload: {
             type="search"
             value={overviewSearchDraft}
           />
+          <div>
+            <label className="appointments-filter-label" htmlFor="client-charges-overview-view">
+              Show
+            </label>
+            <select
+              className="appointments-filter-select"
+              id="client-charges-overview-view"
+              onChange={(e) => setOverviewView(e.target.value as OverviewAccountView)}
+              style={{ display: "block", marginTop: 6, minWidth: 180 }}
+              value={overviewView}
+            >
+              <option value="all">All eligible</option>
+              <option value="unbilled">To charge</option>
+              <option value="charged">Charged in period</option>
+              <option value="failed">Failed</option>
+              <option value="pending">Pending</option>
+              <option value="activity">Activity in period</option>
+            </select>
+          </div>
           {isAdmin ? (
             <button
               className="button secondary"
@@ -1267,10 +1318,16 @@ function formatGhlSyncFailureMessage(payload: {
           {pagination ? (
             <>
               Page <strong>{pagination.page}</strong> of <strong>{pagination.totalPages}</strong> ·{" "}
-              <strong>{tableRows.length}</strong> rows on this page · <strong>{accountCount}</strong> subaccounts match
+              <strong>{tableRows.length}</strong> rows on this page · <strong>{accountCount}</strong> eligible
+              subaccounts match
+              {overviewView !== "all" ? ` · ${overviewViewLabel(overviewView)}` : ""}
               {debouncedOverviewQ ? ` · search: "${debouncedOverviewQ}"` : ""}.
             </>
           ) : null}
+        </p>
+        <p className="muted" style={{ marginBottom: 0, marginTop: 6 }}>
+          All eligible lists every subaccount with Client Charges enabled, even if this period has no appointments.
+          Use To charge for accounts that still have something to bill.
         </p>
       </div>
 
@@ -1447,8 +1504,7 @@ function formatGhlSyncFailureMessage(payload: {
           </table>
           {accountCount === 0 ? (
             <p className="empty muted" style={{ padding: 16 }}>
-              No billable results in this window for enabled locations
-              {debouncedOverviewQ ? " (or no subaccounts match your search)." : "."}
+              {overviewEmptyMessage(overviewView, Boolean(debouncedOverviewQ))}
             </p>
           ) : tableRows.length === 0 ? (
             <p className="empty muted" style={{ padding: 16 }}>
