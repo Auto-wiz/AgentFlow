@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "check": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test src/client-charges-logic.test.ts src/ghl-saas-subscription.test.ts",
+    "test": "node --experimental-strip-types --test src/client-charges-logic.test.ts src/ghl-saas-subscription.test.ts src/ghl-oauth-install.test.ts",
     "build": "wrangler deploy --dry-run --outdir dist"
   },
   "dependencies": {
