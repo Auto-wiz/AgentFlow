@@ -18,8 +18,8 @@ crons = ["*/15 * * * *"]
 
 [vars]
 LOCATION_NAME_CRON_BATCH = "0"
-# Client Charges: omit or "false" blocks Stripe charges; set "true" when ready to bill live.
-CLIENT_CHARGES_CHARGING_ENABLED = "false"
+# Do not put CLIENT_CHARGES_CHARGING_ENABLED here — wrangler [vars] overwrite Dashboard on every
+# deploy. Set it only in Cloudflare Worker Settings (true/1/yes to allow live Stripe charges).
 
 [[queues.producers]]
 binding = "MESSAGE_QUEUE"

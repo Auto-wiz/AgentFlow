@@ -1,4 +1,5 @@
-import { agencies, createDb, locations } from "@agentflow/db";
+import { agencies, createDb, locationBillingConfig, locations } from "@agentflow/db";
+import { and, asc, eq, isNull, or } from "drizzle-orm";
 
 import { createStripeClient } from "./client-charges-stripe.js";
 import {
@@ -310,5 +311,69 @@ export async function syncGhlSaasCatalogPage(
     results,
     note:
       "Lists SaaS subaccounts from GHL (v3 saas-locations). POST again with page=nextPage&offset=nextPageOffset until hasMore is false. limit caps rows per Worker request (subrequest budget); rowsOnPage may exceed processed when batching within a GHL page. Rows without cus_ in the list fall back to per-location SaaS sync."
+  };
+}
+
+/** Cron backfill: locations that still have no Stripe customer id (manual Sync from GHL equivalent). */
+export async function syncMissingGhlSaasStripeCronBatch(
+  env: GhlStripeSyncEnv & { DATABASE_URL: string },
+  requestedLimit: number
+) {
+  if (!env.STRIPE_SECRET_KEY?.trim()) {
+    return {
+      ok: true as const,
+      skipped: "stripe_not_configured",
+      processed: 0,
+      syncedOk: 0,
+      failed: 0
+    };
+  }
+
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.min(3, Math.max(1, Math.floor(requestedLimit)))
+    : 2;
+  const db = createDb(env.DATABASE_URL);
+  const now = new Date();
+
+  const candidates = await db
+    .select({
+      locationId: locations.id,
+      ghlLocationId: locations.ghlLocationId,
+      name: locations.name
+    })
+    .from(locations)
+    .leftJoin(locationBillingConfig, eq(locationBillingConfig.locationId, locations.id))
+    .where(
+      and(
+        eq(locations.excludeFromDashboard, false),
+        or(isNull(locationBillingConfig.locationId), isNull(locationBillingConfig.stripeCustomerId))
+      )
+    )
+    .orderBy(asc(locations.updatedAt))
+    .limit(limit);
+
+  const results: Array<{ ghlLocationId: string; ok: boolean; code?: string }> = [];
+  for (const loc of candidates) {
+    await ensureLocationBillingConfigRow(db, loc.locationId, now);
+    const synced = await syncLocationStripeFromGhlSaas(
+      env,
+      db,
+      loc.locationId,
+      loc.ghlLocationId,
+      GHL_SAAS_FETCH_BULK_OPTS
+    );
+    results.push({
+      ghlLocationId: loc.ghlLocationId,
+      ok: synced.ok,
+      code: synced.ok ? undefined : synced.code
+    });
+  }
+
+  return {
+    ok: true as const,
+    processed: results.length,
+    syncedOk: results.filter((row) => row.ok).length,
+    failed: results.filter((row) => !row.ok).length,
+    results
   };
 }

@@ -132,6 +132,7 @@ import {
   upsertPaymentSourceFromOrder
 } from "./ghl-dimension-sync.js";
 import { processSaasBillingWebhookEvent } from "./ghl-webhook-stripe-sync.js";
+import { syncMissingGhlSaasStripeCronBatch } from "./ghl-saas-catalog-sync.js";
 import {
   getWorkspaceDashboardOverviewHandler,
   getWorkspaceDashboardLocationDetailHandler,
@@ -215,6 +216,12 @@ type Env = {
    * sweeps cluster in morning / off-peak windows. Blank = every cron tick.
    */
   LOCATION_NAMES_REFRESH_HOUR_UTC?: string;
+  /**
+   * Max subaccounts per cron tick to backfill Stripe `cus_…` from GHL SaaS.
+   * Unset defaults to 2. `"0"` disables. Do not put this in wrangler.toml `[vars]` unless you
+   * want deploys to pin the value.
+   */
+  GHL_SAAS_STRIPE_CRON_BATCH?: string;
 };
 
 type HonoBindings = {
@@ -4083,6 +4090,22 @@ function parseLocationNamesStaleAfterDays(raw: string | undefined): number {
   return Math.min(365, n);
 }
 
+/** Unset defaults to 2; `"0"` disables cron SaaS/Stripe backfill. */
+function parseGhlSaasStripeCronBatch(raw: string | undefined): number {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return 2;
+  }
+  if (trimmed === "0") {
+    return 0;
+  }
+  const n = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(n) || n < 0) {
+    return 2;
+  }
+  return Math.min(3, n);
+}
+
 /** When unset or invalid hour, refreshes run on every eligible cron tick. */
 function passesLocationRefreshHourUtcGate(env: Env, scheduledTimeMs: number): boolean {
   const trimmed = env.LOCATION_NAMES_REFRESH_HOUR_UTC?.trim();
@@ -5347,6 +5370,7 @@ function isSaasBillingWebhookEvent(eventLower: string) {
   if (eventLower.includes("saasplan")) return true;
   if (eventLower.includes("saaslocation")) return true;
   if (eventLower.includes("locationcreate")) return true;
+  if (eventLower.includes("locationupdate")) return true;
   if (eventLower === "planchange") return true;
   return false;
 }
@@ -6014,6 +6038,16 @@ export default {
       }
     } catch (error) {
       console.warn("[scheduled.location_names.stale_refresh.failed]", error);
+    }
+
+    try {
+      const saasBatch = parseGhlSaasStripeCronBatch(env.GHL_SAAS_STRIPE_CRON_BATCH);
+      if (saasBatch > 0) {
+        const summary = await syncMissingGhlSaasStripeCronBatch(env, saasBatch);
+        console.log("[scheduled.ghl_saas_stripe.backfill]", summary);
+      }
+    } catch (error) {
+      console.warn("[scheduled.ghl_saas_stripe.backfill.failed]", error);
     }
 
     try {
