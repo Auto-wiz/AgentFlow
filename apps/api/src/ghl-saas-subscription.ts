@@ -12,7 +12,6 @@ import {
   getCompanyOAuthInstallationForLocation,
   oauthInstallationScopeIncludesSaas,
   resolveGhlCompanyIdForLocation,
-  writeGhlOAuthDebugLog,
   type GhlOAuthTokenEnv
 } from "./ghl-oauth-location-token.js";
 
@@ -250,39 +249,18 @@ export async function fetchGhlSaasSubscriptionForLocation(
     };
   }
 
-  let companyTokens = await getCompanyAccessTokensForGhlLocation(env, db, locationId, {
-    preemptiveOAuthRefresh: false
+  const companyTokens = await getCompanyAccessTokensForGhlLocation(env, db, locationId, {
+    preemptiveOAuthRefresh: true
   });
-  const initialCompanyTokenCount = companyTokens.length;
-  if (companyTokens.length === 0) {
-    companyTokens = await getCompanyAccessTokensForGhlLocation(env, db, locationId, {
-      preemptiveOAuthRefresh: true
-    });
-  }
   const oauthScopeOnFile = await getCompanyOAuthScopeSnapshotForLocation(db, locationId);
-  // #region agent log
-  writeGhlOAuthDebugLog({
-    hypothesisId: "A,B,C,D",
-    location: "ghl-saas-subscription.ts:fetchGhlSaasSubscriptionForLocation",
-    message: "saas_sync_oauth_resolution",
-    data: {
-      ghlLocationId: locationId,
-      resolvedCompanyId: companyId,
-      initialCompanyTokenCount,
-      finalCompanyTokenCount: companyTokens.length,
-      refreshedBecauseInitiallyEmpty: initialCompanyTokenCount === 0,
-      scopeIncludesSaas: oauthInstallationScopeIncludesSaas(oauthScopeOnFile),
-      hasScopeSnapshot: Boolean(oauthScopeOnFile)
-    }
-  });
-  // #endregion
 
   if (companyTokens.length === 0) {
     return {
       ok: false,
       status: null,
-      error:
-        "No agency-level (Company) OAuth token in AgentFlow. Use Settings → Connect GoHighLevel for the agency. Reinstalling the Marketplace app on a single subaccount does not replace that token.",
+      error: oauthScopeOnFile
+        ? "Agency Company OAuth token is present but expired and could not be refreshed. Use Settings → Connect GoHighLevel for the agency. Reinstalling the Marketplace app on a single subaccount does not refresh that token."
+        : "No agency-level (Company) OAuth token in AgentFlow. Use Settings → Connect GoHighLevel for the agency. Reinstalling the Marketplace app on a single subaccount does not replace that token.",
       code: "company_oauth_token_missing",
       oauthScopeOnFile
     };

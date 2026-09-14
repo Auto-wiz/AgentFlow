@@ -15,24 +15,6 @@ export type GhlOAuthRefreshCredentialEnv = GhlOAuthTokenEnv & {
   GHL_OAUTH_USER_TYPE?: string;
 };
 
-// #region agent log
-export function writeGhlOAuthDebugLog(payload: {
-  hypothesisId: string;
-  location: string;
-  message: string;
-  data: Record<string, unknown>;
-}) {
-  const entry = { ...payload, timestamp: Date.now() };
-  try {
-    // @ts-ignore debug-mode local file logging
-    require("fs").appendFileSync("/opt/cursor/logs/debug.log", `${JSON.stringify(entry)}\n`);
-  } catch {
-    // Cloudflare Workers do not expose writable local files.
-  }
-  console.info("[agent-debug]", JSON.stringify(entry));
-}
-// #endregion
-
 function asRecord(value: unknown): Record<string, any> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -223,20 +205,24 @@ async function getCompanyOAuthInstallationsForLocationInternal(db: AgentFlowDb, 
     }
   }
 
-  const [locationInstallation] = await db
-    .select({
-      companyId: ghlOAuthInstallations.companyId
-    })
-    .from(ghlOAuthInstallations)
-    .where(eq(ghlOAuthInstallations.locationId, ghlLocationId))
-    .orderBy(desc(ghlOAuthInstallations.updatedAt))
-    .limit(1);
+  try {
+    const [locationInstallation] = await db
+      .select({
+        companyId: ghlOAuthInstallations.companyId
+      })
+      .from(ghlOAuthInstallations)
+      .where(eq(ghlOAuthInstallations.locationId, ghlLocationId))
+      .orderBy(desc(ghlOAuthInstallations.updatedAt))
+      .limit(1);
 
-  if (locationInstallation?.companyId) {
-    const inferredCompanyInstallations = await readCompanyInstallations(locationInstallation.companyId);
-    if (inferredCompanyInstallations.length > 0) {
-      return inferredCompanyInstallations;
+    if (locationInstallation?.companyId) {
+      const inferredCompanyInstallations = await readCompanyInstallations(locationInstallation.companyId);
+      if (inferredCompanyInstallations.length > 0) {
+        return inferredCompanyInstallations;
+      }
     }
+  } catch {
+    // Fall through to the newest Company token on file.
   }
 
   return readCompanyInstallations();
@@ -321,23 +307,6 @@ export async function refreshGhlAccessTokenWithRefreshToken(
         body: requestBody.toString()
       });
       const raw = asRecord(await response.json().catch(() => ({}))) ?? {};
-      // #region agent log
-      writeGhlOAuthDebugLog({
-        hypothesisId: "D",
-        location: "ghl-oauth-location-token.ts:refreshGhlAccessTokenWithRefreshToken",
-        message: "oauth_refresh_http_result",
-        data: {
-          userType,
-          status: response.status,
-          ok: response.ok,
-          returnedUserType: stringOrNull(raw.userType ?? raw.user_type),
-          returnedCompanyId: stringOrNull(raw.companyId ?? raw.company_id),
-          returnedLocationId: stringOrNull(raw.locationId ?? raw.location_id),
-          hasAccessToken: Boolean(stringOrNull(raw.access_token ?? raw.accessToken)),
-          error: stringOrNull(raw.message ?? raw.error ?? raw.error_description)
-        }
-      });
-      // #endregion
       if (!response.ok) {
         continue;
       }
@@ -402,35 +371,24 @@ export async function refreshOAuthAccessTokensForLocation(
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
     .limit(8);
 
-  const scopedInstallationCount = installations.length;
-  if (installations.length === 0) {
-    installations = await db
-      .select({
-        id: ghlOAuthInstallations.id,
-        refreshToken: ghlOAuthInstallations.refreshToken,
-        userType: ghlOAuthInstallations.userType
-      })
-      .from(ghlOAuthInstallations)
-      .where(eq(ghlOAuthInstallations.userType, "Company"))
-      .orderBy(desc(ghlOAuthInstallations.updatedAt))
-      .limit(8);
-  }
-
-  // #region agent log
-  writeGhlOAuthDebugLog({
-    hypothesisId: "D",
-    location: "ghl-oauth-location-token.ts:refreshOAuthAccessTokensForLocation",
-    message: "oauth_refresh_candidates",
-    data: {
-      ghlLocationId,
-      mappedAgencyId: locationWithAgency?.ghlAgencyId ?? null,
-      scopedInstallationCount,
-      selectedInstallationCount: installations.length,
-      usedGlobalCompanyFallback: scopedInstallationCount === 0,
-      selectedUserTypes: installations.map((row) => row.userType)
+  const companyInstallations = await db
+    .select({
+      id: ghlOAuthInstallations.id,
+      refreshToken: ghlOAuthInstallations.refreshToken,
+      userType: ghlOAuthInstallations.userType
+    })
+    .from(ghlOAuthInstallations)
+    .where(eq(ghlOAuthInstallations.userType, "Company"))
+    .orderBy(desc(ghlOAuthInstallations.updatedAt))
+    .limit(8);
+  const seenInstallationIds = new Set(installations.map((row) => row.id));
+  for (const installation of companyInstallations) {
+    if (seenInstallationIds.has(installation.id)) {
+      continue;
     }
-  });
-  // #endregion
+    seenInstallationIds.add(installation.id);
+    installations.push(installation);
+  }
 
   let refreshedCount = 0;
   for (const installation of installations) {
@@ -439,19 +397,6 @@ export async function refreshOAuthAccessTokensForLocation(
       continue;
     }
     const refreshed = await refreshGhlAccessTokenWithRefreshToken(env, rt, installation.userType);
-    // #region agent log
-    writeGhlOAuthDebugLog({
-      hypothesisId: "D",
-      location: "ghl-oauth-location-token.ts:refreshOAuthAccessTokensForLocation",
-      message: "oauth_refresh_candidate_result",
-      data: {
-        ghlLocationId,
-        installationUserType: installation.userType,
-        hasRefreshToken: Boolean(rt),
-        refreshSucceeded: Boolean(refreshed)
-      }
-    });
-    // #endregion
     if (!refreshed) {
       continue;
     }
@@ -582,6 +527,13 @@ export async function getCompanyAccessTokensForGhlCompanyId(
     }
   }
 
+  if (tokenCandidates.size === 0) {
+    for (const row of installs) {
+      const token = row.accessToken?.trim();
+      if (token) tokenCandidates.add(token);
+    }
+  }
+
   const envToken = env.GHL_API_TOKEN?.trim();
   if (envToken) tokenCandidates.add(envToken);
   return Array.from(tokenCandidates);
@@ -700,6 +652,26 @@ export async function getAccessTokensForLocation(
 }
 
 /** Agency Company OAuth tokens for SaaS Configurator APIs (prefer over location-scoped tokens). */
+function isOAuthTokenStillValid(expiresAt: Date | null | undefined) {
+  if (!expiresAt) return true;
+  return expiresAt.getTime() > Date.now() + 60_000;
+}
+
+function collectCompanyAccessTokens(
+  rows: Array<{ accessToken: string | null; expiresAt: Date | null }>,
+  options?: { includeExpired?: boolean }
+) {
+  const tokenCandidates = new Set<string>();
+  for (const installation of rows) {
+    if (!options?.includeExpired && !isOAuthTokenStillValid(installation.expiresAt)) {
+      continue;
+    }
+    const token = installation.accessToken?.trim();
+    if (token) tokenCandidates.add(token);
+  }
+  return tokenCandidates;
+}
+
 export async function getCompanyAccessTokensForGhlLocation(
   env: GhlOAuthTokenEnv,
   db: AgentFlowDb,
@@ -707,52 +679,41 @@ export async function getCompanyAccessTokensForGhlLocation(
   options?: { preemptiveOAuthRefresh?: boolean }
 ) {
   const credentialEnv = env as GhlOAuthRefreshCredentialEnv;
-  if (options?.preemptiveOAuthRefresh === true) {
-    const cid = credentialEnv.GHL_CLIENT_ID?.trim();
-    const csec = credentialEnv.GHL_CLIENT_SECRET?.trim();
-    if (cid && csec) {
-      await refreshOAuthAccessTokensForLocation(credentialEnv, db, ghlLocationId);
-    }
-  }
+  const canRefresh = Boolean(credentialEnv.GHL_CLIENT_ID?.trim() && credentialEnv.GHL_CLIENT_SECRET?.trim());
 
-  const isStillValid = (expiresAt: Date | null | undefined) => {
-    if (!expiresAt) return true;
-    return expiresAt.getTime() > Date.now() + 60_000;
-  };
-
-  const tokenCandidates = new Set<string>();
-  const companyInstallations = [
+  const loadCompanyInstallations = async () => [
     ...(await getCompanyOAuthInstallationsForLocationInternal(db, ghlLocationId)),
     ...(await getRecentCompanyOAuthInstallations(db, 5))
   ];
-  for (const installation of companyInstallations) {
-    if (!isStillValid(installation.expiresAt)) continue;
-    const token = installation.accessToken?.trim();
-    if (token) tokenCandidates.add(token);
-  }
-  const resolvedTokens = Array.from(tokenCandidates);
-  // #region agent log
-  writeGhlOAuthDebugLog({
-    hypothesisId: "A,B,C",
-    location: "ghl-oauth-location-token.ts:getCompanyAccessTokensForGhlLocation",
-    message: "company_token_resolution",
-    data: {
-      ghlLocationId,
-      preemptiveOAuthRefresh: options?.preemptiveOAuthRefresh === true,
-      candidateRows: companyInstallations.map((row) => ({
-        companyId: row.companyId,
-        locationId: row.locationId,
-        userType: row.userType,
-        expiresAt: row.expiresAt?.toISOString() ?? null,
-        updatedAt: row.updatedAt?.toISOString() ?? null,
-        usable: isStillValid(row.expiresAt),
-        scopeIncludesSaas: oauthInstallationScopeIncludesSaas(row.scope)
-      })),
-      resolvedTokenCount: resolvedTokens.length
+
+  let companyInstallations = await loadCompanyInstallations();
+  let tokenCandidates = collectCompanyAccessTokens(companyInstallations);
+  const shouldRefreshCompanyTokens =
+    canRefresh && (options?.preemptiveOAuthRefresh === true || tokenCandidates.size === 0);
+
+  if (shouldRefreshCompanyTokens) {
+    const companyIds = new Set<string>();
+    const mappedCompanyId = await resolveGhlCompanyIdForLocation(db, ghlLocationId);
+    if (mappedCompanyId) companyIds.add(mappedCompanyId);
+    for (const installation of companyInstallations) {
+      const companyId = installation.companyId?.trim();
+      if (companyId) companyIds.add(companyId);
     }
-  });
-  // #endregion
-  return resolvedTokens;
+    for (const companyId of companyIds) {
+      await refreshOAuthAccessTokensForCompany(credentialEnv, db, companyId);
+    }
+    if (companyIds.size === 0) {
+      await refreshOAuthAccessTokensForLocation(credentialEnv, db, ghlLocationId);
+    }
+    companyInstallations = await loadCompanyInstallations();
+    tokenCandidates = collectCompanyAccessTokens(companyInstallations);
+  }
+
+  if (tokenCandidates.size === 0) {
+    tokenCandidates = collectCompanyAccessTokens(companyInstallations, { includeExpired: true });
+  }
+
+  return Array.from(tokenCandidates);
 }
 
 export async function resolveGhlCompanyIdForLocation(db: AgentFlowDb, ghlLocationId: string) {
