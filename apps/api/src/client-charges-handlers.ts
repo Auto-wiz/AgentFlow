@@ -81,7 +81,7 @@ async function policyLocationScope(c: Context<Bindings>) {
 async function requireClientChargesAccess(c: Context<Bindings>) {
   const me = await resolveSessionUser(c, c.env);
   if (!me) return c.json({ error: "unauthorized" }, 401);
-  if (!canAccessClientCharges(me.email)) return c.json({ error: "forbidden" }, 403);
+  if (!canAccessClientCharges(me.email, me.role)) return c.json({ error: "forbidden" }, 403);
   return me;
 }
 
@@ -163,6 +163,7 @@ export async function getWorkspaceClientChargesOverviewHandler(c: Context<Bindin
     return c.json({
       fromInclusive: bounds.from.toISOString(),
       toExclusive: bounds.toExclusive.toISOString(),
+      clientChargesChargingEnabled: isClientChargesChargingEnabled(c.env),
       ...result
     });
   } catch (error) {
@@ -422,7 +423,7 @@ async function writeChargeOutcome(params: {
 async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
   const me = await resolveSessionUser(c, c.env);
   if (!me) return c.json({ error: "unauthorized" }, 401);
-  if (!canAccessClientCharges(me.email)) return c.json({ error: "forbidden" }, 403);
+  if (!canAccessClientCharges(me.email, me.role)) return c.json({ error: "forbidden" }, 403);
   if (me.role !== "admin") return c.json({ error: "admin_required" }, 403);
   if (!isClientChargesChargingEnabled(c.env)) {
     return c.json(
@@ -633,7 +634,7 @@ export async function postWorkspaceClientChargeRetryHandler(c: Context<Bindings>
 export async function getAdminClientChargeLocationsHandler(c: Context<Bindings>) {
   const me = await resolveSessionUser(c, c.env);
   if (!me) return c.json({ error: "unauthorized" }, 401);
-  if (!canAccessClientCharges(me.email)) return c.json({ error: "forbidden" }, 403);
+  if (!canAccessClientCharges(me.email, me.role)) return c.json({ error: "forbidden" }, 403);
   if (me.role !== "admin") return c.json({ error: "forbidden" }, 403);
   const policy = await resolveAccessPolicy(c, c.env);
   if (!policy) return c.json({ error: "unauthorized" }, 401);
@@ -700,7 +701,7 @@ export async function patchAdminClientChargeLocationHandler(c: Context<Bindings>
   try {
     const me = await resolveSessionUser(c, c.env);
     if (!me) return c.json({ error: "unauthorized" }, 401);
-    if (!canAccessClientCharges(me.email)) return c.json({ error: "forbidden" }, 403);
+    if (!canAccessClientCharges(me.email, me.role)) return c.json({ error: "forbidden" }, 403);
     if (me.role !== "admin") return c.json({ error: "forbidden" }, 403);
     const policy = await resolveAccessPolicy(c, c.env);
     if (!policy) return c.json({ error: "unauthorized" }, 401);

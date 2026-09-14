@@ -273,4 +273,10 @@ describe("client charges access allowlist", () => {
     assert.equal(canAccessClientCharges("other@autowiz.net"), false);
     assert.equal(canAccessClientCharges("admin@example.com"), false);
   });
+
+  it("allows any workspace admin regardless of email", () => {
+    assert.equal(canAccessClientCharges("breanna@manicmarketing.com", "admin"), true);
+    assert.equal(canAccessClientCharges("support@manicmarketing.com", "admin"), true);
+    assert.equal(canAccessClientCharges("ryndon@manicmarketing.com", "user"), false);
+  });
 });

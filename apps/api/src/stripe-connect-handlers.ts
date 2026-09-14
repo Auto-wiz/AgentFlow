@@ -54,7 +54,7 @@ function isUuid(value: string) {
 async function assertAdminClientCharges(c: Context<Bindings>) {
   const me = await resolveSessionUser(c, c.env);
   if (!me) return null;
-  if (!canAccessClientCharges(me.email) || me.role !== "admin") return null;
+  if (!canAccessClientCharges(me.email, me.role) || me.role !== "admin") return null;
   const policy = await resolveAccessPolicy(c, c.env);
   if (!policy) return null;
   return { me, policy };
@@ -116,8 +116,9 @@ export async function getAdminStripePlatformStatusHandler(c: Context<Bindings>) 
   if (!auth) return c.json({ error: "forbidden" }, 403);
 
   const stripe = createStripeClient(c.env);
+  const charging = { clientChargesChargingEnabled: isClientChargesChargingEnabled(c.env) };
   if (!stripe) {
-    return c.json({ configured: false, platformAccountMasked: null });
+    return c.json({ configured: false, platformAccountMasked: null, ...charging });
   }
 
   try {
@@ -126,14 +127,14 @@ export async function getAdminStripePlatformStatusHandler(c: Context<Bindings>) 
       configured: true,
       platformAccountMasked: null,
       chargesEnabled: null,
-      clientChargesChargingEnabled: isClientChargesChargingEnabled(c.env)
+      ...charging
     });
   } catch {
     return c.json({
       configured: false,
       platformAccountMasked: null,
       chargesEnabled: null,
-      clientChargesChargingEnabled: isClientChargesChargingEnabled(c.env)
+      ...charging
     });
   }
 }
