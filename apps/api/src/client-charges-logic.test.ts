@@ -20,6 +20,7 @@ import {
   extractGhlLocationIdFromStripeMetadata,
   extractGhlCompanyIdFromStripeMetadata,
   findGhlSaasLocationRecord,
+  isEmptySaasLocationsPage,
   listGhlSaasLocationRowsFromPage,
   parseGhlLocationIdsFromSaasLocationsLookupPayload,
   stripeCustomerDisplayName,
@@ -181,6 +182,46 @@ describe("Stripe customer id and GHL SaaS payload", () => {
     assert.equal(rows.length, 2);
     assert.equal(rows[0]?.ghlLocationId, "loc_a");
     assert.equal(extractSaasSubscriptionStripeCustomerId(rows[0]?.row), "cus_a");
+  });
+
+  it("unwraps GHL { data: { locations, pagination } } catalog pages", () => {
+    const wrapped = {
+      message: "success",
+      status: 200,
+      data: {
+        locations: [
+          { locationId: "BZI4XanpCqmn5tsMd34N", name: "Kymala", customerId: "cus_listed" }
+        ],
+        pagination: { page: "1", total: 77, totalPages: 4, hasNext: true }
+      }
+    };
+    const row = findGhlSaasLocationRecord(wrapped, "BZI4XanpCqmn5tsMd34N");
+    assert.equal(row?.name, "Kymala");
+    assert.equal(listGhlSaasLocationRowsFromPage(wrapped).length, 1);
+    assert.equal(isEmptySaasLocationsPage(wrapped), false);
+    assert.equal(
+      isEmptySaasLocationsPage({
+        message: "success",
+        data: { locations: [], pagination: { page: "5", total: 77, totalPages: 4 } }
+      }),
+      true
+    );
+  });
+
+  it("reads cus_ from get-saas-subscription envelopes even when the catalog omits the location", () => {
+    const envelope = {
+      message: "success",
+      status: 200,
+      data: {
+        isSaaSV2: false,
+        customerId: "cus_activatedNoPlan",
+        locationId: "BZI4XanpCqmn5tsMd34N",
+        saasMode: "activated",
+        subscriptionStatus: null
+      }
+    };
+    assert.equal(extractSaasSubscriptionStripeCustomerId(envelope), "cus_activatedNoPlan");
+    assert.equal(findGhlSaasLocationRecord({ data: { locations: [] } }, "BZI4XanpCqmn5tsMd34N"), null);
   });
 
   it("reads GHL location/company ids from Stripe metadata", () => {

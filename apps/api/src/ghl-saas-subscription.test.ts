@@ -26,7 +26,7 @@ describe("GHL SaaS error classification", () => {
     });
     assert.equal(explained.code, "saas_location_not_in_catalog");
     assert.match(explained.error, /tKQSyxgMagrV5lEVSX7Q/);
-    assert.match(explained.error, /Enable SaaS/);
+    assert.match(explained.error, /get-saas-subscription/);
   });
 
   it("explains Forbidden resource with saas/* on file without pretending the scopes are missing", () => {

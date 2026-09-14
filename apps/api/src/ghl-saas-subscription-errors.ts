@@ -54,7 +54,7 @@ export function explainGhlSaasFetchFailure(input: {
     return {
       status: 404,
       code: "saas_location_not_in_catalog",
-      error: `GHL SaaS catalog does not include subaccount ${input.ghlLocationId}. Enable SaaS for that location in HighLevel, then Sync from GHL again.`
+      error: `GHL SaaS catalog does not include subaccount ${input.ghlLocationId}, and GET /saas/get-saas-subscription also had no Stripe customer. If HighLevel shows a customer, the location may be SaaS-activated without a recurring plan — reconnect Company OAuth and Sync again, or paste cus_ manually.`
     };
   }
   if (input.sawScopeError || shouldTreatAsGhlSaasAuthFailure(input.lastStatus, input.lastMessage)) {

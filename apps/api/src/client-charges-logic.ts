@@ -394,14 +394,7 @@ export function findGhlSaasLocationRecord(
 
 /** True when a v3 saas-locations page has no rows (end of pagination). */
 export function isEmptySaasLocationsPage(payload: unknown): boolean {
-  const row = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : null;
-  if (!row) return true;
-  for (const key of ["locations", "saasLocations", "data", "items", "results"]) {
-    const nested = row[key];
-    if (Array.isArray(nested)) return nested.length === 0;
-  }
-  if (Array.isArray(payload)) return payload.length === 0;
-  return false;
+  return listGhlSaasLocationRowsFromPage(payload).length === 0;
 }
 
 export function pickDefaultPaymentMethodIdFromStripeCustomer(
