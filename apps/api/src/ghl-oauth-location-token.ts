@@ -157,6 +157,33 @@ async function upsertLocationOAuthInstallationFromExchange(
 }
 
 async function getCompanyOAuthInstallationsForLocationInternal(db: AgentFlowDb, ghlLocationId: string) {
+  const readCompanyInstallations = async (companyId?: string | null) => {
+    const filters = [eq(ghlOAuthInstallations.userType, "Company")];
+    if (companyId) {
+      filters.push(eq(ghlOAuthInstallations.companyId, companyId));
+    }
+
+    try {
+      return await db
+        .select({
+          companyId: ghlOAuthInstallations.companyId,
+          locationId: ghlOAuthInstallations.locationId,
+          userType: ghlOAuthInstallations.userType,
+          accessToken: ghlOAuthInstallations.accessToken,
+          refreshToken: ghlOAuthInstallations.refreshToken,
+          scope: ghlOAuthInstallations.scope,
+          expiresAt: ghlOAuthInstallations.expiresAt,
+          updatedAt: ghlOAuthInstallations.updatedAt
+        })
+        .from(ghlOAuthInstallations)
+        .where(and(...filters))
+        .orderBy(desc(ghlOAuthInstallations.updatedAt))
+        .limit(5);
+    } catch {
+      return [];
+    }
+  };
+
   let locationWithAgency: { ghlAgencyId: string } | undefined;
   try {
     [locationWithAgency] = await db
@@ -171,34 +198,30 @@ async function getCompanyOAuthInstallationsForLocationInternal(db: AgentFlowDb, 
     return [];
   }
 
-  if (!locationWithAgency?.ghlAgencyId) {
-    return [];
+  if (locationWithAgency?.ghlAgencyId) {
+    const agencyCompanyInstallations = await readCompanyInstallations(locationWithAgency.ghlAgencyId);
+    if (agencyCompanyInstallations.length > 0) {
+      return agencyCompanyInstallations;
+    }
   }
 
-  try {
-    return await db
+  const [locationInstallation] = await db
     .select({
-      companyId: ghlOAuthInstallations.companyId,
-      locationId: ghlOAuthInstallations.locationId,
-      userType: ghlOAuthInstallations.userType,
-      accessToken: ghlOAuthInstallations.accessToken,
-      refreshToken: ghlOAuthInstallations.refreshToken,
-      scope: ghlOAuthInstallations.scope,
-      expiresAt: ghlOAuthInstallations.expiresAt,
-      updatedAt: ghlOAuthInstallations.updatedAt
+      companyId: ghlOAuthInstallations.companyId
     })
     .from(ghlOAuthInstallations)
-    .where(
-      and(
-        eq(ghlOAuthInstallations.companyId, locationWithAgency.ghlAgencyId),
-        eq(ghlOAuthInstallations.userType, "Company")
-      )
-    )
+    .where(eq(ghlOAuthInstallations.locationId, ghlLocationId))
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
-    .limit(5);
-  } catch {
-    return [];
+    .limit(1);
+
+  if (locationInstallation?.companyId) {
+    const inferredCompanyInstallations = await readCompanyInstallations(locationInstallation.companyId);
+    if (inferredCompanyInstallations.length > 0) {
+      return inferredCompanyInstallations;
+    }
   }
+
+  return readCompanyInstallations();
 }
 
 export function oauthInstallationScopeIncludesSaas(scope: string | null | undefined): boolean {
