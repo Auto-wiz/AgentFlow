@@ -15,7 +15,8 @@ import {
   clientChargeIdempotencyKey,
   isChargeRetryable,
   isClientChargesChargingEnabled,
-  normalizeChargeAmount
+  normalizeChargeAmount,
+  parseOverviewAccountView
 } from "./client-charges-logic.js";
 import {
   getClientChargeCandidateByAppointment,
@@ -118,6 +119,7 @@ export async function getWorkspaceClientChargesOverviewHandler(c: Context<Bindin
     const limitRaw = Number.parseInt(c.req.query("limit") ?? "50", 10);
     const sortColumn = parseClientChargeOverviewSort(c.req.query("sort"));
     const sortDirection = c.req.query("order")?.trim().toLowerCase() === "asc" ? "asc" : "desc";
+    const accountView = parseOverviewAccountView(c.req.query("view"));
 
     const result = await listClientChargeOverview(scoped.db, {
       from: bounds.from,
@@ -128,7 +130,8 @@ export async function getWorkspaceClientChargesOverviewHandler(c: Context<Bindin
       page: Number.isFinite(pageRaw) ? pageRaw : 1,
       pageSize: Number.isFinite(limitRaw) ? limitRaw : 50,
       sortColumn,
-      sortDirection
+      sortDirection,
+      accountView
     });
 
     const overviewLocationIds = result.subaccounts.map((row) => row.locationId);

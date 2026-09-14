@@ -11,7 +11,12 @@ import { and, asc, eq, gte, inArray, lt, not, notInArray, sql } from "drizzle-or
 import type { SQL } from "drizzle-orm";
 
 import { appointmentCancelledOnlySql, buildAppointmentEffectivePaidSql } from "./appointment-payment-sql.js";
-import { chargeActorDisplayName } from "./client-charges-logic.js";
+import {
+  chargeActorDisplayName,
+  emptyOverviewAccountRow,
+  overviewAccountMatchesView,
+  type OverviewAccountView
+} from "./client-charges-logic.js";
 
 type Db = ReturnType<typeof createDb>;
 
@@ -483,6 +488,32 @@ export async function fetchClientChargeCandidates(
   return normalized;
 }
 
+async function listEnabledChargeLocations(
+  db: Db,
+  params: Pick<ClientChargeFetchParams, "allowedLocationIds" | "hiddenLocationIds">
+): Promise<Array<{ locationId: string; ghlLocationId: string; locationName: string | null }>> {
+  const filters: SQL[] = [eq(locationBillingConfig.enabled, true)];
+  if (params.allowedLocationIds !== null) {
+    filters.push(
+      params.allowedLocationIds.length === 0
+        ? sql`false`
+        : inArray(locations.id, params.allowedLocationIds)
+    );
+  }
+  if (params.hiddenLocationIds?.length) {
+    filters.push(notInArray(locations.id, params.hiddenLocationIds));
+  }
+  return db
+    .select({
+      locationId: locations.id,
+      ghlLocationId: locations.ghlLocationId,
+      locationName: locations.name
+    })
+    .from(locations)
+    .innerJoin(locationBillingConfig, eq(locationBillingConfig.locationId, locations.id))
+    .where(and(...filters));
+}
+
 export async function listClientChargeOverview(
   db: Db,
   params: ClientChargeFetchParams & {
@@ -490,6 +521,7 @@ export async function listClientChargeOverview(
     pageSize: number;
     sortColumn?: "subaccount" | "unbilled" | "charged" | "eligible";
     sortDirection?: "asc" | "desc";
+    accountView?: OverviewAccountView;
   }
 ): Promise<ClientChargeOverviewResult> {
   const candidates = await fetchClientChargeCandidates(db, {
@@ -507,13 +539,21 @@ export async function listClientChargeOverview(
     byLocation.set(row.locationId, bucket);
   }
 
+  const enabledLocations = await listEnabledChargeLocations(db, params);
+  const needle = (params.query ?? "").trim().toLowerCase();
   let subaccounts: ClientChargeOverviewRow[] = [];
-  for (const [locationId, rows] of byLocation) {
-    const first = rows[0]!;
+  for (const loc of enabledLocations) {
+    if (!matchesSubaccountQuery(loc, needle)) continue;
+    const rows = byLocation.get(loc.locationId) ?? [];
     subaccounts.push(
-      aggregateOverviewRow(locationId, first.ghlLocationId, first.locationName, rows)
+      rows.length > 0
+        ? aggregateOverviewRow(loc.locationId, loc.ghlLocationId, loc.locationName, rows)
+        : emptyOverviewAccountRow(loc)
     );
   }
+
+  const accountView = params.accountView ?? "all";
+  subaccounts = subaccounts.filter((row) => overviewAccountMatchesView(row, accountView));
 
   const sortColumn = params.sortColumn ?? "unbilled";
   const sortDirection = params.sortDirection ?? "desc";

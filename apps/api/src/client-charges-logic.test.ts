@@ -27,6 +27,9 @@ import {
   stripeCustomerEmail,
   summarizeUnknownJsonShape,
   isClientChargesChargingEnabled,
+  parseOverviewAccountView,
+  overviewAccountMatchesView,
+  emptyOverviewAccountRow,
   pickCanonicalDepositSource,
   stripeConnectedChargeRequestOptions,
   toStripeMinorUnits
@@ -319,5 +322,28 @@ describe("client charges access allowlist", () => {
     assert.equal(canAccessClientCharges("breanna@manicmarketing.com", "admin"), true);
     assert.equal(canAccessClientCharges("support@manicmarketing.com", "admin"), true);
     assert.equal(canAccessClientCharges("ryndon@manicmarketing.com", "user"), false);
+  });
+});
+
+describe("client charges overview account view", () => {
+  it("defaults unknown view query params to all eligible", () => {
+    assert.equal(parseOverviewAccountView(undefined), "all");
+    assert.equal(parseOverviewAccountView("nope"), "all");
+    assert.equal(parseOverviewAccountView("Unbilled"), "unbilled");
+    assert.equal(parseOverviewAccountView("activity"), "activity");
+  });
+
+  it("keeps enabled accounts with zero activity on all, not on to-charge", () => {
+    const empty = emptyOverviewAccountRow({
+      locationId: "loc-1",
+      ghlLocationId: "ghl-1",
+      locationName: "Kymala"
+    });
+    assert.equal(overviewAccountMatchesView(empty, "all"), true);
+    assert.equal(overviewAccountMatchesView(empty, "unbilled"), false);
+    assert.equal(overviewAccountMatchesView(empty, "activity"), false);
+    assert.equal(overviewAccountMatchesView({ ...empty, unbilledCount: 2 }, "unbilled"), true);
+    assert.equal(overviewAccountMatchesView({ ...empty, eligibleCount: 1 }, "activity"), true);
+    assert.equal(overviewAccountMatchesView({ ...empty, failedCount: 1 }, "failed"), true);
   });
 });
