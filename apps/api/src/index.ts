@@ -2288,6 +2288,29 @@ async function getCompanyOAuthInstallationForLocation(
   db: ReturnType<typeof createDb>,
   ghlLocationId: string
 ) {
+  const readLatestCompanyInstallation = async (companyId?: string | null) => {
+    const companyFilters = [eq(ghlOAuthInstallations.userType, "Company")];
+    if (companyId) {
+      companyFilters.push(eq(ghlOAuthInstallations.companyId, companyId));
+    }
+
+    const [companyInstallation] = await db
+      .select({
+        companyId: ghlOAuthInstallations.companyId,
+        locationId: ghlOAuthInstallations.locationId,
+        userType: ghlOAuthInstallations.userType,
+        accessToken: ghlOAuthInstallations.accessToken,
+        expiresAt: ghlOAuthInstallations.expiresAt,
+        updatedAt: ghlOAuthInstallations.updatedAt
+      })
+      .from(ghlOAuthInstallations)
+      .where(and(...companyFilters))
+      .orderBy(desc(ghlOAuthInstallations.updatedAt))
+      .limit(1);
+
+    return companyInstallation ?? null;
+  };
+
   const [locationWithAgency] = await db
     .select({
       ghlAgencyId: agencies.ghlAgencyId
@@ -2297,30 +2320,34 @@ async function getCompanyOAuthInstallationForLocation(
     .where(eq(locations.ghlLocationId, ghlLocationId))
     .limit(1);
 
-  if (!locationWithAgency?.ghlAgencyId) {
-    return null;
+  if (locationWithAgency?.ghlAgencyId) {
+    const companyInstallation = await readLatestCompanyInstallation(locationWithAgency.ghlAgencyId);
+    if (companyInstallation) {
+      return companyInstallation;
+    }
   }
 
-  const [companyInstallation] = await db
+  // Fallback: if location was not mirrored into `locations` yet, infer company from any
+  // location-level OAuth row tied to the target subaccount.
+  const [locationInstallation] = await db
     .select({
       companyId: ghlOAuthInstallations.companyId,
-      locationId: ghlOAuthInstallations.locationId,
-      userType: ghlOAuthInstallations.userType,
-      accessToken: ghlOAuthInstallations.accessToken,
-      expiresAt: ghlOAuthInstallations.expiresAt,
       updatedAt: ghlOAuthInstallations.updatedAt
     })
     .from(ghlOAuthInstallations)
-    .where(
-      and(
-        eq(ghlOAuthInstallations.companyId, locationWithAgency.ghlAgencyId),
-        eq(ghlOAuthInstallations.userType, "Company")
-      )
-    )
+    .where(eq(ghlOAuthInstallations.locationId, ghlLocationId))
     .orderBy(desc(ghlOAuthInstallations.updatedAt))
     .limit(1);
 
-  return companyInstallation ?? null;
+  if (locationInstallation?.companyId) {
+    const companyInstallation = await readLatestCompanyInstallation(locationInstallation.companyId);
+    if (companyInstallation) {
+      return companyInstallation;
+    }
+  }
+
+  // Last resort for single-agency workspaces: use the most recent Company token on file.
+  return readLatestCompanyInstallation();
 }
 
 async function getRecentOAuthInstallations(db: ReturnType<typeof createDb>, limit = 8) {
