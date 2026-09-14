@@ -191,6 +191,15 @@ function formatMoney(amount: number, currency: string | null | undefined) {
   return cur ? `${num} ${cur}` : `$${num}`;
 }
 
+function formatDollarAmount(amount: number) {
+  if (!Number.isFinite(amount)) return "—";
+  const num = new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(amount);
+  return `$${num}`;
+}
+
 function formatWhen(iso: string | null | undefined) {
   if (!iso) return "—";
   const ms = Date.parse(iso);
@@ -534,8 +543,8 @@ function ClientChargesLocationDetail({
                           ) : null}
                         </td>
                         <td className="dashboard-th-actions">
-                          <strong>
-                            {formatMoney(depositChargeAmount(row), depositChargeCurrency(row))}
+                          <strong className={succeeded ? "client-charges-charged" : undefined}>
+                            {formatDollarAmount(depositChargeAmount(row))}
                           </strong>
                         </td>
                         <td>
@@ -1239,11 +1248,13 @@ function formatGhlSyncFailureMessage(payload: {
           </div>
           <div className="panel dashboard-kpi-panel">
             <p className="dashboard-kpi-eyebrow">Charged</p>
-            <p className="dashboard-kpi-value">{totals.chargedCount}</p>
+            <p className="dashboard-kpi-value dashboard-kpi-value--charged">
+              {totals.mixedCurrencies ? "Mixed" : formatDollarAmount(totals.chargedAmount)}
+            </p>
             <p className="muted dashboard-kpi-sub">
               {totals.mixedCurrencies
                 ? "Mixed currencies · amount not summed"
-                : formatMoney(totals.chargedAmount, totals.currency)}
+                : `${totals.chargedCount} charge${totals.chargedCount === 1 ? "" : "s"}`}
             </p>
           </div>
           <div className="panel dashboard-kpi-panel">
@@ -1462,11 +1473,17 @@ function formatGhlSyncFailureMessage(payload: {
                       </div>
                     </td>
                     <td>
-                      <div>{row.chargedCount}</div>
+                      <div
+                        className={
+                          !row.mixedCurrencies && row.chargedAmount > 0 ? "client-charges-charged" : undefined
+                        }
+                      >
+                        <strong>
+                          {row.mixedCurrencies ? "Mixed currencies" : formatDollarAmount(row.chargedAmount)}
+                        </strong>
+                      </div>
                       <div className="muted">
-                        {row.mixedCurrencies
-                          ? "Mixed currencies"
-                          : formatMoney(row.chargedAmount, row.currency)}
+                        {row.chargedCount} charge{row.chargedCount === 1 ? "" : "s"}
                       </div>
                     </td>
                     <td>

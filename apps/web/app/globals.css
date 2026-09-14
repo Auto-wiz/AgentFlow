@@ -12,6 +12,7 @@
   --shadow: 0 12px 36px rgb(23 32 51 / 8%);
   --bubble-inbound: #f2f4fb;
   --bubble-outbound: #deebff;
+  --charged: #15803d;
 }
 
 :root[data-theme="dark"] {
@@ -28,6 +29,7 @@
   --shadow: 0 12px 36px rgb(1 5 15 / 45%);
   --bubble-inbound: #1f253a;
   --bubble-outbound: #2a365d;
+  --charged: #4ade80;
 }
 
 * {
@@ -1565,6 +1567,11 @@ button.appointments-row.active {
   letter-spacing: -0.02em;
   line-height: 1.1;
   margin: 0;
+}
+
+.dashboard-kpi-value--charged,
+.client-charges-charged {
+  color: var(--charged);
 }
 
 .dashboard-kpi-sub {
