@@ -88,6 +88,8 @@ type AttemptState = {
   lastMessage: string;
   sawScopeError: boolean;
   listCompletedWithoutMatch: boolean;
+  foundLocationInCatalog: boolean;
+  catalogMissingCustomerShape: unknown | null;
   fetchCount: number;
   maxGhlFetches: number;
   maxV3Pages: number;
@@ -145,6 +147,7 @@ async function fetchSaasLocationsV3ForLocation(
       sawListOk = true;
       const row = findGhlSaasLocationRecord(payload, ghlLocationId);
       if (row) {
+        state.foundLocationInCatalog = true;
         const customerId = extractSaasSubscriptionStripeCustomerId(row);
         if (customerId) {
           console.info("[ghl.saas.subscription] ok", {
@@ -157,15 +160,10 @@ async function fetchSaasLocationsV3ForLocation(
           });
           return { ok: true, payload: row, customerId };
         }
-        const payloadShape = summarizeUnknownJsonShape(row);
-        return {
-          ok: false,
-          status: response.status,
-          error:
-            "SaaS location row had no Stripe customer id (cus_…). Paste cus_ manually or share payloadShape to extend the parser.",
-          code: "customer_id_missing",
-          payloadShape
-        };
+        // List rows can omit customerId (activated SaaS without a recurring plan).
+        // Fall through to GET /saas/get-saas-subscription/:locationId.
+        state.catalogMissingCustomerShape = summarizeUnknownJsonShape(row);
+        break;
       }
 
       if (isEmptySaasLocationsPage(payload)) {
@@ -177,7 +175,7 @@ async function fetchSaasLocationsV3ForLocation(
     }
   }
 
-  if (sawListOk) {
+  if (sawListOk && !state.foundLocationInCatalog) {
     state.listCompletedWithoutMatch = true;
   }
   return null;
@@ -327,10 +325,19 @@ export async function fetchGhlSaasSubscriptionForLocation(
     lastMessage: "GHL SaaS request failed",
     sawScopeError: false,
     listCompletedWithoutMatch: false,
+    foundLocationInCatalog: false,
+    catalogMissingCustomerShape: null,
     fetchCount: 0,
     maxGhlFetches: fetchOpts?.maxGhlFetches ?? MAX_GHL_FETCHES_PER_SAAS_SYNC,
     maxV3Pages: fetchOpts?.maxV3Pages ?? MAX_SAAS_LOCATIONS_V3_PAGES
   };
+
+  // Per-location subscription first. GHL omits activated locations that have a
+  // Stripe customer but no recurring subscriptionId from GET /saas/saas-locations.
+  const legacyResult = await fetchLegacySaasSubscription(baseUrl, token, companyId, locationId, state);
+  if (legacyResult?.ok) return legacyResult;
+  const legacyMissingCustomer =
+    legacyResult && !legacyResult.ok && legacyResult.code === "customer_id_missing" ? legacyResult : null;
 
   for (const attempt of COMPANY_SAAS_CATALOG_ATTEMPTS) {
     if (!canFetchGhl(state)) break;
@@ -344,15 +351,20 @@ export async function fetchGhlSaasSubscriptionForLocation(
       attempt.version
     );
     if (v3Result) return v3Result;
-    if (state.listCompletedWithoutMatch) break;
+    if (state.foundLocationInCatalog || state.listCompletedWithoutMatch) break;
   }
 
-  if (!state.listCompletedWithoutMatch) {
-    const legacyResult = await fetchLegacySaasSubscription(baseUrl, token, companyId, locationId, state);
-    if (legacyResult?.ok) return legacyResult;
-    if (legacyResult && !legacyResult.ok && legacyResult.code === "customer_id_missing") {
-      return legacyResult;
-    }
+  if (legacyMissingCustomer) return legacyMissingCustomer;
+
+  if (state.catalogMissingCustomerShape != null) {
+    return {
+      ok: false,
+      status: state.lastStatus,
+      error:
+        "SaaS location row had no Stripe customer id (cus_…). Paste cus_ manually or share payloadShape to extend the parser.",
+      code: "customer_id_missing",
+      payloadShape: state.catalogMissingCustomerShape
+    };
   }
 
   const explained = explainGhlSaasFetchFailure({
