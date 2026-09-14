@@ -18,6 +18,7 @@ import {
   getCompanyOAuthScopeSnapshotForLocation,
   getCompanyOAuthInstallationForLocation,
   oauthInstallationScopeIncludesSaas,
+  reattachLocationToGhlCompany,
   resolveGhlCompanyIdForLocation,
   type GhlOAuthTokenEnv
 } from "./ghl-oauth-location-token.js";
@@ -270,6 +271,8 @@ export async function fetchGhlSaasSubscriptionForLocation(
       code: "company_id_missing"
     };
   }
+
+  await reattachLocationToGhlCompany(db, locationId, companyId);
 
   const companyTokenPick = await getCompanyAccessTokensForGhlLocation(env, db, locationId, {
     preemptiveOAuthRefresh: true

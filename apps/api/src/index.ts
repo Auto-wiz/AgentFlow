@@ -79,6 +79,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
+import { locationAgencyIdPreserveUnlessPlaceholder } from "./ghl-oauth-location-token.js";
 import { authLoginHandler } from "./auth-password-handlers.js";
 import {
   adminGetUserSubaccounts,
@@ -2994,7 +2995,7 @@ async function processMessageWebhookEvent(env: Env, event: NormalizedGhlMessageW
     .onConflictDoUpdate({
       target: locations.ghlLocationId,
       set: {
-        agencyId: agency.id,
+        agencyId: locationAgencyIdPreserveUnlessPlaceholder(),
         name: sql`COALESCE(EXCLUDED.name, ${locations.name})`,
         updatedAt: now
       }
@@ -3148,7 +3149,7 @@ async function processAppointmentWebhookEvent(
     .onConflictDoUpdate({
       target: locations.ghlLocationId,
       set: {
-        agencyId: agency.id,
+        agencyId: locationAgencyIdPreserveUnlessPlaceholder(),
         name: sql`COALESCE(EXCLUDED.name, ${locations.name})`,
         updatedAt: now
       }
@@ -3297,7 +3298,7 @@ async function processInstallWebhookEvent(env: Env, event: NormalizedGhlInstallW
       .onConflictDoUpdate({
         target: locations.ghlLocationId,
         set: {
-          agencyId: agency.id,
+          agencyId: locationAgencyIdPreserveUnlessPlaceholder(),
           name: sql`COALESCE(EXCLUDED.name, ${locations.name})`,
           updatedAt: now
         }
@@ -3340,7 +3341,7 @@ async function processInvoiceWebhookEvent(env: Env, event: NormalizedGhlInvoiceW
     .onConflictDoUpdate({
       target: locations.ghlLocationId,
       set: {
-        agencyId: agency.id,
+        agencyId: locationAgencyIdPreserveUnlessPlaceholder(),
         updatedAt: now
       }
     })
@@ -3511,7 +3512,7 @@ async function processOrderWebhookEvent(env: Env, event: NormalizedGhlOrderWebho
     .onConflictDoUpdate({
       target: locations.ghlLocationId,
       set: {
-        agencyId: agency.id,
+        agencyId: locationAgencyIdPreserveUnlessPlaceholder(),
         updatedAt: now
       }
     })

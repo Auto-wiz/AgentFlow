@@ -7,10 +7,12 @@ import {
   isEmptySaasLocationsPage,
   listGhlSaasLocationRowsFromPage
 } from "./client-charges-logic.js";
+import { isPlaceholderGhlCompanyId } from "./ghl-company-id.js";
 import { syncLocationStripeFromGhlSaas, type GhlStripeSyncEnv } from "./client-charges-ghl-stripe-sync.js";
 import { GHL_SAAS_FETCH_BULK_OPTS } from "./ghl-saas-subscription.js";
 import {
   getCompanyAccessTokensForGhlCompanyId,
+  locationAgencyIdPreserveUnlessPlaceholder,
   type GhlOAuthTokenEnv
 } from "./ghl-oauth-location-token.js";
 import {
@@ -101,7 +103,7 @@ export async function upsertAgencyLocationFromGhl(
     .onConflictDoUpdate({
       target: locations.ghlLocationId,
       set: {
-        agencyId: agency.id,
+        agencyId: locationAgencyIdPreserveUnlessPlaceholder(),
         name: locationName ?? undefined,
         updatedAt: now
       }
@@ -125,8 +127,12 @@ export async function syncGhlSaasCatalogPage(
   }
 ): Promise<SaasCatalogSyncPageResult | { ok: false; code: string; error: string }> {
   const ghlCompanyId = opts.ghlCompanyId.trim();
-  if (!ghlCompanyId) {
-    return { ok: false, code: "missing_company_id", error: "ghlCompanyId is required" };
+  if (!ghlCompanyId || isPlaceholderGhlCompanyId(ghlCompanyId)) {
+    return {
+      ok: false,
+      code: "missing_company_id",
+      error: "ghlCompanyId is required (placeholder agency ids like default are not valid SaaS company ids)"
+    };
   }
 
   if (!env.STRIPE_SECRET_KEY?.trim()) {

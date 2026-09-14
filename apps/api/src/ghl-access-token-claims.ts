@@ -7,9 +7,19 @@ export type GhlAccessTokenClaims = {
 };
 
 function stringClaim(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (Array.isArray(value)) {
+    const joined = value
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .join(" ");
+    return joined ? joined : null;
+  }
+  return null;
 }
 
 function decodeBase64UrlJson(segment: string): Record<string, unknown> | null {

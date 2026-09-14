@@ -2,6 +2,7 @@ import { agencies, createDb, locationBillingConfig, locations } from "@agentflow
 import { eq } from "drizzle-orm";
 import type { NormalizedGhlSaasBillingWebhookEvent } from "@agentflow/shared";
 
+import { locationAgencyIdPreserveUnlessPlaceholder } from "./ghl-oauth-location-token.js";
 import { extractSaasSubscriptionStripeCustomerId } from "./client-charges-logic.js";
 import { syncLocationStripeFromGhlSaas, type GhlStripeSyncEnv } from "./client-charges-ghl-stripe-sync.js";
 import { createStripeClient } from "./client-charges-stripe.js";
@@ -74,7 +75,7 @@ export async function processSaasBillingWebhookEvent(
     .onConflictDoUpdate({
       target: locations.ghlLocationId,
       set: {
-        agencyId: agency.id,
+        agencyId: locationAgencyIdPreserveUnlessPlaceholder(),
         name: event.location.name ?? null,
         updatedAt: now
       }

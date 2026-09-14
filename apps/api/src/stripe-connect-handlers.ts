@@ -14,6 +14,8 @@ import { syncGhlSaasCatalogPage } from "./ghl-saas-catalog-sync.js";
 import { syncStripeActiveSubscriptionsPage } from "./stripe-subscriptions-catalog-sync.js";
 import { refreshStripeCustomerProfilesPage } from "./stripe-customer-profile-sync.js";
 import { GHL_SAAS_FETCH_BULK_OPTS } from "./ghl-saas-subscription.js";
+import { pickGhlCompanyIdForSaasCatalog } from "./ghl-oauth-location-token.js";
+import { usableGhlCompanyId } from "./ghl-company-id.js";
 import {
   applyStripeAccountSnapshot,
   ensureLocationBillingConfigRow,
@@ -358,13 +360,30 @@ export async function postAdminClientChargesStripeSyncAllFromGhlHandler(c: Conte
 
   const limitRaw = Number.parseInt(c.req.query("limit") ?? "5", 10);
   const limit = Math.min(5, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 5));
+  const targetGhlLocationId = (c.req.query("ghlLocationId") ?? "").trim();
 
-  const locRows = await db
-    .select({ locationId: locations.id, ghlLocationId: locations.ghlLocationId, name: locations.name })
-    .from(locations)
-    .where(filters)
-    .orderBy(asc(locations.name), asc(locations.ghlLocationId))
-    .limit(limit);
+  const locRows = targetGhlLocationId
+    ? await db
+        .select({ locationId: locations.id, ghlLocationId: locations.ghlLocationId, name: locations.name })
+        .from(locations)
+        .where(
+          filters
+            ? and(eq(locations.ghlLocationId, targetGhlLocationId), filters)
+            : eq(locations.ghlLocationId, targetGhlLocationId)
+        )
+        .limit(1)
+    : await db
+        .select({ locationId: locations.id, ghlLocationId: locations.ghlLocationId, name: locations.name })
+        .from(locations)
+        .innerJoin(agencies, eq(locations.agencyId, agencies.id))
+        .leftJoin(locationBillingConfig, eq(locationBillingConfig.locationId, locations.id))
+        .where(filters)
+        .orderBy(
+          sql`CASE WHEN ${agencies.ghlAgencyId} IN ('default') OR ${agencies.ghlAgencyId} LIKE 'agency_demo%' OR ${agencies.ghlAgencyId} LIKE 'test-company%' THEN 0 ELSE 1 END`,
+          sql`CASE WHEN ${locationBillingConfig.stripeCustomerId} IS NULL THEN 0 ELSE 1 END`,
+          asc(locations.updatedAt)
+        )
+        .limit(limit);
 
   const results: Array<{
     locationId: string;
@@ -429,15 +448,10 @@ export async function postAdminClientChargesStripeSyncSaasCatalogFromGhlHandler(
 
   const db = createDb(c.env.DATABASE_URL);
   const companyIdRaw = (c.req.query("companyId") ?? c.req.query("ghlCompanyId") ?? "").trim();
-  let ghlCompanyId = companyIdRaw;
+  let ghlCompanyId = usableGhlCompanyId(companyIdRaw) ?? "";
 
   if (!ghlCompanyId) {
-    const [agency] = await db
-      .select({ ghlAgencyId: agencies.ghlAgencyId })
-      .from(agencies)
-      .orderBy(asc(agencies.ghlAgencyId))
-      .limit(1);
-    ghlCompanyId = agency?.ghlAgencyId?.trim() ?? "";
+    ghlCompanyId = (await pickGhlCompanyIdForSaasCatalog(db)) ?? "";
   }
 
   if (!ghlCompanyId) {
@@ -484,15 +498,10 @@ export async function postAdminClientChargesStripeSyncFromStripeSubscriptionsHan
 
   const db = createDb(c.env.DATABASE_URL);
   const companyIdRaw = (c.req.query("companyId") ?? c.req.query("ghlCompanyId") ?? "").trim();
-  let ghlCompanyId = companyIdRaw;
+  let ghlCompanyId = usableGhlCompanyId(companyIdRaw) ?? "";
 
   if (!ghlCompanyId) {
-    const [agency] = await db
-      .select({ ghlAgencyId: agencies.ghlAgencyId })
-      .from(agencies)
-      .orderBy(asc(agencies.ghlAgencyId))
-      .limit(1);
-    ghlCompanyId = agency?.ghlAgencyId?.trim() ?? "";
+    ghlCompanyId = (await pickGhlCompanyIdForSaasCatalog(db)) ?? "";
   }
 
   if (!ghlCompanyId) {
