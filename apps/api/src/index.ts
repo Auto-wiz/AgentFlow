@@ -134,6 +134,11 @@ import {
 import { processSaasBillingWebhookEvent } from "./ghl-webhook-stripe-sync.js";
 import { syncMissingGhlSaasStripeCronBatch } from "./ghl-saas-catalog-sync.js";
 import {
+  isDailyLocationNameCron,
+  parseLocationNamesStaleAfterDays,
+  resolveLocationNameRefreshSchedule
+} from "./location-names-cron.js";
+import {
   getWorkspaceDashboardOverviewHandler,
   getWorkspaceDashboardLocationDetailHandler,
   getWorkspaceDashboardSubaccountSeriesHandler
@@ -202,18 +207,23 @@ type Env = {
    */
   LOCATION_NAME_CRON_BATCH?: string;
   /**
-   * Re-fetch display names from GHL for rows that already have a non-empty `locations.name` but
-   * `location_name_synced_at` is older than LOCATION_NAMES_REFRESH_STALE_AFTER_DAYS (or unset).
-   * Each cron tick performs at most this many API-backed lookups (`"0"` or unset disables).
+   * Re-fetch display names from GHL for stale `locations` rows (named or blank).
+   * Unset defaults to 8 lookups on the 15-minute cron. `"0"` disables that path.
+   * Do not put this in wrangler.toml `[vars]` unless you want deploys to pin it.
    */
   LOCATION_NAMES_REFRESH_BATCH?: string;
   /**
-   * Minimum days since `location_name_synced_at` before a location becomes eligible again (default 2).
+   * Lookups on the dedicated daily cron (`0 8 * * *`). Unset defaults to 15. `"0"` disables
+   * the daily burst. Independent of LOCATION_NAMES_REFRESH_BATCH.
+   */
+  LOCATION_NAMES_DAILY_CRON_BATCH?: string;
+  /**
+   * Minimum days since `location_name_synced_at` before a location becomes eligible again (default 1).
    */
   LOCATION_NAMES_REFRESH_STALE_AFTER_DAYS?: string;
   /**
-   * When set (0–23), only LOCATION_NAMES_REFRESH_* runs during that UTC clock hour — useful so
-   * sweeps cluster in morning / off-peak windows. Blank = every cron tick.
+   * When set (0–23), only the 15-minute LOCATION_NAMES_REFRESH_* path runs during that UTC clock
+   * hour. The daily cron ignores this gate. Blank = every interval tick.
    */
   LOCATION_NAMES_REFRESH_HOUR_UTC?: string;
   /**
@@ -4078,18 +4088,6 @@ function whereLocationHasNoDisplayName() {
   return sql<boolean>`COALESCE(length(btrim(cast("locations"."name" AS text))), 0) = 0`;
 }
 
-function whereLocationHasDisplayName() {
-  return sql<boolean>`COALESCE(length(btrim(cast("locations"."name" AS text))), 0) > 0`;
-}
-
-function parseLocationNamesStaleAfterDays(raw: string | undefined): number {
-  const n = Number.parseFloat(String(raw ?? "2").trim());
-  if (!Number.isFinite(n) || n < 1) {
-    return 2;
-  }
-  return Math.min(365, n);
-}
-
 /** Unset defaults to 2; `"0"` disables cron SaaS/Stripe backfill. */
 function parseGhlSaasStripeCronBatch(raw: string | undefined): number {
   const trimmed = raw?.trim();
@@ -4106,23 +4104,10 @@ function parseGhlSaasStripeCronBatch(raw: string | undefined): number {
   return Math.min(3, n);
 }
 
-/** When unset or invalid hour, refreshes run on every eligible cron tick. */
-function passesLocationRefreshHourUtcGate(env: Env, scheduledTimeMs: number): boolean {
-  const trimmed = env.LOCATION_NAMES_REFRESH_HOUR_UTC?.trim();
-  if (!trimmed) {
-    return true;
-  }
-  const hour = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(hour) || hour < 0 || hour > 23) {
-    return true;
-  }
-  return new Date(scheduledTimeMs).getUTCHours() === hour;
-}
-
 /**
- * Re-confirms friendly names via GHL for locations that already have a display label.
+ * Re-confirms friendly names via GHL for stale locations (blank names first, then oldest sync).
  * Depends on DB column `locations.location_name_synced_at`; updates it even when text is unchanged,
- * so renames propagate slowly according to LOCATION_NAMES_REFRESH_STALE_AFTER_DAYS.
+ * so renames propagate according to LOCATION_NAMES_REFRESH_STALE_AFTER_DAYS.
  */
 async function refreshStaleLocationNamesCronBatch(env: Env, requestedLimit: number, staleAfterDays: number) {
   const batchLimit = Number.isFinite(requestedLimit)
@@ -4135,8 +4120,9 @@ async function refreshStaleLocationNamesCronBatch(env: Env, requestedLimit: numb
 
   const db = createDb(env.DATABASE_URL);
 
-  const hasDisplayName = whereLocationHasDisplayName();
+  const unnamedFirst = sql`CASE WHEN COALESCE(length(btrim(cast("locations"."name" AS text))), 0) = 0 THEN 0 ELSE 1 END`;
   const stalePredicate = or(isNull(locations.locationNameSyncedAt), lt(locations.locationNameSyncedAt, cutoff));
+  const hasGhlLocationId = sql`trim(both from coalesce(${locations.ghlLocationId}, '')) <> ''`;
 
   const candidates = await db
     .select({
@@ -4146,14 +4132,14 @@ async function refreshStaleLocationNamesCronBatch(env: Env, requestedLimit: numb
       syncedAt: locations.locationNameSyncedAt
     })
     .from(locations)
-    .where(and(hasDisplayName, stalePredicate))
-    .orderBy(asc(locations.locationNameSyncedAt), asc(locations.id))
+    .where(and(hasGhlLocationId, stalePredicate))
+    .orderBy(unnamedFirst, sql`${locations.locationNameSyncedAt} ASC NULLS FIRST`, asc(locations.id))
     .limit(batchLimit);
 
   if (candidates.length === 0) {
     return {
       ok: true as const,
-      skipReason: "no_stale_named_locations_in_batch_scope" as const,
+      skipReason: "no_stale_locations_in_batch_scope" as const,
       staleAfterDays: safeDays,
       batchLimit,
       lookupsAttempted: 0,
@@ -6008,7 +5994,7 @@ function toCustomFields(value: unknown): ContactOnDemandDetails["customFields"] 
 
 export default {
   fetch: app.fetch,
-  async scheduled(event: { scheduledTime: number }, env: Env, _ctx: ExecutionContext) {
+  async scheduled(event: { scheduledTime: number; cron?: string }, env: Env, _ctx: ExecutionContext) {
     try {
       const raw = env.LOCATION_NAME_CRON_BATCH?.trim();
       if (raw && raw !== "0") {
@@ -6024,27 +6010,33 @@ export default {
     }
 
     try {
-      const refreshRaw = env.LOCATION_NAMES_REFRESH_BATCH?.trim();
-      if (refreshRaw && refreshRaw !== "0") {
-        const pb = Number.parseInt(refreshRaw, 10);
-        if (Number.isFinite(pb) && pb > 0) {
-          if (passesLocationRefreshHourUtcGate(env, event.scheduledTime)) {
-            const batch = Math.min(15, pb);
-            const staleDays = parseLocationNamesStaleAfterDays(env.LOCATION_NAMES_REFRESH_STALE_AFTER_DAYS);
-            const summary = await refreshStaleLocationNamesCronBatch(env, batch, staleDays);
-            console.log("[scheduled.location_names.stale_refresh]", summary);
-          }
-        }
+      const refreshPlan = resolveLocationNameRefreshSchedule({
+        cron: event.cron,
+        scheduledTimeMs: event.scheduledTime,
+        refreshBatchRaw: env.LOCATION_NAMES_REFRESH_BATCH,
+        dailyBatchRaw: env.LOCATION_NAMES_DAILY_CRON_BATCH,
+        hourUtcRaw: env.LOCATION_NAMES_REFRESH_HOUR_UTC
+      });
+      if (refreshPlan.run) {
+        const staleDays = parseLocationNamesStaleAfterDays(env.LOCATION_NAMES_REFRESH_STALE_AFTER_DAYS);
+        const summary = await refreshStaleLocationNamesCronBatch(env, refreshPlan.batch, staleDays);
+        console.log("[scheduled.location_names.stale_refresh]", { kind: refreshPlan.kind, ...summary });
+      } else {
+        console.log("[scheduled.location_names.stale_refresh.skipped]", { kind: refreshPlan.kind });
       }
     } catch (error) {
       console.warn("[scheduled.location_names.stale_refresh.failed]", error);
     }
 
     try {
-      const saasBatch = parseGhlSaasStripeCronBatch(env.GHL_SAAS_STRIPE_CRON_BATCH);
-      if (saasBatch > 0) {
-        const summary = await syncMissingGhlSaasStripeCronBatch(env, saasBatch);
-        console.log("[scheduled.ghl_saas_stripe.backfill]", summary);
+      if (isDailyLocationNameCron(event.cron)) {
+        console.log("[scheduled.ghl_saas_stripe.backfill.skipped]", { reason: "daily_name_cron" });
+      } else {
+        const saasBatch = parseGhlSaasStripeCronBatch(env.GHL_SAAS_STRIPE_CRON_BATCH);
+        if (saasBatch > 0) {
+          const summary = await syncMissingGhlSaasStripeCronBatch(env, saasBatch);
+          console.log("[scheduled.ghl_saas_stripe.backfill]", summary);
+        }
       }
     } catch (error) {
       console.warn("[scheduled.ghl_saas_stripe.backfill.failed]", error);
