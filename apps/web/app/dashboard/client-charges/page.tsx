@@ -870,11 +870,17 @@ function formatGhlSyncFailureMessage(payload: {
           payload.error === "customer_id_missing" && payload.payloadShape != null
             ? ` GHL response shape: ${JSON.stringify(payload.payloadShape)}`
             : "";
-        const scopeHint =
-          payload.oauthScopeOnFile != null
-            ? ` OAuth scopes on file: ${payload.oauthScopeOnFile.includes("saas/") ? "includes saas/*" : "missing saas/* — reconnect agency OAuth"}`
+        const ghlHint =
+          payload.ghlApiMessage && payload.ghlApiMessage !== formatGhlSyncFailureMessage(payload)
+            ? ` GHL said: ${payload.ghlApiMessage}`
             : "";
-        throw new Error(formatGhlSyncFailureMessage(payload) + scopeHint + shapeHint);
+        const scopeHint =
+          payload.error === "ghl_scope_forbidden" || payload.error === "oauth_token_missing_saas_scope"
+            ? payload.oauthScopeOnFile != null
+              ? ` OAuth scopes on file: ${payload.oauthScopeOnFile.includes("saas/") ? "includes saas/*" : "missing saas/* — reconnect agency OAuth"}`
+              : ""
+            : "";
+        throw new Error(formatGhlSyncFailureMessage(payload) + ghlHint + scopeHint + shapeHint);
       }
       await loadBillingLocations();
       await loadOverview();
