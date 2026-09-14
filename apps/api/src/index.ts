@@ -42,6 +42,7 @@ import {
   DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE,
   GHL_MARKETPLACE_APP_VERSION_ID,
   applyGhlMarketplaceVersionId,
+  applyGhlMarketplaceUserType,
   normalizeGhlMarketplaceOAuthScope
 } from "@agentflow/shared";
 import type {
@@ -78,6 +79,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
+import { locationAgencyIdPreserveUnlessPlaceholder } from "./ghl-oauth-location-token.js";
 import { authLoginHandler } from "./auth-password-handlers.js";
 import {
   adminGetUserSubaccounts,
@@ -2470,14 +2472,11 @@ function prepareGhlOAuthRedirectFromPortalStartUrl(env: Env, rawPortalUrl: strin
     installUrl.searchParams.set("redirect_uri", env.GHL_OAUTH_REDIRECT_URI.trim());
   }
 
-  if (!getNonEmptyQueryParam(installUrl, "user_type") && env.GHL_OAUTH_USER_TYPE?.trim()) {
-    installUrl.searchParams.set("user_type", env.GHL_OAUTH_USER_TYPE.trim());
-  }
-
   applyGhlMarketplaceVersionId(
     installUrl,
     env.GHL_VERSION_ID?.trim() || GHL_MARKETPLACE_APP_VERSION_ID
   );
+  applyGhlMarketplaceUserType(installUrl, env.GHL_OAUTH_USER_TYPE);
 
   installUrl.searchParams.set("state", state);
   assertAllowedGhlMarketplaceHost(installUrl);
@@ -2519,10 +2518,7 @@ function prepareGhlOAuthRedirectFromLegacyInstallUrl(env: Env, rawInstallUrl: st
     installUrl.searchParams.set("version_id", versionId);
   }
 
-  if (!getNonEmptyQueryParam(installUrl, "user_type") && env.GHL_OAUTH_USER_TYPE?.trim()) {
-    installUrl.searchParams.set("user_type", env.GHL_OAUTH_USER_TYPE.trim());
-  }
-
+  applyGhlMarketplaceUserType(installUrl, env.GHL_OAUTH_USER_TYPE);
   installUrl.searchParams.set("state", state);
 
   if (env.GHL_OAUTH_REDIRECT_URI) {
@@ -2999,7 +2995,7 @@ async function processMessageWebhookEvent(env: Env, event: NormalizedGhlMessageW
     .onConflictDoUpdate({
       target: locations.ghlLocationId,
       set: {
-        agencyId: agency.id,
+        agencyId: locationAgencyIdPreserveUnlessPlaceholder(),
         name: sql`COALESCE(EXCLUDED.name, ${locations.name})`,
         updatedAt: now
       }
@@ -3153,7 +3149,7 @@ async function processAppointmentWebhookEvent(
     .onConflictDoUpdate({
       target: locations.ghlLocationId,
       set: {
-        agencyId: agency.id,
+        agencyId: locationAgencyIdPreserveUnlessPlaceholder(),
         name: sql`COALESCE(EXCLUDED.name, ${locations.name})`,
         updatedAt: now
       }
@@ -3302,7 +3298,7 @@ async function processInstallWebhookEvent(env: Env, event: NormalizedGhlInstallW
       .onConflictDoUpdate({
         target: locations.ghlLocationId,
         set: {
-          agencyId: agency.id,
+          agencyId: locationAgencyIdPreserveUnlessPlaceholder(),
           name: sql`COALESCE(EXCLUDED.name, ${locations.name})`,
           updatedAt: now
         }
@@ -3345,7 +3341,7 @@ async function processInvoiceWebhookEvent(env: Env, event: NormalizedGhlInvoiceW
     .onConflictDoUpdate({
       target: locations.ghlLocationId,
       set: {
-        agencyId: agency.id,
+        agencyId: locationAgencyIdPreserveUnlessPlaceholder(),
         updatedAt: now
       }
     })
@@ -3516,7 +3512,7 @@ async function processOrderWebhookEvent(env: Env, event: NormalizedGhlOrderWebho
     .onConflictDoUpdate({
       target: locations.ghlLocationId,
       set: {
-        agencyId: agency.id,
+        agencyId: locationAgencyIdPreserveUnlessPlaceholder(),
         updatedAt: now
       }
     })

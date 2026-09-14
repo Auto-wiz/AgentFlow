@@ -16,7 +16,7 @@ export function DashboardSubnav({ locationTail }: { locationTail?: ReactNode }) 
   const onClientCharges = pathname.startsWith("/dashboard/client-charges");
   const onPortfolioAdmin = pathname.startsWith("/dashboard/portfolio-admin");
   const showAdminTab = hydrated && user?.role === "admin";
-  const showClientChargesTab = hydrated && canAccessClientCharges(user?.email);
+  const showClientChargesTab = hydrated && canAccessClientCharges(user?.email, user?.role);
 
   return (
     <div className="dashboard-subnav-toolbar">

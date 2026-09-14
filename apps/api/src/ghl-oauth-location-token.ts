@@ -1,6 +1,9 @@
 import { agencies, ghlOAuthInstallations, locations } from "@agentflow/db";
 import type { AgentFlowDb } from "@agentflow/db";
-import { and, desc, eq, or } from "drizzle-orm";
+import { and, desc, eq, or, sql } from "drizzle-orm";
+
+import { ghlJwtScopeIncludesSaas, pickCompanyTypedAccessTokens } from "./ghl-access-token-claims.js";
+import { pickFirstUsableGhlCompanyId, usableGhlCompanyId } from "./ghl-company-id.js";
 
 /** Bindings touched by OAuth token retrieval (compatible with Workers `Env` in index.ts). */
 export type GhlOAuthTokenEnv = {
@@ -198,8 +201,8 @@ async function getCompanyOAuthInstallationsForLocationInternal(db: AgentFlowDb, 
     return [];
   }
 
-  if (locationWithAgency?.ghlAgencyId) {
-    const agencyCompanyInstallations = await readCompanyInstallations(locationWithAgency.ghlAgencyId);
+  if (usableGhlCompanyId(locationWithAgency?.ghlAgencyId)) {
+    const agencyCompanyInstallations = await readCompanyInstallations(locationWithAgency!.ghlAgencyId);
     if (agencyCompanyInstallations.length > 0) {
       return agencyCompanyInstallations;
     }
@@ -480,7 +483,7 @@ export async function getCompanyAccessTokensForGhlCompanyId(
   ghlCompanyId: string,
   options?: { preemptiveOAuthRefresh?: boolean }
 ) {
-  const companyId = ghlCompanyId.trim();
+  const companyId = usableGhlCompanyId(ghlCompanyId);
   if (!companyId) {
     return [];
   }
@@ -536,7 +539,7 @@ export async function getCompanyAccessTokensForGhlCompanyId(
 
   const envToken = env.GHL_API_TOKEN?.trim();
   if (envToken) tokenCandidates.add(envToken);
-  return Array.from(tokenCandidates);
+  return pickCompanyTypedAccessTokens(Array.from(tokenCandidates)).tokens;
 }
 
 /** Same precedence as conversational / contact fetch paths (`index.ts` historically). */
@@ -672,6 +675,7 @@ function collectCompanyAccessTokens(
   return tokenCandidates;
 }
 
+/** Agency Company OAuth tokens; Location-typed JWTs are dropped so SaaS APIs are not called with them. */
 export async function getCompanyAccessTokensForGhlLocation(
   env: GhlOAuthTokenEnv,
   db: AgentFlowDb,
@@ -713,7 +717,12 @@ export async function getCompanyAccessTokensForGhlLocation(
     tokenCandidates = collectCompanyAccessTokens(companyInstallations, { includeExpired: true });
   }
 
-  return Array.from(tokenCandidates);
+  const picked = pickCompanyTypedAccessTokens(Array.from(tokenCandidates));
+  const withSaas = picked.tokens.filter((token) => ghlJwtScopeIncludesSaas(token) === true);
+  return {
+    tokens: withSaas.length > 0 ? withSaas : picked.tokens,
+    rejectedLocationTypedJwt: picked.rejectedLocationTypedJwt
+  };
 }
 
 export async function resolveGhlCompanyIdForLocation(db: AgentFlowDb, ghlLocationId: string) {
@@ -723,5 +732,105 @@ export async function resolveGhlCompanyIdForLocation(db: AgentFlowDb, ghlLocatio
     .innerJoin(agencies, eq(locations.agencyId, agencies.id))
     .where(eq(locations.ghlLocationId, ghlLocationId))
     .limit(1);
-  return row?.ghlAgencyId?.trim() ?? null;
+  const mapped = usableGhlCompanyId(row?.ghlAgencyId);
+  if (mapped) return mapped;
+
+  const [locationInstall] = await db
+    .select({ companyId: ghlOAuthInstallations.companyId })
+    .from(ghlOAuthInstallations)
+    .where(eq(ghlOAuthInstallations.locationId, ghlLocationId))
+    .orderBy(desc(ghlOAuthInstallations.updatedAt))
+    .limit(1);
+  const fromLocationOauth = usableGhlCompanyId(locationInstall?.companyId);
+  if (fromLocationOauth) return fromLocationOauth;
+
+  const companyInstalls = await getCompanyOAuthInstallationsForLocationInternal(db, ghlLocationId);
+  for (const installation of companyInstalls) {
+    const fromCompanyOauth = usableGhlCompanyId(installation.companyId);
+    if (fromCompanyOauth) return fromCompanyOauth;
+  }
+  return null;
+}
+
+/** Move a subaccount off placeholder agencies (`default`, demo, test) onto the real GHL company. */
+export async function reattachLocationToGhlCompany(
+  db: AgentFlowDb,
+  ghlLocationId: string,
+  ghlCompanyId: string
+) {
+  const companyId = usableGhlCompanyId(ghlCompanyId);
+  const locationId = ghlLocationId.trim();
+  if (!companyId || !locationId) return false;
+
+  const [current] = await db
+    .select({ ghlAgencyId: agencies.ghlAgencyId })
+    .from(locations)
+    .innerJoin(agencies, eq(locations.agencyId, agencies.id))
+    .where(eq(locations.ghlLocationId, locationId))
+    .limit(1);
+  if (usableGhlCompanyId(current?.ghlAgencyId) === companyId) {
+    return false;
+  }
+
+  const now = new Date();
+  const [agency] = await db
+    .insert(agencies)
+    .values({ ghlAgencyId: companyId, updatedAt: now })
+    .onConflictDoUpdate({
+      target: agencies.ghlAgencyId,
+      set: { updatedAt: now }
+    })
+    .returning({ id: agencies.id });
+  if (!agency) return false;
+
+  await db
+    .update(locations)
+    .set({ agencyId: agency.id, updatedAt: now })
+    .where(eq(locations.ghlLocationId, locationId));
+  return true;
+}
+
+export async function pickGhlCompanyIdForSaasCatalog(db: AgentFlowDb): Promise<string | null> {
+  const companyRows = await db
+    .select({
+      companyId: ghlOAuthInstallations.companyId,
+      scope: ghlOAuthInstallations.scope
+    })
+    .from(ghlOAuthInstallations)
+    .where(eq(ghlOAuthInstallations.userType, "Company"))
+    .orderBy(desc(ghlOAuthInstallations.updatedAt))
+    .limit(20);
+
+  for (const row of companyRows) {
+    const companyId = usableGhlCompanyId(row.companyId);
+    if (!companyId) continue;
+    if (row.scope?.trim() && !oauthInstallationScopeIncludesSaas(row.scope)) continue;
+    if (oauthInstallationScopeIncludesSaas(row.scope) && (row.scope ?? "").toLowerCase().includes("saas")) {
+      return companyId;
+    }
+  }
+
+  const usableFromOauth = pickFirstUsableGhlCompanyId(companyRows.map((row) => row.companyId));
+  if (usableFromOauth) return usableFromOauth;
+
+  const agencyRows = await db.select({ ghlAgencyId: agencies.ghlAgencyId }).from(agencies);
+  return pickFirstUsableGhlCompanyId(agencyRows.map((row) => row.ghlAgencyId));
+}
+
+/** Keep a real company mapping when a later webhook only has the placeholder agency `default`. */
+export function locationAgencyIdPreserveUnlessPlaceholder() {
+  return sql`
+    CASE
+      WHEN EXISTS (
+        SELECT 1 FROM agencies AS incoming_agency
+        WHERE incoming_agency.id = EXCLUDED.agency_id
+          AND (
+            incoming_agency.ghl_agency_id = 'default'
+            OR incoming_agency.ghl_agency_id LIKE 'agency_demo%'
+            OR incoming_agency.ghl_agency_id LIKE 'test-company%'
+          )
+      ) THEN ${locations.agencyId}
+      ELSE EXCLUDED.agency_id
+    END
+  `;
 }

@@ -18,12 +18,13 @@ crons = ["*/15 * * * *"]
 
 [vars]
 LOCATION_NAME_CRON_BATCH = "0"
-# Marketplace install URL is pinned here so Worker deploys pick up a new app version_id.
-# Do not put CLIENT_CHARGES_CHARGING_ENABLED here — wrangler [vars] overwrite Dashboard on every
-# deploy. Set it only in Cloudflare Worker Settings (true/1/yes to allow live Stripe charges).
+# Pinned plaintext vars are recreated on every Worker deploy. Dashboard-only vars can vanish.
+# Set CLIENT_CHARGES_CHARGING_ENABLED = "false" here to pause live Stripe charges.
 GHL_VERSION_ID = "6a6b5864ba65c71d784c0347"
-GHL_INSTALL_URL = "https://marketplace.gohighlevel.com/v2/oauth/chooselocation?response_type=code&client_id=6a035ee24b80374d79d8c5c0-mp2xo4p3&version_id=6a6b5864ba65c71d784c0347"
-GHL_OAUTH_START_URL = "https://marketplace.gohighlevel.com/v2/oauth/chooselocation?response_type=code&redirect_uri=https%3A%2F%2Fapi.agentflow.autowiz.net%2Foauth%2Fgohighlevel%2Fcallback&client_id=6a035ee24b80374d79d8c5c0-mp2xo4p3&scope=contacts.readonly+conversations.readonly+conversations.write+conversations%2Fmessage.readonly+conversations%2Fmessage.write+conversations%2Freports.readonly+conversations%2Flivechat.write+locations.readonly+locations%2Ftags.readonly+locations%2Ftags.write+locations%2FcustomValues.readonly+oauth.write+oauth.readonly+invoices.readonly+invoices%2Fschedule.readonly+payments%2Forders.readonly+payments%2Forders.collectPayment+payments%2Fintegration.readonly+payments%2Ftransactions.readonly+payments%2Fsubscriptions.readonly+payments%2Fcoupons.readonly+payments%2Fcustom-provider.readonly+opportunities.readonly+opportunities.write+calendars.readonly+calendars%2Fevents.readonly+calendars%2Fgroups.readonly+calendars%2Fresources.readonly+charges.readonly+charges.write+saas%2Flocation.read+saas%2Fcompany.read&version_id=6a6b5864ba65c71d784c0347"
+GHL_OAUTH_USER_TYPE = "Company"
+CLIENT_CHARGES_CHARGING_ENABLED = "true"
+GHL_INSTALL_URL = "https://marketplace.gohighlevel.com/v2/oauth/chooselocation?response_type=code&client_id=6a035ee24b80374d79d8c5c0-mp2xo4p3&version_id=6a6b5864ba65c71d784c0347&user_type=Company"
+GHL_OAUTH_START_URL = "https://marketplace.gohighlevel.com/v2/oauth/chooselocation?response_type=code&redirect_uri=https%3A%2F%2Fapi.agentflow.autowiz.net%2Foauth%2Fgohighlevel%2Fcallback&client_id=6a035ee24b80374d79d8c5c0-mp2xo4p3&scope=contacts.readonly+conversations.readonly+conversations.write+conversations%2Fmessage.readonly+conversations%2Fmessage.write+conversations%2Freports.readonly+conversations%2Flivechat.write+locations.readonly+locations%2Ftags.readonly+locations%2Ftags.write+locations%2FcustomValues.readonly+oauth.write+oauth.readonly+invoices.readonly+invoices%2Fschedule.readonly+payments%2Forders.readonly+payments%2Forders.collectPayment+payments%2Fintegration.readonly+payments%2Ftransactions.readonly+payments%2Fsubscriptions.readonly+payments%2Fcoupons.readonly+payments%2Fcustom-provider.readonly+opportunities.readonly+opportunities.write+calendars.readonly+calendars%2Fevents.readonly+calendars%2Fgroups.readonly+calendars%2Fresources.readonly+charges.readonly+charges.write+saas%2Flocation.read+saas%2Fcompany.read&version_id=6a6b5864ba65c71d784c0347&user_type=Company"
 
 [[queues.producers]]
 binding = "MESSAGE_QUEUE"

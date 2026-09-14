@@ -12,12 +12,13 @@ import {
   GHL_SAAS_SCOPE_HELP,
   shouldTreatAsGhlSaasAuthFailure
 } from "./ghl-saas-subscription-errors.js";
+import { summarizeGhlTokenForSaas } from "./ghl-access-token-claims.js";
 import {
-  getAccessTokensForLocation,
   getCompanyAccessTokensForGhlLocation,
   getCompanyOAuthScopeSnapshotForLocation,
   getCompanyOAuthInstallationForLocation,
   oauthInstallationScopeIncludesSaas,
+  reattachLocationToGhlCompany,
   resolveGhlCompanyIdForLocation,
   type GhlOAuthTokenEnv
 } from "./ghl-oauth-location-token.js";
@@ -67,7 +68,13 @@ function ghlErrorMessage(payload: unknown, status: number): string {
 
 export { GHL_SAAS_API_VERSION, GHL_SAAS_SCOPE_HELP } from "./ghl-saas-subscription-errors.js";
 
-const GHL_SAAS_LIST_VERSIONS = [GHL_SAAS_API_VERSION, "v3"] as const;
+/** Company catalog first (saas/company.read). Path+Version pairs that HighLevel documents. */
+const COMPANY_SAAS_CATALOG_ATTEMPTS = [
+  { pathPrefix: "/saas-api/public-api/saas-locations", version: GHL_SAAS_API_VERSION },
+  { pathPrefix: "/saas/saas-locations", version: "v3" },
+  { pathPrefix: "/saas/saas-locations", version: GHL_SAAS_API_VERSION },
+  { pathPrefix: "/saas-api/public-api/saas-locations", version: "v3" }
+] as const;
 
 async function resolveCompanyIdForSaasFetch(db: AgentFlowDb, ghlLocationId: string) {
   const fromDb = await resolveGhlCompanyIdForLocation(db, ghlLocationId);
@@ -265,12 +272,32 @@ export async function fetchGhlSaasSubscriptionForLocation(
     };
   }
 
-  const companyTokens = await getCompanyAccessTokensForGhlLocation(env, db, locationId, {
+  await reattachLocationToGhlCompany(db, locationId, companyId);
+
+  const companyTokenPick = await getCompanyAccessTokensForGhlLocation(env, db, locationId, {
     preemptiveOAuthRefresh: true
   });
   const oauthScopeOnFile = await getCompanyOAuthScopeSnapshotForLocation(db, locationId);
 
-  if (companyTokens.length === 0) {
+  if (companyTokenPick.rejectedLocationTypedJwt || companyTokenPick.tokens.length === 0) {
+    if (companyTokenPick.rejectedLocationTypedJwt) {
+      const explained = explainGhlSaasFetchFailure({
+        ghlLocationId: locationId,
+        lastStatus: 403,
+        lastMessage: "Forbidden resource",
+        sawScopeError: true,
+        listCompletedWithoutMatch: false,
+        oauthScopeOnFile,
+        jwtLooksLikeLocation: true
+      });
+      return {
+        ok: false as const,
+        status: explained.status,
+        error: explained.error,
+        code: explained.code,
+        oauthScopeOnFile
+      };
+    }
     return {
       ok: false,
       status: null,
@@ -292,7 +319,8 @@ export async function fetchGhlSaasSubscriptionForLocation(
     };
   }
 
-  const token = companyTokens[0]!;
+  const token = companyTokenPick.tokens[0]!;
+  const jwtSummary = summarizeGhlTokenForSaas(token);
   const baseUrl = (env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com").replace(/\/$/, "");
   const state: AttemptState = {
     lastStatus: null,
@@ -304,54 +332,27 @@ export async function fetchGhlSaasSubscriptionForLocation(
     maxV3Pages: fetchOpts?.maxV3Pages ?? MAX_SAAS_LOCATIONS_V3_PAGES
   };
 
-  const legacyResult = await fetchLegacySaasSubscription(baseUrl, token, companyId, locationId, state);
-  if (legacyResult?.ok) return legacyResult;
-  if (legacyResult && !legacyResult.ok && legacyResult.code === "customer_id_missing") {
-    return legacyResult;
-  }
-
-  const allowLocationTokenFallback = state.maxGhlFetches >= MAX_GHL_FETCHES_PER_SAAS_SYNC;
-  if (!legacyResult?.ok && allowLocationTokenFallback && canFetchGhl(state)) {
-    const locationTokens = await getAccessTokensForLocation(env, db, locationId, {
-      hydrateBatchMode: true,
-      preemptiveOAuthRefresh: false
-    });
-    const locationToken = locationTokens.find((candidate) => candidate !== token);
-    if (locationToken) {
-      const locationLegacy = await fetchLegacySaasSubscription(
-        baseUrl,
-        locationToken,
-        companyId,
-        locationId,
-        state
-      );
-      if (locationLegacy?.ok) return locationLegacy;
-      if (locationLegacy && !locationLegacy.ok && locationLegacy.code === "customer_id_missing") {
-        return locationLegacy;
-      }
-    }
-  }
-
-  const listPrefixes = [
-    "/saas/saas-locations",
-    "/saas-api/public-api/saas-locations"
-  ] as const;
-  for (const version of GHL_SAAS_LIST_VERSIONS) {
-    for (const pathPrefix of listPrefixes) {
-      if (!canFetchGhl(state)) break;
-      const v3Result = await fetchSaasLocationsV3ForLocation(
-        baseUrl,
-        token,
-        companyId,
-        locationId,
-        state,
-        pathPrefix,
-        version
-      );
-      if (v3Result) return v3Result;
-      if (state.listCompletedWithoutMatch) break;
-    }
+  for (const attempt of COMPANY_SAAS_CATALOG_ATTEMPTS) {
+    if (!canFetchGhl(state)) break;
+    const v3Result = await fetchSaasLocationsV3ForLocation(
+      baseUrl,
+      token,
+      companyId,
+      locationId,
+      state,
+      attempt.pathPrefix,
+      attempt.version
+    );
+    if (v3Result) return v3Result;
     if (state.listCompletedWithoutMatch) break;
+  }
+
+  if (!state.listCompletedWithoutMatch) {
+    const legacyResult = await fetchLegacySaasSubscription(baseUrl, token, companyId, locationId, state);
+    if (legacyResult?.ok) return legacyResult;
+    if (legacyResult && !legacyResult.ok && legacyResult.code === "customer_id_missing") {
+      return legacyResult;
+    }
   }
 
   const explained = explainGhlSaasFetchFailure({
@@ -360,7 +361,9 @@ export async function fetchGhlSaasSubscriptionForLocation(
     lastMessage: state.lastMessage,
     sawScopeError: state.sawScopeError,
     listCompletedWithoutMatch: state.listCompletedWithoutMatch,
-    oauthScopeOnFile
+    oauthScopeOnFile,
+    jwtLooksLikeLocation: jwtSummary.jwtLooksLikeLocation,
+    jwtAuthClass: jwtSummary.jwtAuthClass
   });
   return {
     ok: false as const,

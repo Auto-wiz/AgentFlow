@@ -63,7 +63,9 @@ export default function SettingsPage() {
           {isAdmin ? (
             <article className="placeholder-card">
               <strong>GoHighLevel setup</strong>
-              <span className="muted">OAuth and connected locations</span>
+              <span className="muted">
+                Connect at the agency (Company). Reinstalling on one subaccount does not refresh SaaS scopes.
+              </span>
               <a className="button" href={goHighLevelConnectUrl}>
                 Connect GoHighLevel
               </a>

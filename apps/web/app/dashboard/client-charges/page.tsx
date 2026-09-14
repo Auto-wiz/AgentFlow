@@ -108,6 +108,7 @@ type ClientChargeOverviewRow = {
 type ClientChargesOverviewResponse = {
   fromInclusive: string;
   toExclusive: string;
+  clientChargesChargingEnabled?: boolean;
   subaccounts: ClientChargeOverviewRow[];
   totals: ClientChargesTotals;
   pagination: {
@@ -596,15 +597,15 @@ export default function ClientChargesPage() {
   const { replaceGuarded } = useGuardedNavigate();
   const { user, hydrated, sessionKey } = useWorkspaceAuth();
   const isAdmin = hydrated && user?.role === "admin";
-  const canUseClientCharges = hydrated && canAccessClientCharges(user?.email);
+  const canUseClientCharges = hydrated && canAccessClientCharges(user?.email, user?.role);
   const searchParams = useSearchParams();
 
   useEffect(() => {
     if (!hydrated) return;
-    if (!canAccessClientCharges(user?.email)) {
+    if (!canAccessClientCharges(user?.email, user?.role)) {
       void replaceGuarded("/dashboard");
     }
-  }, [hydrated, replaceGuarded, user?.email]);
+  }, [hydrated, replaceGuarded, user?.email, user?.role]);
 
   const [preset, setPreset] = useState<PresetKey>("30");
   const [range, setRange] = useState<DateRangeStrings>(() => utcInclusiveRange(30));
@@ -639,7 +640,7 @@ export default function ClientChargesPage() {
   const [stripeCustomerDrafts, setStripeCustomerDrafts] = useState<Record<string, string>>({});
   const [syncAllBusy, setSyncAllBusy] = useState(false);
   const [platformStripeLabel, setPlatformStripeLabel] = useState<string | null>(null);
-  const [clientChargesChargingEnabled, setClientChargesChargingEnabled] = useState(false);
+  const [clientChargesChargingEnabled, setClientChargesChargingEnabled] = useState<boolean | null>(null);
 
   const query = useMemo(
     () =>
@@ -700,6 +701,9 @@ export default function ClientChargesPage() {
         throw new Error(payload.message ?? payload.error ?? "Unable to load client charges overview");
       }
       setOverview(payload);
+      if (typeof payload.clientChargesChargingEnabled === "boolean") {
+        setClientChargesChargingEnabled(payload.clientChargesChargingEnabled);
+      }
     } catch (caught) {
       setOverview(null);
       setOverviewError(caught instanceof Error ? caught.message : "Unable to load client charges overview");
@@ -744,7 +748,6 @@ export default function ClientChargesPage() {
   const loadPlatformStripeStatus = useCallback(async () => {
     if (!isAdmin) {
       setPlatformStripeLabel(null);
-      setClientChargesChargingEnabled(false);
       return;
     }
     try {
@@ -757,7 +760,9 @@ export default function ClientChargesPage() {
         platformAccountMasked?: string | null;
         clientChargesChargingEnabled?: boolean;
       };
-      setClientChargesChargingEnabled(Boolean(payload.clientChargesChargingEnabled));
+      if (typeof payload.clientChargesChargingEnabled === "boolean") {
+        setClientChargesChargingEnabled(payload.clientChargesChargingEnabled);
+      }
       if (!res.ok || !payload.configured) {
         setPlatformStripeLabel("Platform Stripe: not configured");
         return;
@@ -769,7 +774,6 @@ export default function ClientChargesPage() {
       );
     } catch {
       setPlatformStripeLabel(null);
-      setClientChargesChargingEnabled(false);
     }
   }, [apiBaseUrl, isAdmin]);
 
@@ -875,7 +879,9 @@ function formatGhlSyncFailureMessage(payload: {
             ? ` GHL said: ${payload.ghlApiMessage}`
             : "";
         const scopeHint =
-          payload.error === "ghl_scope_forbidden" || payload.error === "oauth_token_missing_saas_scope"
+          payload.error === "ghl_scope_forbidden" ||
+          payload.error === "oauth_token_missing_saas_scope" ||
+          payload.error === "oauth_token_is_location_typed"
             ? payload.oauthScopeOnFile != null
               ? ` OAuth scopes on file: ${payload.oauthScopeOnFile.includes("saas/") ? "includes saas/*" : "missing saas/* — reconnect agency OAuth"}`
               : ""
@@ -1182,7 +1188,7 @@ function formatGhlSyncFailureMessage(payload: {
         </div>
       ) : null}
       {actionError ? <p className="empty">{actionError}</p> : null}
-      {isAdmin && !clientChargesChargingEnabled ? (
+      {isAdmin && clientChargesChargingEnabled === false ? (
         <div className="panel" style={{ marginTop: 12, padding: 14, borderLeft: "4px solid var(--warning, #c9a227)" }}>
           <p style={{ margin: 0 }}>
             <strong>Stripe charges are paused.</strong> Sync from GHL, verify <code>cus_…</code>, and add payment
@@ -1422,7 +1428,7 @@ function formatGhlSyncFailureMessage(payload: {
                         <ClientChargesLocationDetail
                           apiBaseUrl={apiBaseUrl}
                           busyAppointmentId={busyAppointmentId}
-                          chargingEnabled={clientChargesChargingEnabled}
+                          chargingEnabled={clientChargesChargingEnabled === true}
                           isAdmin={isAdmin}
                           locationId={row.locationId}
                           onRequestCharge={(chargeRow, mode) => {

@@ -1,4 +1,4 @@
-/** Workspace emails allowed to see and use Client Charges (UI + API). */
+/** Explicit emails that can use Client Charges even if they are not workspace admins. */
 export const CLIENT_CHARGES_ALLOWED_EMAILS = [
   "info@autowiz.net",
   "omarurzim@gmail.com"
@@ -8,7 +8,13 @@ export function normalizeWorkspaceEmail(email: string | null | undefined): strin
   return (email ?? "").trim().toLowerCase();
 }
 
-export function canAccessClientCharges(email: string | null | undefined): boolean {
+export function canAccessClientCharges(
+  email: string | null | undefined,
+  role?: string | null
+): boolean {
+  if ((role ?? "").trim().toLowerCase() === "admin") {
+    return true;
+  }
   const normalized = normalizeWorkspaceEmail(email);
   if (!normalized) return false;
   if ((CLIENT_CHARGES_ALLOWED_EMAILS as readonly string[]).includes(normalized)) {

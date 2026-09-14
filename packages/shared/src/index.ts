@@ -321,7 +321,8 @@ export {
   GHL_MARKETPLACE_APP_VERSION_ID,
   DEFAULT_GHL_MARKETPLACE_OAUTH_SCOPE,
   normalizeGhlMarketplaceOAuthScope,
-  applyGhlMarketplaceVersionId
+  applyGhlMarketplaceVersionId,
+  applyGhlMarketplaceUserType
 } from "./ghl-marketplace-oauth";
 
 export {
