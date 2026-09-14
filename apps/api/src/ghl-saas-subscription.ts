@@ -7,6 +7,13 @@ import {
   summarizeUnknownJsonShape
 } from "./client-charges-logic.js";
 import {
+  explainGhlSaasFetchFailure,
+  GHL_SAAS_API_VERSION,
+  GHL_SAAS_SCOPE_HELP,
+  shouldTreatAsGhlSaasAuthFailure
+} from "./ghl-saas-subscription-errors.js";
+import {
+  getAccessTokensForLocation,
   getCompanyAccessTokensForGhlLocation,
   getCompanyOAuthScopeSnapshotForLocation,
   getCompanyOAuthInstallationForLocation,
@@ -58,17 +65,9 @@ function ghlErrorMessage(payload: unknown, status: number): string {
   return msg || `HTTP ${status}`;
 }
 
-function isGhlOAuthScopeFailure(status: number, message: string): boolean {
-  const m = message.toLowerCase();
-  return (
-    m.includes("not authorized for this scope") ||
-    m.includes("token is not authorized for this scope") ||
-    (status === 401 && m.includes("scope"))
-  );
-}
+export { GHL_SAAS_API_VERSION, GHL_SAAS_SCOPE_HELP } from "./ghl-saas-subscription-errors.js";
 
-const GHL_SAAS_SCOPE_HELP =
-  "Publish a new Marketplace app version with saas/location.read (and saas/location.write), then use AgentFlow Settings → Connect GoHighLevel at the agency — reinstalling the app on one subaccount alone does not refresh agency OAuth scopes.";
+const GHL_SAAS_LIST_VERSIONS = [GHL_SAAS_API_VERSION, "v3"] as const;
 
 async function resolveCompanyIdForSaasFetch(db: AgentFlowDb, ghlLocationId: string) {
   const fromDb = await resolveGhlCompanyIdForLocation(db, ghlLocationId);
@@ -81,6 +80,7 @@ type AttemptState = {
   lastStatus: number | null;
   lastMessage: string;
   sawScopeError: boolean;
+  listCompletedWithoutMatch: boolean;
   fetchCount: number;
   maxGhlFetches: number;
   maxV3Pages: number;
@@ -94,14 +94,22 @@ function noteGhlFetch(state: AttemptState) {
   state.fetchCount += 1;
 }
 
+function noteAuthFailure(state: AttemptState, status: number, message: string) {
+  if (shouldTreatAsGhlSaasAuthFailure(status, message)) {
+    state.sawScopeError = true;
+  }
+}
+
 async function fetchSaasLocationsV3ForLocation(
   baseUrl: string,
   token: string,
   companyId: string,
   ghlLocationId: string,
   state: AttemptState,
-  pathPrefix: "/saas/saas-locations" | "/saas-api/public-api/saas-locations"
+  pathPrefix: "/saas/saas-locations" | "/saas-api/public-api/saas-locations",
+  version: string
 ): Promise<GhlSaasSubscriptionFetchResult | null> {
+  let sawListOk = false;
   for (let page = 1; page <= state.maxV3Pages; page++) {
     if (!canFetchGhl(state)) {
       state.lastMessage = "GHL SaaS list pagination stopped to avoid Worker subrequest limit";
@@ -115,7 +123,7 @@ async function fetchSaasLocationsV3ForLocation(
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: "application/json",
-          Version: "v3"
+          Version: version
         }
       });
       state.lastStatus = response.status;
@@ -123,12 +131,11 @@ async function fetchSaasLocationsV3ForLocation(
 
       if (!response.ok) {
         state.lastMessage = ghlErrorMessage(payload, response.status);
-        if (isGhlOAuthScopeFailure(response.status, state.lastMessage)) {
-          state.sawScopeError = true;
-        }
-        return response.status === 404 ? null : null;
+        noteAuthFailure(state, response.status, state.lastMessage);
+        return null;
       }
 
+      sawListOk = true;
       const row = findGhlSaasLocationRecord(payload, ghlLocationId);
       if (row) {
         const customerId = extractSaasSubscriptionStripeCustomerId(row);
@@ -138,7 +145,8 @@ async function fetchSaasLocationsV3ForLocation(
             source: "saas-locations-v3",
             companyId,
             page,
-            pathPrefix
+            pathPrefix,
+            version
           });
           return { ok: true, payload: row, customerId };
         }
@@ -162,7 +170,23 @@ async function fetchSaasLocationsV3ForLocation(
     }
   }
 
+  if (sawListOk) {
+    state.listCompletedWithoutMatch = true;
+  }
   return null;
+}
+
+const PER_LOCATION_SAAS_ATTEMPTS: Array<{ pathPrefix: string; version: string }> = [
+  { pathPrefix: "/saas-api/public-api/get-saas-subscription", version: GHL_SAAS_API_VERSION },
+  { pathPrefix: "/saas/get-saas-subscription", version: GHL_SAAS_API_VERSION },
+  { pathPrefix: "/saas/location", version: GHL_SAAS_API_VERSION }
+];
+
+function perLocationSaasPath(pathPrefix: string, ghlLocationId: string): string {
+  if (pathPrefix === "/saas/location") {
+    return `/saas/location/${encodeURIComponent(ghlLocationId)}/subscription`;
+  }
+  return `${pathPrefix}/${encodeURIComponent(ghlLocationId)}`;
 }
 
 async function fetchLegacySaasSubscription(
@@ -172,58 +196,50 @@ async function fetchLegacySaasSubscription(
   ghlLocationId: string,
   state: AttemptState
 ): Promise<GhlSaasSubscriptionFetchResult | null> {
-  if (!canFetchGhl(state)) return null;
-
-  const path = `/saas/get-saas-subscription/${encodeURIComponent(ghlLocationId)}`;
   const query = companyId ? `?companyId=${encodeURIComponent(companyId)}` : "";
-  const url = `${baseUrl}${path}${query}`;
 
-  try {
-    noteGhlFetch(state);
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-        Version: "2021-07-28"
-      }
-    });
-    state.lastStatus = response.status;
-    const payload = await response.json().catch(() => ({}));
-    if (response.ok) {
-      const customerId = extractSaasSubscriptionStripeCustomerId(payload);
-      if (!customerId) {
-        const payloadShape = summarizeUnknownJsonShape(payload);
-        return {
-          ok: false,
-          status: response.status,
-          error:
-            "SaaS subscription JSON had no Stripe customer id (cus_…). Check payloadShape in this error or Worker logs.",
-          code: "customer_id_missing",
-          payloadShape
-        };
-      }
-      console.info("[ghl.saas.subscription] ok", {
-        ghlLocationId,
-        source: "get-saas-subscription"
+  for (const attempt of PER_LOCATION_SAAS_ATTEMPTS) {
+    if (!canFetchGhl(state)) return null;
+    const path = perLocationSaasPath(attempt.pathPrefix, ghlLocationId);
+    const url = `${baseUrl}${path}${query}`;
+    try {
+      noteGhlFetch(state);
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          Version: attempt.version
+        }
       });
-      return { ok: true, payload, customerId };
-    }
+      state.lastStatus = response.status;
+      const payload = await response.json().catch(() => ({}));
+      if (response.ok) {
+        const customerId = extractSaasSubscriptionStripeCustomerId(payload);
+        if (!customerId) {
+          const payloadShape = summarizeUnknownJsonShape(payload);
+          return {
+            ok: false,
+            status: response.status,
+            error:
+              "SaaS subscription JSON had no Stripe customer id (cus_…). Check payloadShape in this error or Worker logs.",
+            code: "customer_id_missing",
+            payloadShape
+          };
+        }
+        console.info("[ghl.saas.subscription] ok", {
+          ghlLocationId,
+          source: path,
+          version: attempt.version
+        });
+        return { ok: true, payload, customerId };
+      }
 
-    state.lastMessage = ghlErrorMessage(payload, response.status);
-    if (isGhlOAuthScopeFailure(response.status, state.lastMessage)) {
-      state.sawScopeError = true;
+      state.lastMessage = ghlErrorMessage(payload, response.status);
+      noteAuthFailure(state, response.status, state.lastMessage);
+    } catch (err) {
+      state.lastMessage = err instanceof Error ? err.message : String(err);
     }
-    if (response.status === 404) {
-      return {
-        ok: false,
-        status: 404,
-        error: "No SaaS subscription found for this subaccount in GHL",
-        code: "saas_subscription_not_found"
-      };
-    }
-  } catch (err) {
-    state.lastMessage = err instanceof Error ? err.message : String(err);
   }
   return null;
 }
@@ -282,6 +298,7 @@ export async function fetchGhlSaasSubscriptionForLocation(
     lastStatus: null,
     lastMessage: "GHL SaaS request failed",
     sawScopeError: false,
+    listCompletedWithoutMatch: false,
     fetchCount: 0,
     maxGhlFetches: fetchOpts?.maxGhlFetches ?? MAX_GHL_FETCHES_PER_SAAS_SYNC,
     maxV3Pages: fetchOpts?.maxV3Pages ?? MAX_SAAS_LOCATIONS_V3_PAGES
@@ -289,54 +306,68 @@ export async function fetchGhlSaasSubscriptionForLocation(
 
   const legacyResult = await fetchLegacySaasSubscription(baseUrl, token, companyId, locationId, state);
   if (legacyResult?.ok) return legacyResult;
-  if (legacyResult && !legacyResult.ok && legacyResult.code !== "saas_subscription_not_found") {
+  if (legacyResult && !legacyResult.ok && legacyResult.code === "customer_id_missing") {
     return legacyResult;
   }
 
-  let v3Result = await fetchSaasLocationsV3ForLocation(
-    baseUrl,
-    token,
-    companyId,
-    locationId,
-    state,
-    "/saas/saas-locations"
-  );
-  if (!v3Result && !state.sawScopeError && canFetchGhl(state)) {
-    v3Result = await fetchSaasLocationsV3ForLocation(
-      baseUrl,
-      token,
-      companyId,
-      locationId,
-      state,
-      "/saas-api/public-api/saas-locations"
-    );
-  }
-  if (v3Result) return v3Result;
-
-  if (state.sawScopeError || isGhlOAuthScopeFailure(state.lastStatus ?? 0, state.lastMessage)) {
-    let error = GHL_SAAS_SCOPE_HELP;
-    if (oauthScopeOnFile && oauthInstallationScopeIncludesSaas(oauthScopeOnFile)) {
-      error = `${GHL_SAAS_SCOPE_HELP} The agency token in AgentFlow already lists saas/* scopes but GHL rejected the API call — use Settings → Connect GoHighLevel again (subaccount reinstall is not enough).`;
+  const allowLocationTokenFallback = state.maxGhlFetches >= MAX_GHL_FETCHES_PER_SAAS_SYNC;
+  if (!legacyResult?.ok && allowLocationTokenFallback && canFetchGhl(state)) {
+    const locationTokens = await getAccessTokensForLocation(env, db, locationId, {
+      hydrateBatchMode: true,
+      preemptiveOAuthRefresh: false
+    });
+    const locationToken = locationTokens.find((candidate) => candidate !== token);
+    if (locationToken) {
+      const locationLegacy = await fetchLegacySaasSubscription(
+        baseUrl,
+        locationToken,
+        companyId,
+        locationId,
+        state
+      );
+      if (locationLegacy?.ok) return locationLegacy;
+      if (locationLegacy && !locationLegacy.ok && locationLegacy.code === "customer_id_missing") {
+        return locationLegacy;
+      }
     }
-    return {
-      ok: false,
-      status: state.lastStatus ?? 403,
-      error,
-      code: "ghl_scope_forbidden",
-      ghlApiMessage: state.lastMessage,
-      oauthScopeOnFile
-    };
   }
 
-  if (legacyResult && !legacyResult.ok) {
-    return legacyResult;
+  const listPrefixes = [
+    "/saas/saas-locations",
+    "/saas-api/public-api/saas-locations"
+  ] as const;
+  for (const version of GHL_SAAS_LIST_VERSIONS) {
+    for (const pathPrefix of listPrefixes) {
+      if (!canFetchGhl(state)) break;
+      const v3Result = await fetchSaasLocationsV3ForLocation(
+        baseUrl,
+        token,
+        companyId,
+        locationId,
+        state,
+        pathPrefix,
+        version
+      );
+      if (v3Result) return v3Result;
+      if (state.listCompletedWithoutMatch) break;
+    }
+    if (state.listCompletedWithoutMatch) break;
   }
 
+  const explained = explainGhlSaasFetchFailure({
+    ghlLocationId: locationId,
+    lastStatus: state.lastStatus,
+    lastMessage: state.lastMessage,
+    sawScopeError: state.sawScopeError,
+    listCompletedWithoutMatch: state.listCompletedWithoutMatch,
+    oauthScopeOnFile
+  });
   return {
-    ok: false,
-    status: state.lastStatus,
-    error: state.lastMessage,
-    code: "ghl_saas_fetch_failed",
+    ok: false as const,
+    status: explained.status,
+    error: explained.error,
+    code: explained.code,
+    ghlApiMessage: state.lastMessage,
     oauthScopeOnFile
   };
 }
