@@ -5,7 +5,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import type { Context } from "hono";
 
 import { hashPassword, normalizeEmail } from "./auth-lib.js";
-import { resolveSessionUser, type WorkspaceJwtEnv } from "./workspace-access.js";
+import { resolveSessionUser, isWorkspaceLocationScopingEnabled, type WorkspaceJwtEnv } from "./workspace-access.js";
 import {
   assertAllLocationIdsExist,
   fetchSelectionLocationRows,
@@ -36,6 +36,9 @@ async function assertAdminSession(c: Context<HonoBindings>) {
 
 /** No saved rows ⇒ implicit “all locations”; otherwise only IDs in workspace_user_location_selection. */
 async function portfolioAdminLocationSelectionScope(db: ReturnType<typeof createDb>, adminWorkspaceUserId: string) {
+  if (!isWorkspaceLocationScopingEnabled()) {
+    return null;
+  }
   const selectionRows = await fetchSelectionLocationRows(db, adminWorkspaceUserId);
   return rowsToNullableSelectionSet(selectionRows);
 }

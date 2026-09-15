@@ -91,6 +91,7 @@ import {
 } from "./workspace-admin.js";
 import {
   getHiddenLocationIdsForPolicy,
+  isWorkspaceLocationScopingEnabled,
   jwtWorkspaceAllowedLocationUuidList,
   meHandler,
   resolveAccessPolicy,
@@ -1420,7 +1421,7 @@ app.get("/subaccounts/overview", async (c) => {
     .orderBy(locations.ghlLocationId);
 
   const visibilityLegacyPromise =
-    policy.kind === "legacy"
+    policy.kind === "legacy" && isWorkspaceLocationScopingEnabled()
       ? db
           .select({
             locationId: userSubaccountVisibilities.locationId,
@@ -1431,7 +1432,9 @@ app.get("/subaccounts/overview", async (c) => {
       : Promise.resolve<{ locationId: string; isVisible: boolean }[]>([]);
 
   const jwtSelectionPromise =
-    policy.kind === "jwt_workspace" ? fetchSelectionLocationRows(db, policy.workspaceUserId) : Promise.resolve([]);
+    policy.kind === "jwt_workspace" && isWorkspaceLocationScopingEnabled()
+      ? fetchSelectionLocationRows(db, policy.workspaceUserId)
+      : Promise.resolve([]);
 
   const includeConversationCounts =
     surface !== "appointments" && surface !== "dashboard";
@@ -1519,22 +1522,26 @@ app.get("/subaccounts/overview", async (c) => {
       pendingCount: pendingByLocation.get(row.locationId) ?? 0,
       appointmentCount: appointmentsByLocation.get(row.locationId) ?? 0,
       visible:
-        policy.kind === "legacy"
-          ? (visibilityByLocation.get(row.locationId) ?? true)
-          : jwtSelectionNullable === null
-            ? true
-            : jwtSelectionNullable.has(row.locationId),
-      implicitAllSelections: policy.kind === "jwt_workspace" && jwtSelectionNullable === null
+        !isWorkspaceLocationScopingEnabled()
+          ? true
+          : policy.kind === "legacy"
+            ? (visibilityByLocation.get(row.locationId) ?? true)
+            : jwtSelectionNullable === null
+              ? true
+              : jwtSelectionNullable.has(row.locationId),
+      implicitAllSelections:
+        !isWorkspaceLocationScopingEnabled() ||
+        (policy.kind === "jwt_workspace" && jwtSelectionNullable === null)
     }))
     .filter((row) => {
       if (surface === "threads") {
-        return row.visible && row.conversationCount > 0;
+        return row.conversationCount > 0;
       }
       if (surface === "appointments") {
-        return row.visible && row.appointmentCount > 0;
+        return row.appointmentCount > 0;
       }
       if (dashboardEligibleIds !== null) {
-        return dashboardEligibleIds.has(row.locationId) && row.visible && row.appointmentCount > 0;
+        return dashboardEligibleIds.has(row.locationId) && row.appointmentCount > 0;
       }
       return true;
     });

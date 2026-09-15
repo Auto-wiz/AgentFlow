@@ -5,6 +5,7 @@ import type { Context } from "hono";
 
 import { parseBearerHeader, signWorkspaceJwt, verifyWorkspaceJwt } from "./auth-lib.js";
 import { getViewerKey } from "./viewer-key.js";
+import { isWorkspaceLocationScopingEnabled } from "./workspace-location-scoping.js";
 import {
   fetchSelectionLocationRows,
   rowsToNullableSelectionSet
@@ -22,6 +23,8 @@ export type AccessPolicy =
 function jwtConfigured(env: WorkspaceJwtEnv) {
   return Boolean(env.JWT_SECRET?.trim());
 }
+
+export { isWorkspaceLocationScopingEnabled } from "./workspace-location-scoping.js";
 
 export async function resolveAccessPolicy(c: Context, env: WorkspaceJwtEnv): Promise<AccessPolicy | null> {
   if (!jwtConfigured(env)) {
@@ -87,11 +90,17 @@ export async function resolveSessionUser(c: Context, env: WorkspaceJwtEnv) {
   }
 }
 
-/** JWT workspace: explicit location picks in DB -> restrict reads to those UUIDs. No rows stored => null (implicit all). */
+/**
+ * JWT workspace: explicit location picks in DB -> restrict reads to those UUIDs.
+ * No rows stored, or location scoping disabled => null (implicit all, including future locations).
+ */
 export async function jwtWorkspaceAllowedLocationUuidList(
   db: ReturnType<typeof createDb>,
   policy: AccessPolicy
 ): Promise<string[] | null> {
+  if (!isWorkspaceLocationScopingEnabled()) {
+    return null;
+  }
   if (policy.kind !== "jwt_workspace") {
     return null;
   }
@@ -104,6 +113,9 @@ export async function getHiddenLocationIdsForPolicy(
   db: ReturnType<typeof createDb>,
   policy: { kind: "legacy"; viewerKey: string }
 ) {
+  if (!isWorkspaceLocationScopingEnabled()) {
+    return [];
+  }
   const hiddenRows = await db
     .select({
       locationId: userSubaccountVisibilities.locationId
@@ -123,6 +135,9 @@ export async function canWorkspaceAccessLocationUuid(
   policy: AccessPolicy,
   locationId: string
 ): Promise<boolean> {
+  if (!isWorkspaceLocationScopingEnabled()) {
+    return true;
+  }
   if (policy.kind === "legacy") {
     const hidden = await getHiddenLocationIdsForPolicy(db, policy);
     return !hidden.includes(locationId);
