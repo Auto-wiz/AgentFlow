@@ -5,11 +5,12 @@ import type { Context } from "hono";
 
 import { parseBearerHeader, signWorkspaceJwt, verifyWorkspaceJwt } from "./auth-lib.js";
 import { getViewerKey } from "./viewer-key.js";
-import { isWorkspaceLocationScopingEnabled } from "./workspace-location-scoping.js";
 import {
-  fetchSelectionLocationRows,
-  rowsToNullableSelectionSet
-} from "./workspace-selection-db.js";
+  isWorkspaceLocationScopingEnabled,
+  jwtReadAllowlist,
+  legacyReadHiddenLocationIds
+} from "./workspace-location-scoping.js";
+import { fetchSelectionLocationRows } from "./workspace-selection-db.js";
 
 export type WorkspaceJwtEnv = {
   DATABASE_URL: string;
@@ -98,15 +99,14 @@ export async function jwtWorkspaceAllowedLocationUuidList(
   db: ReturnType<typeof createDb>,
   policy: AccessPolicy
 ): Promise<string[] | null> {
-  if (!isWorkspaceLocationScopingEnabled()) {
-    return null;
-  }
   if (policy.kind !== "jwt_workspace") {
     return null;
   }
+  if (!isWorkspaceLocationScopingEnabled()) {
+    return jwtReadAllowlist([]);
+  }
   const rows = await fetchSelectionLocationRows(db, policy.workspaceUserId);
-  const scope = rowsToNullableSelectionSet(rows);
-  return scope === null ? null : [...scope];
+  return jwtReadAllowlist(rows.map((row) => row.locationId));
 }
 
 export async function getHiddenLocationIdsForPolicy(
@@ -114,7 +114,7 @@ export async function getHiddenLocationIdsForPolicy(
   policy: { kind: "legacy"; viewerKey: string }
 ) {
   if (!isWorkspaceLocationScopingEnabled()) {
-    return [];
+    return legacyReadHiddenLocationIds([]);
   }
   const hiddenRows = await db
     .select({
