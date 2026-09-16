@@ -1,5 +1,5 @@
 import { agencies, createDb, locationBillingConfig, locations } from "@agentflow/db";
-import { and, asc, eq, isNull, or } from "drizzle-orm";
+import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
 
 import { createStripeClient } from "./client-charges-stripe.js";
 import {
@@ -104,7 +104,7 @@ export async function upsertAgencyLocationFromGhl(
       target: locations.ghlLocationId,
       set: {
         agencyId: locationAgencyIdPreserveUnlessPlaceholder(),
-        name: locationName ?? undefined,
+        name: sql`COALESCE(${locations.name}, EXCLUDED.name)`,
         updatedAt: now
       }
     })

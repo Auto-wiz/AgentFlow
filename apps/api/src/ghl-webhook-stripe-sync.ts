@@ -1,5 +1,5 @@
 import { agencies, createDb, locationBillingConfig, locations } from "@agentflow/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { NormalizedGhlSaasBillingWebhookEvent } from "@agentflow/shared";
 
 import { locationAgencyIdPreserveUnlessPlaceholder } from "./ghl-oauth-location-token.js";
@@ -76,7 +76,7 @@ export async function processSaasBillingWebhookEvent(
       target: locations.ghlLocationId,
       set: {
         agencyId: locationAgencyIdPreserveUnlessPlaceholder(),
-        name: event.location.name ?? null,
+        name: sql`COALESCE(EXCLUDED.name, ${locations.name})`,
         updatedAt: now
       }
     })

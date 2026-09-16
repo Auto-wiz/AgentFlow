@@ -39,14 +39,53 @@ import {
   type WorkspaceJwtEnv
 } from "./workspace-access.js";
 import { insertWorkspaceAuditLog } from "./workspace-audit.js";
+import type { GhlOAuthTokenEnv } from "./ghl-oauth-location-token.js";
+import { refreshLocationDisplayNames } from "./location-display-names.js";
 
-export type ClientChargesEnv = WorkspaceJwtEnv & ClientChargeStripeEnv;
+export type ClientChargesEnv = WorkspaceJwtEnv & ClientChargeStripeEnv & GhlOAuthTokenEnv;
 type Bindings = { Bindings: ClientChargesEnv };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function isUuid(value: string) {
   return UUID_RE.test(value.trim());
+}
+
+async function withFreshLocationNames<
+  T extends { locationId: string; ghlLocationId: string; locationName: string | null }
+>(
+  env: GhlOAuthTokenEnv,
+  db: ReturnType<typeof createDb>,
+  rows: T[],
+  preferLocationIds?: Set<string>
+): Promise<T[]> {
+  if (rows.length === 0) return rows;
+  const unique = new Map<string, { locationId: string; ghlLocationId: string; locationName: string | null }>();
+  for (const row of rows) {
+    if (!unique.has(row.locationId)) {
+      unique.set(row.locationId, {
+        locationId: row.locationId,
+        ghlLocationId: row.ghlLocationId,
+        locationName: row.locationName
+      });
+    }
+  }
+  const ranked = [...unique.values()].sort((a, b) => {
+    const rank = (entry: { locationId: string; locationName: string | null }) => {
+      if (preferLocationIds?.has(entry.locationId)) return 0;
+      if (!entry.locationName?.trim()) return 1;
+      return 2;
+    };
+    return rank(a) - rank(b);
+  });
+  const nameMap = await refreshLocationDisplayNames(env, db, ranked, {
+    refreshExisting: true,
+    maxLookups: 15
+  });
+  return rows.map((row) => ({
+    ...row,
+    locationName: nameMap.get(row.locationId) ?? row.locationName
+  }));
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -134,6 +173,8 @@ export async function getWorkspaceClientChargesOverviewHandler(c: Context<Bindin
       accountView
     });
 
+    result.subaccounts = await withFreshLocationNames(c.env, scoped.db, result.subaccounts);
+
     const overviewLocationIds = result.subaccounts.map((row) => row.locationId);
     if (overviewLocationIds.length > 0) {
       const billingRows = await scoped.db
@@ -204,6 +245,7 @@ export async function getWorkspaceClientChargesHandler(c: Context<Bindings>) {
       page: Number.isFinite(pageRaw) ? pageRaw : 1,
       pageSize: Number.isFinite(limitRaw) ? limitRaw : 50
     });
+    result.rows = await withFreshLocationNames(c.env, scoped.db, result.rows);
 
     c.header("Cache-Control", "private, no-store, max-age=0");
     return c.json({
@@ -667,6 +709,17 @@ export async function getAdminClientChargeLocationsHandler(c: Context<Bindings>)
     .leftJoin(locationBillingConfig, eq(locationBillingConfig.locationId, locations.id))
     .where(filters)
     .orderBy(asc(locations.name), asc(locations.ghlLocationId));
+  const named = await withFreshLocationNames(
+    c.env,
+    db,
+    rows.map((row) => ({
+      locationId: row.locationId,
+      ghlLocationId: row.ghlLocationId,
+      locationName: row.locationName
+    })),
+    new Set(rows.filter((row) => row.enabled).map((row) => row.locationId))
+  );
+  const nameByLocation = new Map(named.map((row) => [row.locationId, row.locationName]));
   return c.json({
     locations: rows.map((row) => {
       const billingReady = isLocationBillingReady({
@@ -678,7 +731,7 @@ export async function getAdminClientChargeLocationsHandler(c: Context<Bindings>)
       return {
         locationId: row.locationId,
         ghlLocationId: row.ghlLocationId,
-        locationName: row.locationName,
+        locationName: nameByLocation.get(row.locationId) ?? row.locationName,
         enabled: row.enabled ?? false,
         currency: row.currency ?? "USD",
         billingReady,
