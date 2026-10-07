@@ -642,7 +642,7 @@ export default function ClientChargesPage() {
   useEffect(() => {
     if (!hydrated) return;
     if (!canAccessClientCharges(user?.email, user?.role)) {
-      void replaceGuarded("/dashboard");
+      void replaceGuarded("/appointments");
     }
   }, [hydrated, replaceGuarded, user?.email, user?.role]);
 

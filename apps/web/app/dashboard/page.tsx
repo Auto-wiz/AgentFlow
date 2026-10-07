@@ -2,9 +2,14 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { isPortfolioDashboardEnabled } from "@agentflow/shared";
+
 import { getApiBaseUrl } from "../../lib/api-base-url";
+import { pausedPortfolioFallbackHref } from "../../lib/portfolio-dashboard-href";
 import { formatLocationName } from "../../lib/location-display";
 import { mergeWorkspaceHeaders } from "../../lib/workspace-api-headers";
+import { useGuardedNavigate } from "../components/navigation-guard-provider";
+import { useWorkspaceAuth } from "../components/workspace-auth-provider";
 import { DashboardRangeControl, type DateRangeStrings, utcInclusiveRange } from "./dashboard-date-range";
 import { DashboardSubnav } from "./dashboard-subnav";
 
@@ -191,6 +196,9 @@ const OVERVIEW_PAGE_SIZE = 50;
 
 export default function DashboardOverviewPage() {
   const apiBaseUrl = useMemo(() => getApiBaseUrl(), []);
+  const { user, hydrated } = useWorkspaceAuth();
+  const { replaceGuarded } = useGuardedNavigate();
+  const portfolioOn = isPortfolioDashboardEnabled();
   const [preset, setPreset] = useState<Exclude<PresetKey, "custom"> | "custom">("30");
   const [range, setRange] = useState(() => utcInclusiveRange(30));
   const [customDraft, setCustomDraft] = useState<DateRangeStrings>(() => utcInclusiveRange(30));
@@ -272,7 +280,13 @@ export default function DashboardOverviewPage() {
     [apiBaseUrl, query]
   );
 
+  useEffect(() => {
+    if (!hydrated || portfolioOn) return;
+    void replaceGuarded(pausedPortfolioFallbackHref(user?.email, user?.role));
+  }, [hydrated, portfolioOn, replaceGuarded, user?.email, user?.role]);
+
   const load = useCallback(async () => {
+    if (!isPortfolioDashboardEnabled()) return;
     setLoading(true);
     setError(null);
     try {
@@ -449,6 +463,14 @@ export default function DashboardOverviewPage() {
 
   function sortCaret(column: SortColumn): string | null {
     return sort.column === column ? (sort.direction === "desc" ? "↓" : "↑") : null;
+  }
+
+  if (!portfolioOn) {
+    return (
+      <div style={{ paddingTop: 8 }}>
+        <p className="muted">Portfolio overview is paused. Redirecting…</p>
+      </div>
+    );
   }
 
   return (

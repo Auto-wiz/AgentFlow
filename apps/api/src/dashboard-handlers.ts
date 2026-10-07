@@ -7,6 +7,7 @@ import {
   locations,
   paymentSources
 } from "@agentflow/db";
+import { isPortfolioDashboardEnabled } from "@agentflow/shared";
 import { and, asc, eq, inArray, not, notInArray, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { Context } from "hono";
@@ -345,7 +346,17 @@ function sortOverviewSubaccounts(
   return sorted;
 }
 
+function portfolioDashboardPaused() {
+  return {
+    error: "portfolio_dashboard_disabled",
+    message: "Portfolio dashboard is paused."
+  };
+}
+
 export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings: Env }>) {
+  if (!isPortfolioDashboardEnabled()) {
+    return c.json(portfolioDashboardPaused(), 404);
+  }
   const policy = await resolveAccessPolicy(c, c.env);
   if (!policy) {
     return c.json({ error: "unauthorized" }, 401);
@@ -517,6 +528,9 @@ function formatDashboardDeposits(amountMajor: number, currency: string | null) {
 }
 
 export async function getWorkspaceDashboardSubaccountSeriesHandler(c: Context<{ Bindings: Env }>) {
+  if (!isPortfolioDashboardEnabled()) {
+    return c.json(portfolioDashboardPaused(), 404);
+  }
   const policy = await resolveAccessPolicy(c, c.env);
   if (!policy) {
     return c.json({ error: "unauthorized" }, 401);
@@ -680,6 +694,9 @@ export async function getWorkspaceDashboardSubaccountSeriesHandler(c: Context<{ 
  */
 export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bindings: Env }>) {
   try {
+  if (!isPortfolioDashboardEnabled()) {
+    return c.json(portfolioDashboardPaused(), 404);
+  }
   const policy = await resolveAccessPolicy(c, c.env);
   if (!policy) {
     return c.json({ error: "unauthorized" }, 401);

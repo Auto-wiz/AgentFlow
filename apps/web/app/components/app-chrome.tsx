@@ -10,16 +10,18 @@ import {
 import { ThemeToggle } from "./theme-toggle";
 import { AppUserMenu } from "./app-user-menu";
 import { useWorkspaceAuth } from "./workspace-auth-provider";
-
-const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: "📊" },
-  { href: "/appointments", label: "Appointments", icon: "⌚" },
-  { href: "/settings", label: "Settings", icon: "⚙" }
-];
+import { dashboardNavHref, shouldShowDashboardNav } from "../../lib/portfolio-dashboard-href";
 
 export function AppChrome({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { hydrated, token } = useWorkspaceAuth();
+  const { hydrated, token, user } = useWorkspaceAuth();
+  const navItems = [
+    ...(shouldShowDashboardNav(user?.email, user?.role)
+      ? [{ href: dashboardNavHref(user?.email, user?.role), label: "Dashboard", icon: "📊" }]
+      : []),
+    { href: "/appointments", label: "Appointments", icon: "⌚" },
+    { href: "/settings", label: "Settings", icon: "⚙" }
+  ];
   const appointmentsContext = pathname === "/appointments" || pathname.startsWith("/appointments/");
 
   if (pathname === "/login") {
@@ -59,8 +61,8 @@ export function AppChrome({ children }: { children: ReactNode }) {
               <nav aria-label="Primary navigation" className="app-topbar-nav">
                 {navItems.map((item) => {
                   const isActive =
-                    item.href === "/"
-                      ? pathname === "/"
+                    item.label === "Dashboard"
+                      ? pathname === "/dashboard" || pathname.startsWith("/dashboard/")
                       : pathname === item.href || pathname.startsWith(`${item.href}/`);
                   return (
                     <Link

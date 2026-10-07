@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { canAccessClientCharges } from "@agentflow/shared";
+import { canAccessClientCharges, isPortfolioDashboardEnabled } from "@agentflow/shared";
 
 import { useWorkspaceAuth } from "../components/workspace-auth-provider";
 
@@ -15,14 +15,17 @@ export function DashboardSubnav({ locationTail }: { locationTail?: ReactNode }) 
   const onOverview = pathname === "/dashboard";
   const onClientCharges = pathname.startsWith("/dashboard/client-charges");
   const onPortfolioAdmin = pathname.startsWith("/dashboard/portfolio-admin");
-  const showAdminTab = hydrated && user?.role === "admin";
+  const portfolioOn = isPortfolioDashboardEnabled();
+  const showAdminTab = portfolioOn && hydrated && user?.role === "admin";
   const showClientChargesTab = hydrated && canAccessClientCharges(user?.email, user?.role);
 
   return (
     <div className="dashboard-subnav-toolbar">
-      <Link className={`app-nav-pill ${onOverview ? "active" : ""}`} href="/dashboard" style={{ padding: "8px 14px" }}>
-        Overview
-      </Link>
+      {portfolioOn ? (
+        <Link className={`app-nav-pill ${onOverview ? "active" : ""}`} href="/dashboard" style={{ padding: "8px 14px" }}>
+          Overview
+        </Link>
+      ) : null}
       {showClientChargesTab ? (
         <Link
           className={`app-nav-pill ${onClientCharges ? "active" : ""}`}

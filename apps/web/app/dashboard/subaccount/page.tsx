@@ -3,11 +3,13 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
+import { isPortfolioDashboardEnabled } from "@agentflow/shared";
+
 export default function DashboardSubaccountLegacyRedirectPage() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace("/dashboard");
+    router.replace(isPortfolioDashboardEnabled() ? "/dashboard" : "/dashboard/client-charges");
   }, [router]);
 
   return (

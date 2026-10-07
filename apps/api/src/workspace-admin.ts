@@ -1,6 +1,6 @@
 import { createDb } from "@agentflow/db";
 import { locations, workspaceUsers } from "@agentflow/db";
-import { AUDIT_ACTION_KINDS } from "@agentflow/shared";
+import { AUDIT_ACTION_KINDS, isPortfolioDashboardEnabled } from "@agentflow/shared";
 import { asc, eq, inArray } from "drizzle-orm";
 import type { Context } from "hono";
 
@@ -182,6 +182,12 @@ export async function adminListLocations(c: Context<HonoBindings>) {
 /** Toggle whether a location is omitted from workspace portfolio dashboard aggregates (admin JWT only). */
 export async function adminPatchLocationDashboardExclusion(c: Context<HonoBindings>) {
   c.header("Cache-Control", "private, no-store, max-age=0, must-revalidate");
+  if (!isPortfolioDashboardEnabled()) {
+    return c.json(
+      { error: "portfolio_dashboard_disabled", message: "Portfolio dashboard is paused." },
+      404
+    );
+  }
   const admin = await assertAdminSession(c);
   if (!admin) {
     return c.json({ error: "forbidden" }, 403);

@@ -7,6 +7,9 @@ import { getApiBaseUrl } from "../../../lib/api-base-url";
 import { mergeWorkspaceHeaders } from "../../../lib/workspace-api-headers";
 import { useWorkspaceAuth } from "../../components/workspace-auth-provider";
 import { useGuardedNavigate } from "../../components/navigation-guard-provider";
+import { isPortfolioDashboardEnabled } from "@agentflow/shared";
+
+import { pausedPortfolioFallbackHref } from "../../../lib/portfolio-dashboard-href";
 import { DashboardSubnav } from "../dashboard-subnav";
 
 type PortfolioDashboardLocation = {
@@ -50,16 +53,16 @@ export default function DashboardPortfolioAdminPage() {
     if (!hydrated) {
       return;
     }
-    if (user?.role !== "admin") {
-      void replaceGuarded("/dashboard");
+    if (!isPortfolioDashboardEnabled() || user?.role !== "admin") {
+      void replaceGuarded(pausedPortfolioFallbackHref(user?.email, user?.role));
     }
-  }, [hydrated, replaceGuarded, user?.role]);
+  }, [hydrated, replaceGuarded, user?.email, user?.role]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadPortfolioLocations() {
-      if (!hydrated || user?.role !== "admin") {
+      if (!hydrated || !isPortfolioDashboardEnabled() || user?.role !== "admin") {
         setPortfolioLocs([]);
         return;
       }
@@ -89,7 +92,7 @@ export default function DashboardPortfolioAdminPage() {
   }, [apiBaseUrl, hydrated, sessionKey, user?.role]);
 
   async function toggleDashboardExclusion(locationId: string, excludeFromDashboard: boolean) {
-    if (user?.role !== "admin") {
+    if (!isPortfolioDashboardEnabled() || user?.role !== "admin") {
       return;
     }
     setPortfolioBusyLocationId(locationId);
@@ -145,6 +148,14 @@ export default function DashboardPortfolioAdminPage() {
       return name.includes(needle) || gid.includes(needle) || uuid.includes(needle);
     });
   }, [portfolioLocs, searchQuery]);
+
+  if (!isPortfolioDashboardEnabled()) {
+    return (
+      <div style={{ paddingTop: 8 }}>
+        <p className="muted">Portfolio admin is paused. Redirecting…</p>
+      </div>
+    );
+  }
 
   return (
     <div style={{ paddingTop: 8 }}>
