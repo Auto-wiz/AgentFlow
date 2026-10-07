@@ -4,6 +4,9 @@ export function pausedPortfolioFallbackHref(
   email: string | null | undefined,
   role?: string | null
 ): string {
+  if (isPortfolioDashboardEnabled()) {
+    return "/dashboard";
+  }
   return canAccessClientCharges(email, role) ? "/dashboard/client-charges" : "/appointments";
 }
 

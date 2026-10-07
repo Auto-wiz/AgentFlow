@@ -43,7 +43,7 @@ import {
   GHL_MARKETPLACE_APP_VERSION_ID,
   applyGhlMarketplaceVersionId,
   applyGhlMarketplaceUserType,
-  isPortfolioDashboardEnabled,
+  isPortfolioDashboardExclusionsEnabled,
   normalizeGhlMarketplaceOAuthScope
 } from "@agentflow/shared";
 import type {
@@ -1509,7 +1509,9 @@ app.get("/subaccounts/overview", async (c) => {
     surface === "dashboard"
       ? new Set(
           locationRows
-            .filter((raw) => isPortfolioDashboardEnabled() ? !raw.excludeFromDashboard : true)
+            .filter((raw) =>
+              isPortfolioDashboardExclusionsEnabled() ? !raw.excludeFromDashboard : true
+            )
             .map((raw) => raw.locationId)
         )
       : null;

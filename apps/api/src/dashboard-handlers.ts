@@ -7,7 +7,10 @@ import {
   locations,
   paymentSources
 } from "@agentflow/db";
-import { isPortfolioDashboardEnabled } from "@agentflow/shared";
+import {
+  isPortfolioDashboardEnabled,
+  isPortfolioDashboardExclusionsEnabled
+} from "@agentflow/shared";
 import { and, asc, eq, inArray, not, notInArray, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { Context } from "hono";
@@ -397,7 +400,12 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
         })
         .from(appointments)
         .innerJoin(locations, eq(appointments.locationId, locations.id))
-        .where(and(appointmentWhere, eq(locations.excludeFromDashboard, false)))
+        .where(
+          and(
+            appointmentWhere,
+            ...(isPortfolioDashboardExclusionsEnabled() ? [eq(locations.excludeFromDashboard, false)] : [])
+          )
+        )
         .groupBy(appointments.locationId, locations.ghlLocationId, locations.name)
     : [];
 
@@ -416,7 +424,12 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
         })
         .from(ghlPaymentOrders)
         .innerJoin(locations, eq(ghlPaymentOrders.locationId, locations.id))
-        .where(and(orderWhereCombined, eq(locations.excludeFromDashboard, false)))
+        .where(
+          and(
+            orderWhereCombined,
+            ...(isPortfolioDashboardExclusionsEnabled() ? [eq(locations.excludeFromDashboard, false)] : [])
+          )
+        )
         .groupBy(ghlPaymentOrders.locationId)
     : [];
 
@@ -428,7 +441,12 @@ export async function getWorkspaceDashboardOverviewHandler(c: Context<{ Bindings
         })
         .from(invoices)
         .innerJoin(locations, eq(invoices.locationId, locations.id))
-        .where(and(invoiceWhereCombined, eq(locations.excludeFromDashboard, false)))
+        .where(
+          and(
+            invoiceWhereCombined,
+            ...(isPortfolioDashboardExclusionsEnabled() ? [eq(locations.excludeFromDashboard, false)] : [])
+          )
+        )
         .groupBy(invoices.locationId)
     : [];
 
@@ -560,7 +578,7 @@ export async function getWorkspaceDashboardSubaccountSeriesHandler(c: Context<{ 
   if (!dashboardLoc) {
     return c.json({ error: "forbidden_location" }, 403);
   }
-  if (dashboardLoc.excludeFromDashboard) {
+  if (isPortfolioDashboardExclusionsEnabled() && dashboardLoc.excludeFromDashboard) {
     return c.json({ error: "location_excluded_from_dashboard" }, 403);
   }
 
@@ -725,7 +743,7 @@ export async function getWorkspaceDashboardLocationDetailHandler(c: Context<{ Bi
   if (!dashboardLoc) {
     return c.json({ error: "forbidden_location" }, 403);
   }
-  if (dashboardLoc.excludeFromDashboard) {
+  if (isPortfolioDashboardExclusionsEnabled() && dashboardLoc.excludeFromDashboard) {
     return c.json({ error: "location_excluded_from_dashboard" }, 403);
   }
 

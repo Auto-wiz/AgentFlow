@@ -4,7 +4,11 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { canAccessClientCharges, isPortfolioDashboardEnabled } from "@agentflow/shared";
+import {
+  canAccessClientCharges,
+  isPortfolioDashboardEnabled,
+  isPortfolioDashboardExclusionsEnabled
+} from "@agentflow/shared";
 
 import { useWorkspaceAuth } from "../components/workspace-auth-provider";
 
@@ -16,7 +20,8 @@ export function DashboardSubnav({ locationTail }: { locationTail?: ReactNode }) 
   const onClientCharges = pathname.startsWith("/dashboard/client-charges");
   const onPortfolioAdmin = pathname.startsWith("/dashboard/portfolio-admin");
   const portfolioOn = isPortfolioDashboardEnabled();
-  const showAdminTab = portfolioOn && hydrated && user?.role === "admin";
+  const showAdminTab =
+    isPortfolioDashboardExclusionsEnabled() && hydrated && user?.role === "admin";
   const showClientChargesTab = hydrated && canAccessClientCharges(user?.email, user?.role);
 
   return (

@@ -1,5 +1,5 @@
 import { agencies, createDb, locationBillingConfig, locations } from "@agentflow/db";
-import { isPortfolioDashboardEnabled } from "@agentflow/shared";
+import { isPortfolioDashboardExclusionsEnabled } from "@agentflow/shared";
 import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
 
 import { createStripeClient } from "./client-charges-stripe.js";
@@ -352,7 +352,7 @@ export async function syncMissingGhlSaasStripeCronBatch(
     .leftJoin(locationBillingConfig, eq(locationBillingConfig.locationId, locations.id))
     .where(
       and(
-        ...(isPortfolioDashboardEnabled() ? [eq(locations.excludeFromDashboard, false)] : []),
+        ...(isPortfolioDashboardExclusionsEnabled() ? [eq(locations.excludeFromDashboard, false)] : []),
         or(isNull(locationBillingConfig.locationId), isNull(locationBillingConfig.stripeCustomerId))
       )
     )

@@ -335,4 +335,7 @@ export {
   canAccessClientCharges,
   normalizeWorkspaceEmail
 } from "./client-charges-access";
-export { isPortfolioDashboardEnabled } from "./portfolio-dashboard";
+export {
+  isPortfolioDashboardEnabled,
+  isPortfolioDashboardExclusionsEnabled
+} from "./portfolio-dashboard";
