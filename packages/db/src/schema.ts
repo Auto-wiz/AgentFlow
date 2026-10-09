@@ -559,6 +559,11 @@ export const ghlPaymentOrders = pgTable(
     lastEventType: text("last_event_type").notNull(),
     isDeleted: boolean("is_deleted").notNull().default(false),
     raw: jsonb("raw").notNull(),
+    /** When to look up HighLevel transactions for this order. Null until an order webhook schedules it. */
+    transactionSyncAfter: timestamp("transaction_sync_after", { withTimezone: true }),
+    /** Set once the transaction lookup finished (including a confirmed zero). */
+    transactionSyncedAt: timestamp("transaction_synced_at", { withTimezone: true }),
+    transactionSyncAttempts: integer("transaction_sync_attempts").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
   },
@@ -570,7 +575,45 @@ export const ghlPaymentOrders = pgTable(
     locationIdx: index("ghl_payment_orders_location_id_idx").on(table.locationId),
     contactIdx: index("ghl_payment_orders_contact_id_idx").on(table.contactId),
     statusIdx: index("ghl_payment_orders_status_idx").on(table.status),
-    paymentSourceIdx: index("ghl_payment_orders_payment_source_id_idx").on(table.paymentSourceId)
+    paymentSourceIdx: index("ghl_payment_orders_payment_source_id_idx").on(table.paymentSourceId),
+    transactionSyncIdx: index("ghl_payment_orders_transaction_sync_idx")
+      .on(table.transactionSyncAfter)
+      .where(sql`${table.transactionSyncedAt} is null`)
+  })
+);
+
+/** Money actually collected for an order. Client Charges reads this instead of the order price. */
+export const ghlPaymentTransactions = pgTable(
+  "ghl_payment_transactions",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => locations.id, { onDelete: "cascade" }),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => ghlPaymentOrders.id, { onDelete: "cascade" }),
+    ghlTransactionId: text("ghl_transaction_id").notNull(),
+    status: text("status"),
+    amount: integer("amount"),
+    amountRefunded: integer("amount_refunded"),
+    currency: text("currency"),
+    entityId: text("entity_id"),
+    entityType: text("entity_type"),
+    ghlCreatedAt: timestamp("ghl_created_at", { withTimezone: true }),
+    ghlUpdatedAt: timestamp("ghl_updated_at", { withTimezone: true }),
+    raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => ({
+    locationTxnUnique: uniqueIndex("ghl_payment_transactions_location_txn_unique").on(
+      table.locationId,
+      table.ghlTransactionId
+    ),
+    orderIdx: index("ghl_payment_transactions_order_id_idx").on(table.orderId)
   })
 );
 
@@ -873,7 +916,7 @@ export const invoicesRelations = relations(invoices, ({ one }) => ({
   })
 }));
 
-export const ghlPaymentOrdersRelations = relations(ghlPaymentOrders, ({ one }) => ({
+export const ghlPaymentOrdersRelations = relations(ghlPaymentOrders, ({ one, many }) => ({
   location: one(locations, {
     fields: [ghlPaymentOrders.locationId],
     references: [locations.id]
@@ -886,7 +929,19 @@ export const ghlPaymentOrdersRelations = relations(ghlPaymentOrders, ({ one }) =
     fields: [ghlPaymentOrders.paymentSourceId],
     references: [paymentSources.id]
   }),
-  clientResultCharge: one(clientResultCharges)
+  clientResultCharge: one(clientResultCharges),
+  transactions: many(ghlPaymentTransactions)
+}));
+
+export const ghlPaymentTransactionsRelations = relations(ghlPaymentTransactions, ({ one }) => ({
+  location: one(locations, {
+    fields: [ghlPaymentTransactions.locationId],
+    references: [locations.id]
+  }),
+  order: one(ghlPaymentOrders, {
+    fields: [ghlPaymentTransactions.orderId],
+    references: [ghlPaymentOrders.id]
+  })
 }));
 
 export const locationBillingConfigRelations = relations(locationBillingConfig, ({ one }) => ({

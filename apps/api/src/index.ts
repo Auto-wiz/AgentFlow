@@ -154,6 +154,11 @@ import {
 } from "./ghl-oauth-location-token.js";
 import { fetchSelectionLocationRows, rowsToNullableSelectionSet } from "./workspace-selection-db.js";
 import {
+  ORDER_TRANSACTION_SYNC_DELAY_MS,
+  scheduleOrderTransactionSync,
+  syncDueOrderTransactions
+} from "./ghl-payment-transactions.js";
+import {
   WORKSPACE_AUDIT_RETENTION_DAYS,
   insertWorkspaceAuditLog,
   listWorkspaceAuditLogsForAdmin,
@@ -3626,6 +3631,9 @@ async function processOrderWebhookEvent(env: Env, event: NormalizedGhlOrderWebho
       lastEventType: event.eventType,
       isDeleted: false,
       raw: event.raw,
+      transactionSyncAfter: new Date(now.getTime() + ORDER_TRANSACTION_SYNC_DELAY_MS),
+      transactionSyncedAt: null,
+      transactionSyncAttempts: 0,
       updatedAt: now
     })
     .onConflictDoUpdate({
@@ -3644,6 +3652,9 @@ async function processOrderWebhookEvent(env: Env, event: NormalizedGhlOrderWebho
         ghlUpdatedAt: parseNullableDate(event.order.updatedAt),
         lastEventType: event.eventType,
         raw: event.raw,
+        transactionSyncAfter: new Date(now.getTime() + ORDER_TRANSACTION_SYNC_DELAY_MS),
+        transactionSyncedAt: null,
+        transactionSyncAttempts: 0,
         updatedAt: now
       }
     });
@@ -6071,11 +6082,24 @@ export default {
     } catch (error) {
       console.warn("[scheduled.workspace_audit_prune.failed]", error);
     }
+
+    try {
+      const summary = await syncDueOrderTransactions(env, 4);
+      console.log("[scheduled.order_transactions]", summary);
+    } catch (error) {
+      console.warn("[scheduled.order_transactions.failed]", error);
+    }
   },
-  async queue(batch: MessageBatch<NormalizedGhlWebhookEvent>, env: Env) {
+  async queue(batch: MessageBatch<NormalizedGhlWebhookEvent>, env: Env, ctx: ExecutionContext) {
     for (const message of batch.messages) {
       try {
         await processWebhookEvent(env, message.body);
+        if (message.body.kind === "order") {
+          scheduleOrderTransactionSync(ctx, env, {
+            ghlLocationId: message.body.location.ghlLocationId,
+            ghlOrderId: message.body.order.ghlOrderId
+          });
+        }
         message.ack();
       } catch (error) {
         const db = createDb(env.DATABASE_URL);

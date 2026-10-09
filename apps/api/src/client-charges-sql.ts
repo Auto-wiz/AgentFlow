@@ -10,14 +10,14 @@ import {
 import { and, asc, eq, gte, inArray, lt, not, notInArray, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 
-import { appointmentCancelledOnlySql, buildAppointmentEffectivePaidSql } from "./appointment-payment-sql.js";
+import { appointmentCancelledOnlySql } from "./appointment-payment-sql.js";
 import {
   chargeActorDisplayName,
   emptyOverviewAccountRow,
   overviewAccountMatchesView,
-  STAFF_CREATED_APPOINTMENT_SOURCES,
   type OverviewAccountView
 } from "./client-charges-logic.js";
+import { COLLECTED_TRANSACTION_STATUSES } from "./ghl-payment-transaction-amount.js";
 
 type Db = ReturnType<typeof createDb>;
 
@@ -182,14 +182,15 @@ function matchesSubaccountQuery(
   return haystack.includes(needle);
 }
 
-/** Staff-created bookings are not a collected deposit. Order webhooks still carry the service price. */
-function appointmentWasNotStaffCreatedSql(): SQL {
-  const sources = STAFF_CREATED_APPOINTMENT_SOURCES.map((source) => sql`${source}`);
-  return sql`lower(trim(coalesce(
-    ${appointments.raw}->'appointment'->>'source',
-    ${appointments.raw}->>'source',
-    ''
-  ))) not in (${sql.join(sources, sql`, `)})`;
+/** Sum of collected transaction amounts for one stored order. Zero means the client did not pay. */
+function collectedOrderAmountSql(orderAlias: "direct_order" | "correlated_order") {
+  const statuses = COLLECTED_TRANSACTION_STATUSES.map((status) => sql`${status}`);
+  return sql`(
+    select coalesce(sum(greatest(coalesce(paid_tx.amount, 0) - coalesce(paid_tx.amount_refunded, 0), 0)), 0)::int
+    from ghl_payment_transactions paid_tx
+    where paid_tx.order_id = ${sql.raw(`${orderAlias}.id`)}
+      and lower(trim(coalesce(paid_tx.status, ''))) in (${sql.join(statuses, sql`, `)})
+  )`;
 }
 
 function canonicalDepositSql(): SQL<CanonicalDepositEvidence | null> {
@@ -203,7 +204,7 @@ function canonicalDepositSql(): SQL<CanonicalDepositEvidence | null> {
         'kind', 'payment_order',
         'id', direct_order.id,
         'externalId', direct_order.ghl_order_id,
-        'amount', direct_order.amount,
+        'amount', ${collectedOrderAmountSql("direct_order")},
         'currency', upper(coalesce(nullif(trim(direct_order.currency), ''), ${locationBillingConfig.currency}, 'USD')),
         'matchedBy', 'direct_appointment_order',
         'paidAt', coalesce(direct_order.ghl_updated_at, direct_order.ghl_created_at, direct_order.updated_at, direct_order.created_at)
@@ -211,14 +212,10 @@ function canonicalDepositSql(): SQL<CanonicalDepositEvidence | null> {
       from ghl_payment_orders direct_order
       where direct_order.location_id = ${appointments.locationId}
         and direct_order.is_deleted = false
-        and coalesce(direct_order.amount, 0) > 0
-        and ${appointmentWasNotStaffCreatedSql()}
+        and lower(trim(coalesce(direct_order.status, ''))) not in ('cancelled', 'canceled', 'void', 'voided')
+        and ${collectedOrderAmountSql("direct_order")} > 0
         and direct_order.alt_id = ${appointments.ghlAppointmentId}
         and strpos(lower(trim(coalesce(direct_order.alt_type, ''))), 'appointment') > 0
-        and (
-          trim(lower(coalesce(direct_order.status, ''))) in ('completed','paid','succeeded','successful','fully_paid','complete','paid_in_full')
-          or trim(lower(coalesce(direct_order.fulfillment_status, ''))) in ('fulfilled','complete','completed','paid','successful','processed')
-        )
       order by coalesce(direct_order.ghl_updated_at, direct_order.ghl_created_at, direct_order.updated_at, direct_order.created_at) desc,
         direct_order.id desc
       limit 1
@@ -228,7 +225,7 @@ function canonicalDepositSql(): SQL<CanonicalDepositEvidence | null> {
         'kind', 'payment_order',
         'id', correlated_order.id,
         'externalId', correlated_order.ghl_order_id,
-        'amount', correlated_order.amount,
+        'amount', ${collectedOrderAmountSql("correlated_order")},
         'currency', upper(coalesce(nullif(trim(correlated_order.currency), ''), ${locationBillingConfig.currency}, 'USD')),
         'matchedBy', 'correlated_order',
         'paidAt', coalesce(correlated_order.ghl_updated_at, correlated_order.ghl_created_at, correlated_order.updated_at, correlated_order.created_at)
@@ -237,12 +234,8 @@ function canonicalDepositSql(): SQL<CanonicalDepositEvidence | null> {
       left join contacts correlated_order_contact on correlated_order_contact.id = correlated_order.contact_id
       where correlated_order.location_id = ${appointments.locationId}
         and correlated_order.is_deleted = false
-        and coalesce(correlated_order.amount, 0) > 0
-        and ${appointmentWasNotStaffCreatedSql()}
-        and (
-          trim(lower(coalesce(correlated_order.status, ''))) in ('completed','paid','succeeded','successful','fully_paid','complete','paid_in_full')
-          or trim(lower(coalesce(correlated_order.fulfillment_status, ''))) in ('fulfilled','complete','completed','paid','successful','processed')
-        )
+        and lower(trim(coalesce(correlated_order.status, ''))) not in ('cancelled', 'canceled', 'void', 'voided')
+        and ${collectedOrderAmountSql("correlated_order")} > 0
         and (
           (${appointments.contactId} is not null and correlated_order.contact_id = ${appointments.contactId})
           or (
@@ -368,7 +361,6 @@ export async function fetchClientChargeCandidates(
     eq(locationBillingConfig.enabled, true),
     eq(appointments.hiddenFromUi, false),
     not(appointmentCancelledOnlySql()),
-    buildAppointmentEffectivePaidSql(db),
     gte(bookingCapturedAt, params.from),
     lt(bookingCapturedAt, params.toExclusive)
   ];
@@ -389,6 +381,7 @@ export async function fetchClientChargeCandidates(
     filters.push(eq(appointments.id, params.appointmentId));
   }
 
+  filters.push(sql`${canonicalDepositSql()} is not null`);
   const depositExpr = canonicalDepositSql();
   const rawRows = await db
     .select({
