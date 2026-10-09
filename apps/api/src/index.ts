@@ -400,7 +400,9 @@ app.post("/internal/order-transaction-backfill", async (c) => {
   if (!provided || !backfillTokenMatches(provided, expected)) {
     return c.json({ error: "unauthorized" }, 401);
   }
-  const summary = await syncRecentOrderTransactions(c.env, { withinDays: 30, limit: 8 });
+  const requested = Number(c.req.query("limit") ?? "8");
+  const limit = Number.isFinite(requested) ? requested : 8;
+  const summary = await syncRecentOrderTransactions(c.env, { withinDays: 30, limit });
   return c.json(summary);
 });
 
