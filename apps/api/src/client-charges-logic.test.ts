@@ -27,6 +27,7 @@ import {
   stripeCustomerEmail,
   summarizeUnknownJsonShape,
   isClientChargesChargingEnabled,
+  isStaffCreatedAppointmentSource,
   parseOverviewAccountView,
   overviewAccountMatchesView,
   emptyOverviewAccountRow,
@@ -58,6 +59,21 @@ describe("canonical deposit precedence", () => {
     ]);
     assert.equal(winner?.id, "ord");
     assert.equal(winner?.amount, 50);
+  });
+});
+
+describe("staff-created appointments are not deposits", () => {
+  it("treats in-app manual creates as unpaid even when an order lists a price", () => {
+    assert.equal(isStaffCreatedAppointmentSource("calendar_page"), true);
+    assert.equal(isStaffCreatedAppointmentSource(" contactdetails_page "), true);
+    assert.equal(isStaffCreatedAppointmentSource("appointments_page"), true);
+    assert.equal(isStaffCreatedAppointmentSource("opportunity_page"), true);
+  });
+
+  it("keeps widget and third-party bookings eligible", () => {
+    assert.equal(isStaffCreatedAppointmentSource("booking_widget"), false);
+    assert.equal(isStaffCreatedAppointmentSource("third_party"), false);
+    assert.equal(isStaffCreatedAppointmentSource(null), false);
   });
 });
 

@@ -15,6 +15,7 @@ import {
   chargeActorDisplayName,
   emptyOverviewAccountRow,
   overviewAccountMatchesView,
+  STAFF_CREATED_APPOINTMENT_SOURCES,
   type OverviewAccountView
 } from "./client-charges-logic.js";
 
@@ -181,6 +182,16 @@ function matchesSubaccountQuery(
   return haystack.includes(needle);
 }
 
+/** Staff-created bookings are not a collected deposit. Order webhooks still carry the service price. */
+function appointmentWasNotStaffCreatedSql(): SQL {
+  const sources = STAFF_CREATED_APPOINTMENT_SOURCES.map((source) => sql`${source}`);
+  return sql`lower(trim(coalesce(
+    ${appointments.raw}->'appointment'->>'source',
+    ${appointments.raw}->>'source',
+    ''
+  ))) not in (${sql.join(sources, sql`, `)})`;
+}
+
 function canonicalDepositSql(): SQL<CanonicalDepositEvidence | null> {
   /*
    * The three scalar subqueries deliberately encode the confirmed precedence. They select only one row,
@@ -201,6 +212,7 @@ function canonicalDepositSql(): SQL<CanonicalDepositEvidence | null> {
       where direct_order.location_id = ${appointments.locationId}
         and direct_order.is_deleted = false
         and coalesce(direct_order.amount, 0) > 0
+        and ${appointmentWasNotStaffCreatedSql()}
         and direct_order.alt_id = ${appointments.ghlAppointmentId}
         and strpos(lower(trim(coalesce(direct_order.alt_type, ''))), 'appointment') > 0
         and (
@@ -226,6 +238,7 @@ function canonicalDepositSql(): SQL<CanonicalDepositEvidence | null> {
       where correlated_order.location_id = ${appointments.locationId}
         and correlated_order.is_deleted = false
         and coalesce(correlated_order.amount, 0) > 0
+        and ${appointmentWasNotStaffCreatedSql()}
         and (
           trim(lower(coalesce(correlated_order.status, ''))) in ('completed','paid','succeeded','successful','fully_paid','complete','paid_in_full')
           or trim(lower(coalesce(correlated_order.fulfillment_status, ''))) in ('fulfilled','complete','completed','paid','successful','processed')

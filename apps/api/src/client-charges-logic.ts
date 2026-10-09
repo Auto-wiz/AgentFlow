@@ -8,6 +8,23 @@ export type CanonicalMatchedBy =
   | "correlated_order"
   | "correlated_invoice";
 
+/**
+ * Appointments created by staff inside HighLevel. Those still emit a calendar order
+ * for the service price (often marked completed) even when Transactions shows $0
+ * because nobody collected a deposit. They are not a client payment.
+ */
+export const STAFF_CREATED_APPOINTMENT_SOURCES = [
+  "calendar_page",
+  "contactdetails_page",
+  "appointments_page",
+  "opportunity_page"
+] as const;
+
+export function isStaffCreatedAppointmentSource(source: string | null | undefined): boolean {
+  const normalized = (source ?? "").trim().toLowerCase();
+  return (STAFF_CREATED_APPOINTMENT_SOURCES as readonly string[]).includes(normalized);
+}
+
 /** Confirmed precedence: lower rank wins; never sum order+invoice mirrors. */
 export const CANONICAL_DEPOSIT_PRECEDENCE: readonly CanonicalMatchedBy[] = [
   "direct_appointment_order",
