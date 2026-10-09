@@ -295,7 +295,7 @@ export async function syncRecentOrderTransactions(
     .from(ghlPaymentOrders)
     .innerJoin(locations, eq(locations.id, ghlPaymentOrders.locationId))
     .where(dueOrderFilter(cutoff, "recent"))
-    .orderBy(desc(orderRecencySql()))
+    .orderBy(asc(ghlPaymentOrders.transactionSyncAttempts), desc(orderRecencySql()))
     .limit(1);
 
   if (!nextLocation) return empty;
@@ -311,7 +311,7 @@ export async function syncRecentOrderTransactions(
     .from(ghlPaymentOrders)
     .innerJoin(locations, eq(locations.id, ghlPaymentOrders.locationId))
     .where(and(dueOrderFilter(cutoff, "recent"), eq(ghlPaymentOrders.locationId, nextLocation.locationId)))
-    .orderBy(desc(orderRecencySql()))
+    .orderBy(asc(ghlPaymentOrders.transactionSyncAttempts), desc(orderRecencySql()))
     .limit(limit);
 
   let tokens: string[] = [];
