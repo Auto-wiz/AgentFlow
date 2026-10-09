@@ -118,31 +118,37 @@ async function rescheduleOrderTransactionSync(
     .where(eq(ghlPaymentOrders.id, orderId));
 }
 
-export async function syncOrderTransactionsFromGhl(
+type LoadedPaymentOrder = {
+  id: string;
+  locationId: string;
+  ghlOrderId: string;
+  ghlLocationId: string;
+  transactionSyncAttempts: number;
+};
+
+function orderRecencySql() {
+  return sql`coalesce(${ghlPaymentOrders.ghlCreatedAt}, ${ghlPaymentOrders.createdAt})`;
+}
+
+function dueOrderFilter(cutoff: Date, mode: "recent" | "older" | "any") {
+  const filters = [
+    isNull(ghlPaymentOrders.transactionSyncedAt),
+    eq(ghlPaymentOrders.isDeleted, false),
+    or(isNull(ghlPaymentOrders.transactionSyncAfter), lte(ghlPaymentOrders.transactionSyncAfter, new Date()))
+  ];
+  if (mode === "recent") filters.push(sql`${orderRecencySql()} >= ${cutoff}`);
+  if (mode === "older") filters.push(sql`${orderRecencySql()} < ${cutoff}`);
+  return and(...filters);
+}
+
+async function writeOrderTransactions(
   env: OrderTransactionSyncEnv,
-  params: { ghlLocationId: string; ghlOrderId: string }
+  db: ReturnType<typeof createDb>,
+  order: LoadedPaymentOrder,
+  tokens: string[]
 ): Promise<OrderTransactionSyncResult> {
-  const db = createDb(env.DATABASE_URL);
-  const ghlLocationId = params.ghlLocationId.trim();
-  const ghlOrderId = params.ghlOrderId.trim();
-  const [order] = await db
-    .select({
-      id: ghlPaymentOrders.id,
-      locationId: ghlPaymentOrders.locationId,
-      transactionSyncAttempts: ghlPaymentOrders.transactionSyncAttempts
-    })
-    .from(ghlPaymentOrders)
-    .innerJoin(locations, eq(locations.id, ghlPaymentOrders.locationId))
-    .where(and(eq(locations.ghlLocationId, ghlLocationId), eq(ghlPaymentOrders.ghlOrderId, ghlOrderId)))
-    .limit(1);
-
-  if (!order) {
-    return { ok: false, ghlOrderId, reason: "order_not_found" };
-  }
-
-  const tokens = await getAccessTokensForLocation(env, db, ghlLocationId, {
-    preemptiveOAuthRefresh: true
-  });
+  const ghlLocationId = order.ghlLocationId;
+  const ghlOrderId = order.ghlOrderId;
   if (tokens.length === 0) {
     await rescheduleOrderTransactionSync(db, order.id, ORDER_TRANSACTION_ERROR_RETRY_MS);
     console.warn("[order.transactions.no_token]", ghlLocationId, ghlOrderId);
@@ -231,6 +237,127 @@ export async function syncOrderTransactionsFromGhl(
   };
 }
 
+export async function syncOrderTransactionsFromGhl(
+  env: OrderTransactionSyncEnv,
+  params: { ghlLocationId: string; ghlOrderId: string }
+): Promise<OrderTransactionSyncResult> {
+  const db = createDb(env.DATABASE_URL);
+  const ghlLocationId = params.ghlLocationId.trim();
+  const ghlOrderId = params.ghlOrderId.trim();
+  const [order] = await db
+    .select({
+      id: ghlPaymentOrders.id,
+      locationId: ghlPaymentOrders.locationId,
+      ghlOrderId: ghlPaymentOrders.ghlOrderId,
+      ghlLocationId: locations.ghlLocationId,
+      transactionSyncAttempts: ghlPaymentOrders.transactionSyncAttempts
+    })
+    .from(ghlPaymentOrders)
+    .innerJoin(locations, eq(locations.id, ghlPaymentOrders.locationId))
+    .where(and(eq(locations.ghlLocationId, ghlLocationId), eq(ghlPaymentOrders.ghlOrderId, ghlOrderId)))
+    .limit(1);
+
+  if (!order) {
+    return { ok: false, ghlOrderId, reason: "order_not_found" };
+  }
+
+  const tokens = await getAccessTokensForLocation(env, db, ghlLocationId, {
+    preemptiveOAuthRefresh: true
+  });
+  return writeOrderTransactions(env, db, order, tokens);
+}
+
+export type RecentOrderTransactionSyncSummary = {
+  checked: number;
+  ok: number;
+  failed: number;
+  withCollected: number;
+  remainingDue: number;
+  reasons: Record<string, number>;
+};
+
+/** Drain HighLevel transactions for recent orders, one location and one token refresh per call. */
+export async function syncRecentOrderTransactions(
+  env: OrderTransactionSyncEnv,
+  options?: { withinDays?: number; limit?: number }
+): Promise<RecentOrderTransactionSyncSummary> {
+  const withinDays = options?.withinDays ?? 30;
+  const limit = Math.min(Math.max(options?.limit ?? 8, 1), 10);
+  const db = createDb(env.DATABASE_URL);
+  const cutoff = new Date(Date.now() - withinDays * 24 * 60 * 60 * 1000);
+  const empty = { checked: 0, ok: 0, failed: 0, withCollected: 0, remainingDue: 0, reasons: {} };
+
+  const [nextLocation] = await db
+    .select({
+      locationId: ghlPaymentOrders.locationId,
+      ghlLocationId: locations.ghlLocationId
+    })
+    .from(ghlPaymentOrders)
+    .innerJoin(locations, eq(locations.id, ghlPaymentOrders.locationId))
+    .where(dueOrderFilter(cutoff, "recent"))
+    .orderBy(desc(orderRecencySql()))
+    .limit(1);
+
+  if (!nextLocation) return empty;
+
+  const due = await db
+    .select({
+      id: ghlPaymentOrders.id,
+      locationId: ghlPaymentOrders.locationId,
+      ghlOrderId: ghlPaymentOrders.ghlOrderId,
+      ghlLocationId: locations.ghlLocationId,
+      transactionSyncAttempts: ghlPaymentOrders.transactionSyncAttempts
+    })
+    .from(ghlPaymentOrders)
+    .innerJoin(locations, eq(locations.id, ghlPaymentOrders.locationId))
+    .where(and(dueOrderFilter(cutoff, "recent"), eq(ghlPaymentOrders.locationId, nextLocation.locationId)))
+    .orderBy(desc(orderRecencySql()))
+    .limit(limit);
+
+  let tokens: string[] = [];
+  try {
+    tokens = await getAccessTokensForLocation(env, db, nextLocation.ghlLocationId, {
+      preemptiveOAuthRefresh: true
+    });
+  } catch (error) {
+    console.warn("[order.transactions.recent.token_failed]", nextLocation.ghlLocationId, error);
+  }
+
+  const results: OrderTransactionSyncResult[] = [];
+  for (const order of due) {
+    try {
+      results.push(await writeOrderTransactions(env, db, order, tokens));
+    } catch (error) {
+      console.warn("[order.transactions.recent.failed]", order.ghlOrderId, error);
+      results.push({
+        ok: false,
+        ghlOrderId: order.ghlOrderId,
+        reason: error instanceof Error ? error.message : "sync_failed"
+      });
+    }
+  }
+
+  const [remainingRow] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(ghlPaymentOrders)
+    .where(dueOrderFilter(cutoff, "recent"));
+  const reasons: Record<string, number> = {};
+  for (const result of results) {
+    if (result.ok) continue;
+    const reason = result.reason ?? "failed";
+    reasons[reason] = (reasons[reason] ?? 0) + 1;
+  }
+
+  return {
+    checked: results.length,
+    ok: results.filter((result) => result.ok).length,
+    failed: results.filter((result) => !result.ok).length,
+    withCollected: results.filter((result) => (result.collected ?? 0) > 0).length,
+    remainingDue: Number(remainingRow?.n ?? 0),
+    reasons
+  };
+}
+
 export function scheduleOrderTransactionSync(
   ctx: { waitUntil(promise: Promise<unknown>): void },
   env: OrderTransactionSyncEnv,
@@ -245,8 +372,13 @@ export function scheduleOrderTransactionSync(
   ctx.waitUntil(run);
 }
 
-export async function syncDueOrderTransactions(env: OrderTransactionSyncEnv, limit = 4) {
+export async function syncDueOrderTransactions(
+  env: OrderTransactionSyncEnv,
+  limit = 4,
+  options?: { olderThanDays?: number }
+) {
   const db = createDb(env.DATABASE_URL);
+  const cutoff = new Date(Date.now() - (options?.olderThanDays ?? 0) * 24 * 60 * 60 * 1000);
   const due = await db
     .select({
       ghlOrderId: ghlPaymentOrders.ghlOrderId,
@@ -254,13 +386,7 @@ export async function syncDueOrderTransactions(env: OrderTransactionSyncEnv, lim
     })
     .from(ghlPaymentOrders)
     .innerJoin(locations, eq(locations.id, ghlPaymentOrders.locationId))
-    .where(
-      and(
-        isNull(ghlPaymentOrders.transactionSyncedAt),
-        eq(ghlPaymentOrders.isDeleted, false),
-        or(isNull(ghlPaymentOrders.transactionSyncAfter), lte(ghlPaymentOrders.transactionSyncAfter, new Date()))
-      )
-    )
+    .where(options?.olderThanDays ? dueOrderFilter(cutoff, "older") : dueOrderFilter(cutoff, "any"))
     .orderBy(
       sql`(${ghlPaymentOrders.transactionSyncAfter} is null) asc`,
       sql`(

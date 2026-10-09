@@ -156,7 +156,8 @@ import { fetchSelectionLocationRows, rowsToNullableSelectionSet } from "./worksp
 import {
   ORDER_TRANSACTION_SYNC_DELAY_MS,
   scheduleOrderTransactionSync,
-  syncDueOrderTransactions
+  syncDueOrderTransactions,
+  syncRecentOrderTransactions
 } from "./ghl-payment-transactions.js";
 import {
   WORKSPACE_AUDIT_RETENTION_DAYS,
@@ -233,6 +234,8 @@ type Env = {
    * want deploys to pin the value.
    */
   GHL_SAAS_STRIPE_CRON_BATCH?: string;
+  /** Bearer for POST /internal/order-transaction-backfill. Unset disables the route. */
+  ORDER_TX_BACKFILL_TOKEN?: string;
 };
 
 type HonoBindings = {
@@ -378,6 +381,28 @@ app.use(
 );
 
 app.get("/health", (c) => c.json({ ok: true }));
+
+function backfillTokenMatches(provided: string, expected: string) {
+  const encoder = new TextEncoder();
+  const left = encoder.encode(provided);
+  const right = encoder.encode(expected);
+  const length = Math.max(left.length, right.length);
+  let diff = left.length ^ right.length;
+  for (let i = 0; i < length; i += 1) diff |= (left[i] ?? 0) ^ (right[i] ?? 0);
+  return diff === 0;
+}
+
+app.post("/internal/order-transaction-backfill", async (c) => {
+  const expected = c.env.ORDER_TX_BACKFILL_TOKEN?.trim();
+  if (!expected) return c.json({ error: "not_found" }, 404);
+  const header = c.req.header("authorization") ?? "";
+  const provided = header.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
+  if (!provided || !backfillTokenMatches(provided, expected)) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+  const summary = await syncRecentOrderTransactions(c.env, { withinDays: 30, limit: 8 });
+  return c.json(summary);
+});
 
 app.post("/auth/login", authLoginHandler);
 app.get("/auth/me", meHandler);
@@ -6084,8 +6109,12 @@ export default {
     }
 
     try {
-      const summary = await syncDueOrderTransactions(env, 4);
-      console.log("[scheduled.order_transactions]", summary);
+      const recent = await syncRecentOrderTransactions(env, { withinDays: 30, limit: 4 });
+      console.log("[scheduled.order_transactions.recent]", recent);
+      if (recent.checked === 0) {
+        const summary = await syncDueOrderTransactions(env, 4, { olderThanDays: 30 });
+        console.log("[scheduled.order_transactions]", summary);
+      }
     } catch (error) {
       console.warn("[scheduled.order_transactions.failed]", error);
     }
