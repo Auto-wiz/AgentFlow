@@ -28,6 +28,7 @@ export {
 export const ORDER_TRANSACTION_SYNC_DELAY_MS = 45_000;
 export const ORDER_TRANSACTION_EMPTY_RETRY_MS = 3 * 60 * 1000;
 export const ORDER_TRANSACTION_ERROR_RETRY_MS = 5 * 60 * 1000;
+export const ORDER_TRANSACTION_AUTH_RETRY_MS = 6 * 60 * 60 * 1000;
 export const ORDER_TRANSACTION_MAX_EMPTY_ATTEMPTS = 3;
 const TRANSACTION_PAGE_SIZE = 100;
 const TRANSACTION_MAX_PAGES = 3;
@@ -150,7 +151,7 @@ async function writeOrderTransactions(
   const ghlLocationId = order.ghlLocationId;
   const ghlOrderId = order.ghlOrderId;
   if (tokens.length === 0) {
-    await rescheduleOrderTransactionSync(db, order.id, ORDER_TRANSACTION_ERROR_RETRY_MS);
+    await rescheduleOrderTransactionSync(db, order.id, ORDER_TRANSACTION_AUTH_RETRY_MS);
     console.warn("[order.transactions.no_token]", ghlLocationId, ghlOrderId);
     return { ok: false, ghlOrderId, reason: "no_token" };
   }
@@ -162,7 +163,8 @@ async function writeOrderTransactions(
   }
 
   if (!listed?.ok) {
-    await rescheduleOrderTransactionSync(db, order.id, ORDER_TRANSACTION_ERROR_RETRY_MS);
+    const delay = listed?.authError ? ORDER_TRANSACTION_AUTH_RETRY_MS : ORDER_TRANSACTION_ERROR_RETRY_MS;
+    await rescheduleOrderTransactionSync(db, order.id, delay);
     console.warn("[order.transactions.lookup_failed]", ghlOrderId, listed?.reason ?? "request_failed");
     return { ok: false, ghlOrderId, reason: listed?.reason ?? "request_failed" };
   }

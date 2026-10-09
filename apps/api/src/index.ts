@@ -234,8 +234,6 @@ type Env = {
    * want deploys to pin the value.
    */
   GHL_SAAS_STRIPE_CRON_BATCH?: string;
-  /** Bearer for POST /internal/order-transaction-backfill. Unset disables the route. */
-  ORDER_TX_BACKFILL_TOKEN?: string;
 };
 
 type HonoBindings = {
@@ -381,30 +379,6 @@ app.use(
 );
 
 app.get("/health", (c) => c.json({ ok: true }));
-
-function backfillTokenMatches(provided: string, expected: string) {
-  const encoder = new TextEncoder();
-  const left = encoder.encode(provided);
-  const right = encoder.encode(expected);
-  const length = Math.max(left.length, right.length);
-  let diff = left.length ^ right.length;
-  for (let i = 0; i < length; i += 1) diff |= (left[i] ?? 0) ^ (right[i] ?? 0);
-  return diff === 0;
-}
-
-app.post("/internal/order-transaction-backfill", async (c) => {
-  const expected = c.env.ORDER_TX_BACKFILL_TOKEN?.trim();
-  if (!expected) return c.json({ error: "not_found" }, 404);
-  const header = c.req.header("authorization") ?? "";
-  const provided = header.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
-  if (!provided || !backfillTokenMatches(provided, expected)) {
-    return c.json({ error: "unauthorized" }, 401);
-  }
-  const requested = Number(c.req.query("limit") ?? "8");
-  const limit = Number.isFinite(requested) ? requested : 8;
-  const summary = await syncRecentOrderTransactions(c.env, { withinDays: 30, limit });
-  return c.json(summary);
-});
 
 app.post("/auth/login", authLoginHandler);
 app.get("/auth/me", meHandler);
