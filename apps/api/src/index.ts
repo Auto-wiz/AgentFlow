@@ -152,6 +152,12 @@ import {
   getCompanyOAuthInstallationForLocation,
   refreshOAuthAccessTokensForLocation
 } from "./ghl-oauth-location-token.js";
+import {
+  discoverInstalledGhlLocations,
+  mintMissingLocationOAuthTokens,
+  refreshExpiredLocationOAuthTokens,
+  syncAuthorizedDueOrders
+} from "./ghl-location-token-mint.js";
 import { fetchSelectionLocationRows, rowsToNullableSelectionSet } from "./workspace-selection-db.js";
 import {
   ORDER_TRANSACTION_SYNC_DELAY_MS,
@@ -188,6 +194,10 @@ type Env = {
   GHL_API_BASE_URL?: string;
   GHL_CLIENT_ID?: string;
   GHL_CLIENT_SECRET?: string;
+  /** Dev-only gate for POST /internal/ghl-location-tokens. Unset in production. */
+  MINT_LOCATION_TOKENS_ONLY?: string;
+  /** Locations per cron tick that still need a location token. "0" disables. Default 4. */
+  MINT_LOCATION_TOKENS_BATCH?: string;
   GHL_APP_ID?: string;
   GHL_INSTALL_URL?: string;
   /**
@@ -379,6 +389,54 @@ app.use(
 );
 
 app.get("/health", (c) => c.json({ ok: true }));
+
+app.post("/internal/ghl-location-tokens", async (c) => {
+  if (c.env.MINT_LOCATION_TOKENS_ONLY !== "1") {
+    return c.json({ error: "not_found" }, 404);
+  }
+  const requestedPhase = c.req.query("phase");
+  const phase =
+    requestedPhase === "discover" || requestedPhase === "refresh" || requestedPhase === "sync"
+      ? requestedPhase
+      : "mint";
+  const limit = Number.parseInt(String(c.req.query("limit") ?? ""), 10);
+  if (phase === "refresh") {
+    const summary = await refreshExpiredLocationOAuthTokens(c.env, {
+      limit: Number.isFinite(limit) ? limit : 4,
+      after: c.req.query("after") ?? null,
+      locationId: c.req.query("locationId") ?? null
+    });
+    return c.json(summary);
+  }
+  if (phase === "sync") {
+    const perLocation = Number.parseInt(String(c.req.query("perLocation") ?? "4"), 10);
+    const summary = await syncAuthorizedDueOrders(c.env, {
+      locationLimit: Number.isFinite(limit) ? limit : 2,
+      perLocation: Number.isFinite(perLocation) ? perLocation : 4
+    });
+    return c.json(summary);
+  }
+  if (phase === "discover") {
+    const skip = Number.parseInt(String(c.req.query("skip") ?? "0"), 10);
+    const summary = await discoverInstalledGhlLocations(c.env, {
+      companyId: c.req.query("companyId") ?? undefined,
+      skip: Number.isFinite(skip) ? skip : 0,
+      limit: Number.isFinite(limit) ? limit : 20
+    });
+    return c.json(summary);
+  }
+  const slot = Number.parseInt(String(c.req.query("slot") ?? ""), 10);
+  const syncOrderBudget = Number.parseInt(String(c.req.query("syncOrders") ?? "4"), 10);
+  const scope = c.req.query("scope") === "unsynced" ? "unsynced" : "all";
+  const summary = await mintMissingLocationOAuthTokens(c.env, {
+    limit: Number.isFinite(limit) ? limit : 4,
+    after: c.req.query("after") ?? null,
+    slot: Number.isFinite(slot) ? slot : undefined,
+    scope,
+    syncOrderBudget: Number.isFinite(syncOrderBudget) ? syncOrderBudget : 4
+  });
+  return c.json(summary);
+});
 
 app.post("/auth/login", authLoginHandler);
 app.get("/auth/me", meHandler);
@@ -6082,6 +6140,57 @@ export default {
       await pruneWorkspaceAuditLogs(adb, WORKSPACE_AUDIT_RETENTION_DAYS);
     } catch (error) {
       console.warn("[scheduled.workspace_audit_prune.failed]", error);
+    }
+
+    try {
+      const refreshed = await refreshExpiredLocationOAuthTokens(env, { limit: 6 });
+      console.log("[scheduled.location_tokens.refresh]", {
+        ok: refreshed.ok,
+        refreshed: refreshed.refreshed,
+        failed: refreshed.failed,
+        remaining: refreshed.remaining
+      });
+    } catch (error) {
+      console.warn("[scheduled.location_tokens.refresh.failed]", error);
+    }
+
+    try {
+      const mintRaw = env.MINT_LOCATION_TOKENS_BATCH?.trim();
+      const mintParsed = mintRaw === "0" ? 0 : Number.parseInt(mintRaw || "4", 10);
+      if (Number.isFinite(mintParsed) && mintParsed > 0) {
+        const summary = await mintMissingLocationOAuthTokens(env, {
+          limit: Math.min(8, mintParsed),
+          slot: Math.floor(Date.now() / (15 * 60 * 1000)),
+          scope: "all",
+          syncOrderBudget: 4
+        });
+        console.log("[scheduled.location_tokens]", {
+          ok: summary.ok,
+          minted: summary.minted,
+          failed: summary.failed,
+          remaining: summary.remaining,
+          ordersSynced: summary.ordersSynced,
+          companyRefresh: summary.companyRefresh
+        });
+        if (summary.companyRefresh.some((row) => row.ok)) {
+          const discovered = await discoverInstalledGhlLocations(env, {
+            skip: (Math.floor(Date.now() / (15 * 60 * 1000)) % 30) * 10,
+            limit: 10
+          });
+          console.log("[scheduled.location_tokens.discover]", {
+            ok: discovered.ok,
+            companies: discovered.companies.map((company) => ({
+              companyId: company.companyId,
+              status: company.status,
+              fetched: company.fetched,
+              added: company.added,
+              message: company.message
+            }))
+          });
+        }
+      }
+    } catch (error) {
+      console.warn("[scheduled.location_tokens.failed]", error);
     }
 
     try {

@@ -239,6 +239,80 @@ async function writeOrderTransactions(
   };
 }
 
+function safeOrderSyncFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : "sync_failed";
+  if (message.includes("Too many subrequests")) return "worker_subrequest_limit";
+  if (message.startsWith("Failed query:")) return "database_write_failed";
+  return message.slice(0, 160);
+}
+
+/** Sync a few due orders for one subaccount using the location token already on file. */
+export async function syncDueOrdersForLocation(
+  env: OrderTransactionSyncEnv,
+  ghlLocationId: string,
+  limit: number
+): Promise<{ checked: number; ok: number; failed: number; reasons: Record<string, number> }> {
+  const db = createDb(env.DATABASE_URL);
+  const capped = Math.min(Math.max(limit, 0), 8);
+  const empty = { checked: 0, ok: 0, failed: 0, reasons: {} as Record<string, number> };
+  if (capped === 0) return empty;
+
+  const due = await db
+    .select({
+      id: ghlPaymentOrders.id,
+      locationId: ghlPaymentOrders.locationId,
+      ghlOrderId: ghlPaymentOrders.ghlOrderId,
+      ghlLocationId: locations.ghlLocationId,
+      transactionSyncAttempts: ghlPaymentOrders.transactionSyncAttempts
+    })
+    .from(ghlPaymentOrders)
+    .innerJoin(locations, eq(locations.id, ghlPaymentOrders.locationId))
+    .where(
+      and(
+        eq(locations.ghlLocationId, ghlLocationId),
+        isNull(ghlPaymentOrders.transactionSyncedAt),
+        eq(ghlPaymentOrders.isDeleted, false),
+        or(isNull(ghlPaymentOrders.transactionSyncAfter), lte(ghlPaymentOrders.transactionSyncAfter, new Date()))
+      )
+    )
+    .orderBy(desc(orderRecencySql()))
+    .limit(capped);
+
+  if (due.length === 0) return empty;
+
+  let tokens: string[] = [];
+  try {
+    tokens = await getAccessTokensForLocation(env, db, ghlLocationId, {
+      preemptiveOAuthRefresh: false
+    });
+  } catch (error) {
+    console.warn("[order.transactions.location.token_failed]", ghlLocationId, error);
+  }
+
+  const reasons: Record<string, number> = {};
+  let ok = 0;
+  let failed = 0;
+  for (const order of due) {
+    try {
+      const result = await writeOrderTransactions(env, db, order, tokens);
+      if (result.ok) {
+        ok += 1;
+      } else {
+        failed += 1;
+        const reason = result.reason ?? "failed";
+        reasons[reason] = (reasons[reason] ?? 0) + 1;
+      }
+    } catch (error) {
+      failed += 1;
+      const reason = safeOrderSyncFailure(error);
+      reasons[reason] = (reasons[reason] ?? 0) + 1;
+      console.warn("[order.transactions.location.failed]", order.ghlOrderId, reason);
+    }
+  }
+
+  return { checked: due.length, ok, failed, reasons };
+}
+
 export async function syncOrderTransactionsFromGhl(
   env: OrderTransactionSyncEnv,
   params: { ghlLocationId: string; ghlOrderId: string }
