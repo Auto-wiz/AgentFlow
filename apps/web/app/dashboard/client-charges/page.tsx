@@ -28,7 +28,7 @@ type CanonicalDeposit = {
   externalId: string;
   amount: number;
   currency: string;
-  matchedBy: "direct_appointment_order" | "correlated_order" | "correlated_invoice";
+  matchedBy: "collected_order" | "collected_invoice";
   paidAt: string | null;
 };
 
@@ -175,7 +175,7 @@ function overviewEmptyMessage(view: OverviewAccountView, hasSearch: boolean): st
     return `No eligible subaccounts have pending charges in this period${searchSuffix}`;
   }
   if (view === "activity") {
-    return `No eligible subaccounts have billable appointments in this period${searchSuffix}`;
+    return `No eligible subaccounts have collected payments in this period${searchSuffix}`;
   }
   return `No eligible subaccounts${searchSuffix}`;
 }
@@ -224,14 +224,7 @@ function depositChargeCurrency(row: ClientChargeRow) {
 }
 
 function depositSourceLabel(deposit: CanonicalDeposit) {
-  const kind = deposit.kind === "invoice" ? "Invoice" : "Payment order";
-  const match =
-    deposit.matchedBy === "direct_appointment_order"
-      ? "direct"
-      : deposit.matchedBy === "correlated_order"
-        ? "correlated order"
-        : "correlated invoice";
-  return `${kind} · ${match}`;
+  return deposit.kind === "invoice" ? "Invoice" : "Payment order";
 }
 
 function stripeBillingStatusLabel(loc: BillingLocationConfig) {
@@ -391,13 +384,13 @@ function ClientChargesLocationDetail({
       };
       if (token !== reloadTokenRef.current) return;
       if (!res.ok) {
-        throw new Error(payload.message ?? payload.error ?? "Unable to load appointments");
+        throw new Error(payload.message ?? payload.error ?? "Unable to load payments");
       }
       setData(payload);
     } catch (caught) {
       if (token !== reloadTokenRef.current) return;
       setData(null);
-      setError(caught instanceof Error ? caught.message : "Unable to load appointments");
+      setError(caught instanceof Error ? caught.message : "Unable to load payments");
     } finally {
       if (token === reloadTokenRef.current) {
         setLoading(false);
@@ -431,16 +424,16 @@ function ClientChargesLocationDetail({
       >
         <div style={{ flex: "1 1 200px", maxWidth: 360 }}>
           <label className="appointments-filter-label" htmlFor={`client-charges-detail-search-${locationId}`}>
-            Search appointments
+            Search payments
           </label>
           <input
-            aria-label="Filter appointments by contact or title"
+            aria-label="Filter payments by contact or source"
             autoCapitalize="off"
             autoComplete="off"
             className="appointments-filter-select"
             id={`client-charges-detail-search-${locationId}`}
             onChange={(e) => setSearchDraft(e.target.value)}
-            placeholder="Contact, appointment…"
+            placeholder="Contact, payment…"
             spellCheck={false}
             style={{ display: "block", marginTop: 6, width: "100%" }}
             type="search"
@@ -470,14 +463,14 @@ function ClientChargesLocationDetail({
         </div>
       </div>
 
-      {loading ? <p className="muted">Loading appointments…</p> : null}
+      {loading ? <p className="muted">Loading payments…</p> : null}
       {error ? <p className="empty">{error}</p> : null}
 
       {!loading && data ? (
         <>
           {pagination ? (
             <p className="muted" style={{ marginBottom: 8, marginTop: 0 }}>
-              <strong>{pagination.totalRows}</strong> appointment{pagination.totalRows === 1 ? "" : "s"}
+              <strong>{pagination.totalRows}</strong> payment{pagination.totalRows === 1 ? "" : "s"}
               {statusFilter !== "all" ? ` · status “${statusFilter}”` : ""}
               {debouncedQ ? ` · search: "${debouncedQ}"` : ""}.
             </p>
@@ -486,7 +479,7 @@ function ClientChargesLocationDetail({
             <table className="dashboard-table dashboard-table-nested-compact">
               <thead>
                 <tr>
-                  <th scope="col">Appointment / contact</th>
+                  <th scope="col">Payment / contact</th>
                   <th scope="col">Deposit source</th>
                   <th className="dashboard-th-actions" scope="col">
                     Deposit (charge amount)
@@ -504,7 +497,7 @@ function ClientChargesLocationDetail({
                   <tr>
                     <td colSpan={isAdmin ? 5 : 4}>
                       <p className="muted" style={{ margin: "8px 0" }}>
-                        No billable results in this period
+                        No collected payments in this period
                         {statusFilter !== "all" ? ` for status “${statusFilter}”` : ""}.
                       </p>
                     </td>
@@ -522,9 +515,7 @@ function ClientChargesLocationDetail({
                           <div>{row.appointmentTitle?.trim() || row.ghlAppointmentId}</div>
                           <div className="muted">
                             {row.contactName?.trim() || row.contactEmail?.trim() || "No contact"}
-                            {row.appointmentStartTime
-                              ? ` · ${formatWhen(row.appointmentStartTime)}`
-                              : ` · booked ${formatWhen(row.appointmentBookedAt)}`}
+                            {` · paid ${formatWhen(row.appointmentBookedAt)}`}
                           </div>
                         </td>
                         <td>
@@ -1244,7 +1235,7 @@ function formatGhlSyncFailureMessage(payload: {
           <div className="panel dashboard-kpi-panel">
             <p className="dashboard-kpi-eyebrow">Eligible results</p>
             <p className="dashboard-kpi-value">{totals.eligibleCount}</p>
-            <p className="muted dashboard-kpi-sub">Paid appointments in enabled locations</p>
+            <p className="muted dashboard-kpi-sub">Collected payments in enabled locations</p>
           </div>
           <div className="panel dashboard-kpi-panel">
             <p className="dashboard-kpi-eyebrow">Charged</p>
@@ -1337,7 +1328,7 @@ function formatGhlSyncFailureMessage(payload: {
           ) : null}
         </p>
         <p className="muted" style={{ marginBottom: 0, marginTop: 6 }}>
-          All eligible lists every subaccount with Client Charges enabled, even if this period has no appointments.
+          All eligible lists every subaccount with Client Charges enabled, even if this period has no collected payments.
           Use To charge for accounts that still have something to bill.
         </p>
       </div>
@@ -1446,7 +1437,7 @@ function formatGhlSyncFailureMessage(payload: {
                     <td>
                       <button
                         aria-expanded={expandedLocationId === row.locationId}
-                        aria-label={`${expandedLocationId === row.locationId ? "Collapse" : "Expand"} appointments for ${locationLabel(row)}`}
+                        aria-label={`${expandedLocationId === row.locationId ? "Collapse" : "Expand"} payments for ${locationLabel(row)}`}
                         className="dashboard-subaccount-expand"
                         onClick={() => toggleRowDetail(row.locationId)}
                         type="button"
@@ -1764,7 +1755,7 @@ function formatGhlSyncFailureMessage(payload: {
               </div>
               <div>
                 <dt className="muted" style={{ margin: 0 }}>
-                  Appointment
+                  Payment
                 </dt>
                 <dd style={{ margin: "2px 0 0" }}>
                   {confirmRow.appointmentTitle?.trim() || confirmRow.ghlAppointmentId}
