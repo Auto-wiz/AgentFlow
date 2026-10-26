@@ -4,6 +4,7 @@ import { and, desc, eq, or, sql } from "drizzle-orm";
 
 import { ghlJwtScopeIncludesSaas, pickCompanyTypedAccessTokens } from "./ghl-access-token-claims.js";
 import { pickFirstUsableGhlCompanyId, usableGhlCompanyId } from "./ghl-company-id.js";
+import { sanitizeGhlOAuthError } from "./ghl-oauth-error.js";
 
 /** Bindings touched by OAuth token retrieval (compatible with Workers `Env` in index.ts). */
 export type GhlOAuthTokenEnv = {
@@ -41,14 +42,28 @@ export function addSecondsToNow(seconds: number) {
   return new Date(Date.now() + safeSeconds * 1000);
 }
 
-async function exchangeLocationAccessTokenFromCompanyToken(
+export type ExchangedLocationToken = {
+  accessToken: string;
+  refreshToken: string | null;
+  tokenType: string;
+  expiresIn: number;
+  scope: string | null;
+  userId: string | null;
+  raw: Record<string, any>;
+};
+
+export type LocationTokenExchangeResult =
+  | { ok: true; token: ExchangedLocationToken }
+  | { ok: false; status: number; message: string };
+
+export async function exchangeCompanyTokenForLocation(
   env: GhlOAuthTokenEnv,
   params: {
     companyId: string;
     ghlLocationId: string;
     companyAccessToken: string;
   }
-) {
+): Promise<LocationTokenExchangeResult> {
   const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
   const requestBody = new URLSearchParams({
     companyId: params.companyId,
@@ -68,29 +83,45 @@ async function exchangeLocationAccessTokenFromCompanyToken(
     });
     const raw = asRecord(await response.json().catch(() => ({}))) ?? {};
     if (!response.ok) {
-      return null;
+      return { ok: false, status: response.status, message: sanitizeGhlOAuthError(response.status, raw) };
     }
 
     const accessToken = stringOrNull(raw.access_token ?? raw.accessToken);
     if (!accessToken) {
-      return null;
+      return { ok: false, status: response.status, message: "missing_access_token" };
     }
 
     return {
-      accessToken,
-      refreshToken: stringOrNull(raw.refresh_token ?? raw.refreshToken),
-      tokenType: stringOrNull(raw.token_type ?? raw.tokenType) ?? "Bearer",
-      expiresIn: Number(raw.expires_in ?? raw.expiresIn ?? 86400),
-      scope: stringOrNull(raw.scope),
-      userId: stringOrNull(raw.userId ?? raw.user_id),
-      raw
+      ok: true,
+      token: {
+        accessToken,
+        refreshToken: stringOrNull(raw.refresh_token ?? raw.refreshToken),
+        tokenType: stringOrNull(raw.token_type ?? raw.tokenType) ?? "Bearer",
+        expiresIn: Number(raw.expires_in ?? raw.expiresIn ?? 86400),
+        scope: stringOrNull(raw.scope),
+        userId: stringOrNull(raw.userId ?? raw.user_id),
+        raw
+      }
     };
-  } catch {
-    return null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "location_token_request_failed";
+    return { ok: false, status: 0, message: sanitizeGhlOAuthError(0, { message }) };
   }
 }
 
-async function upsertLocationOAuthInstallationFromExchange(
+async function exchangeLocationAccessTokenFromCompanyToken(
+  env: GhlOAuthTokenEnv,
+  params: {
+    companyId: string;
+    ghlLocationId: string;
+    companyAccessToken: string;
+  }
+) {
+  const exchanged = await exchangeCompanyTokenForLocation(env, params);
+  return exchanged.ok ? exchanged.token : null;
+}
+
+export async function upsertLocationOAuthInstallationFromExchange(
   db: AgentFlowDb,
   params: {
     companyId: string;
@@ -274,15 +305,19 @@ export function normalizeOAuthUserType(value: string | null) {
   return "Company";
 }
 
-export async function refreshGhlAccessTokenWithRefreshToken(
+export type GhlTokenRefreshResult =
+  | { ok: true; accessToken: string; refreshToken: string; expiresIn: number }
+  | { ok: false; status: number; message: string };
+
+export async function refreshGhlAccessTokenDetailed(
   env: GhlOAuthRefreshCredentialEnv,
   refreshToken: string,
   installationUserType: string | null
-) {
+): Promise<GhlTokenRefreshResult> {
   const clientId = env.GHL_CLIENT_ID?.trim();
   const clientSecret = env.GHL_CLIENT_SECRET?.trim();
   if (!clientId || !clientSecret) {
-    return null;
+    return { ok: false, status: 0, message: "missing_client_credentials" };
   }
 
   const baseUrl = env.GHL_API_BASE_URL ?? "https://services.leadconnectorhq.com";
@@ -291,6 +326,7 @@ export async function refreshGhlAccessTokenWithRefreshToken(
   );
   const fallbackUserType = configuredUserType === "Company" ? "Location" : "Company";
   const userTypeAttempts = [configuredUserType, fallbackUserType];
+  let lastFailure: GhlTokenRefreshResult = { ok: false, status: 0, message: "refresh_failed" };
 
   for (const userType of userTypeAttempts) {
     const requestBody = new URLSearchParams({
@@ -311,23 +347,46 @@ export async function refreshGhlAccessTokenWithRefreshToken(
       });
       const raw = asRecord(await response.json().catch(() => ({}))) ?? {};
       if (!response.ok) {
+        lastFailure = {
+          ok: false,
+          status: response.status,
+          message: sanitizeGhlOAuthError(response.status, raw)
+        };
+        console.warn("[ghl.oauth.refresh.failed]", userType, lastFailure.status, lastFailure.message);
         continue;
       }
       const nextAccessToken = stringOrNull(raw.access_token ?? raw.accessToken);
       if (!nextAccessToken) {
+        lastFailure = { ok: false, status: response.status, message: "missing_access_token" };
         continue;
       }
       return {
+        ok: true,
         accessToken: nextAccessToken,
         refreshToken: stringOrNull(raw.refresh_token ?? raw.refreshToken) ?? refreshToken,
         expiresIn: Number(raw.expires_in ?? raw.expiresIn ?? 86400)
       };
-    } catch {
-      continue;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "refresh_request_failed";
+      lastFailure = { ok: false, status: 0, message: sanitizeGhlOAuthError(0, { message }) };
     }
   }
 
-  return null;
+  return lastFailure;
+}
+
+export async function refreshGhlAccessTokenWithRefreshToken(
+  env: GhlOAuthRefreshCredentialEnv,
+  refreshToken: string,
+  installationUserType: string | null
+) {
+  const refreshed = await refreshGhlAccessTokenDetailed(env, refreshToken, installationUserType);
+  if (!refreshed.ok) return null;
+  return {
+    accessToken: refreshed.accessToken,
+    refreshToken: refreshed.refreshToken,
+    expiresIn: refreshed.expiresIn
+  };
 }
 
 /**
@@ -393,12 +452,26 @@ export async function refreshOAuthAccessTokensForLocation(
     installations.push(installation);
   }
 
+  const companyRefreshTokens = new Set(
+    installations
+      .filter((row) => row.userType === "Company")
+      .map((row) => row.refreshToken?.trim())
+      .filter((token): token is string => Boolean(token))
+  );
+  const seenRefreshTokens = new Set<string>();
   let refreshedCount = 0;
   for (const installation of installations) {
     const rt = installation.refreshToken?.trim();
-    if (!rt) {
+    if (!rt || seenRefreshTokens.has(rt)) {
       continue;
     }
+    // A location row sometimes stores the agency refresh token when HighLevel
+    // omits a location refresh token. Refreshing that copy rotates the agency
+    // credential and leaves the company row with a dead refresh token.
+    if (installation.userType === "Location" && companyRefreshTokens.has(rt)) {
+      continue;
+    }
+    seenRefreshTokens.add(rt);
     const refreshed = await refreshGhlAccessTokenWithRefreshToken(env, rt, installation.userType);
     if (!refreshed) {
       continue;
