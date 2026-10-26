@@ -33,7 +33,7 @@ describe("client charges location display names", () => {
     assert.equal(catalogNamePreservingStored(null, "Hitesh from OYESPA LLC"), "Hitesh from OYESPA LLC");
   });
 
-  it("refreshes existing names on Client Charges, not only blanks", () => {
+  it("refreshes an existing name only when a caller asks to replace stored labels", () => {
     assert.equal(locationNameNeedsGhlRefresh("Lacy Messinger's Account", true), true);
     assert.equal(locationNameNeedsGhlRefresh("Lacy Messinger's Account", false), false);
     assert.equal(locationNameNeedsGhlRefresh(null, false), true);

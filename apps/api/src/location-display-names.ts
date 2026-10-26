@@ -76,7 +76,7 @@ export async function fetchGhlLocationDisplayName(
 
 /**
  * Overlay (and persist) GHL Location API display names onto a small result set.
- * Client Charges uses `refreshExisting: true` so renamed subaccounts replace stale DB labels.
+ * Cron and explicit sync use this. Client Charges reads the stored name so a page load stays inside the Worker subrequest budget.
  */
 export async function refreshLocationDisplayNames(
   env: GhlOAuthTokenEnv,
