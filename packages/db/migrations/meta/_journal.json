@@ -102,6 +102,13 @@
       "when": 1786147200000,
       "tag": "0018_ghl_payment_transactions",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786320000000,
+      "tag": "0019_client_charges_by_payment",
+      "breakpoints": true
     }
   ]
 }

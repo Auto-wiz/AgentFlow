@@ -6,7 +6,7 @@ import {
   locations
 } from "@agentflow/db";
 import { AUDIT_ACTION_KINDS, canAccessClientCharges } from "@agentflow/shared";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
 import type { Context } from "hono";
 
 import { createStripeClientCharge, type ClientChargeStripeEnv } from "./client-charges-stripe.js";
@@ -313,11 +313,12 @@ async function writeChargeOutcome(params: {
     amountMajor: charge.chargeAmount,
     currency: charge.chargeCurrency,
     idempotencyKey: charge.idempotencyKey,
-    description: `Result billing for appointment ${candidate.ghlAppointmentId}`,
+    description: `Result billing for collected payment ${candidate.deposit.externalId}`,
     metadata: {
-      appointmentId: candidate.appointmentId,
+      sourceKind: candidate.deposit.kind,
+      sourceId: candidate.deposit.id,
+      externalId: candidate.deposit.externalId,
       locationId: candidate.locationId,
-      ghlAppointmentId: candidate.ghlAppointmentId,
       ghlLocationId: locationRow.ghlLocationId
     }
   });
@@ -353,9 +354,10 @@ async function writeChargeOutcome(params: {
       entityType: "client_result_charge",
       entityId: charge.id,
       locationId: candidate.locationId,
-      summary: `Charged ${charge.chargeAmount} ${charge.chargeCurrency} for paid appointment`,
+      summary: `Charged ${charge.chargeAmount} ${charge.chargeCurrency} for a collected payment`,
       details: {
-        appointmentId: candidate.appointmentId,
+        sourceId: candidate.deposit.id,
+        sourceKind: candidate.deposit.kind,
         canonicalDeposit: candidate.deposit,
         stripePaymentIntentId: result.paymentIntentId,
         stripeChargeId: result.chargeId
@@ -403,7 +405,8 @@ async function writeChargeOutcome(params: {
     locationId: candidate.locationId,
     summary: `${result.ambiguous ? "Ambiguous" : "Failed"} client charge (${charge.chargeAmount} ${charge.chargeCurrency})`,
     details: {
-      appointmentId: candidate.appointmentId,
+      sourceId: candidate.deposit.id,
+      sourceKind: candidate.deposit.kind,
       ambiguous: result.ambiguous,
       error: result.error,
       status: result.status
@@ -488,8 +491,8 @@ async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
       entityType: "client_result_charge",
       entityId: claimed.id,
       locationId: candidate.locationId,
-      summary: `Retried client charge for appointment ${candidate.ghlAppointmentId}`,
-      details: { appointmentId, attemptNumber: claimed.attemptCount }
+      summary: `Retried client charge for payment ${candidate.deposit.externalId}`,
+      details: { sourceId: candidate.deposit.id, sourceKind: candidate.deposit.kind, attemptNumber: claimed.attemptCount }
     });
     const result = await writeChargeOutcome({
       c,
@@ -511,7 +514,7 @@ async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
         message:
           candidate.charge.status === "pending"
             ? "A charge is already pending; it may already have reached Stripe."
-            : "This appointment already has a client charge ledger entry."
+            : "This payment already has a client charge ledger entry."
       },
       candidate.charge.status === "succeeded" ? 200 : 409
     );
@@ -522,12 +525,15 @@ async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
   if (chargeAmount == null) {
     return c.json({ error: "invalid_deposit_amount", message: "Canonical deposit amount must be positive." }, 400);
   }
-  const idempotencyKey = clientChargeIdempotencyKey(candidate.appointmentId);
+  const idempotencyKey = clientChargeIdempotencyKey({
+    kind: candidate.deposit.kind,
+    id: candidate.deposit.id
+  });
   const [claimed] = await db
     .insert(clientResultCharges)
     .values({
       locationId: candidate.locationId,
-      appointmentId: candidate.appointmentId,
+      appointmentId: null,
       depositSourceKind: candidate.deposit.kind,
       paymentOrderId: candidate.deposit.kind === "payment_order" ? candidate.deposit.id : null,
       invoiceId: candidate.deposit.kind === "invoice" ? candidate.deposit.id : null,
@@ -539,8 +545,7 @@ async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
       idempotencyKey,
       requestSnapshot: {
         canonicalDeposit: candidate.deposit,
-        appointmentId: candidate.appointmentId,
-        ghlAppointmentId: candidate.ghlAppointmentId
+        sourceLabel: candidate.appointmentTitle
       },
       responseSnapshot: {},
       attemptCount: 1,
@@ -555,12 +560,19 @@ async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
     const [existing] = await db
       .select()
       .from(clientResultCharges)
-      .where(eq(clientResultCharges.appointmentId, candidate.appointmentId))
+      .where(
+        or(
+          eq(clientResultCharges.idempotencyKey, idempotencyKey),
+          candidate.deposit.kind === "payment_order"
+            ? eq(clientResultCharges.paymentOrderId, candidate.deposit.id)
+            : eq(clientResultCharges.invoiceId, candidate.deposit.id)
+        )
+      )
       .limit(1);
     return c.json(
       {
         error: "charge_claim_conflict",
-        message: "Another request already claimed this appointment.",
+        message: "Another request already claimed this payment.",
         charge: existing ? chargePublicRow(existing) : null
       },
       409
@@ -581,7 +593,11 @@ async function chargeOrRetryHandler(c: Context<Bindings>, isRetry: boolean) {
     entityId: claimed.id,
     locationId: candidate.locationId,
     summary: `Requested ${claimed.chargeAmount} ${claimed.chargeCurrency} client charge`,
-    details: { appointmentId, canonicalDeposit: candidate.deposit }
+    details: {
+      sourceId: candidate.deposit.id,
+      sourceKind: candidate.deposit.kind,
+      canonicalDeposit: candidate.deposit
+    }
   });
 
   const result = await writeChargeOutcome({

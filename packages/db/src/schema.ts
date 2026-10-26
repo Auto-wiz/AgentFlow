@@ -695,7 +695,7 @@ export const locationBillingConfig = pgTable(
   })
 );
 
-/** One idempotent pay-per-result charge per paid appointment. */
+/** One idempotent pay-per-result charge per collected payment (order or invoice). */
 export const clientResultCharges = pgTable(
   "client_result_charges",
   {
@@ -705,9 +705,8 @@ export const clientResultCharges = pgTable(
     locationId: uuid("location_id")
       .notNull()
       .references(() => locations.id, { onDelete: "restrict" }),
-    appointmentId: uuid("appointment_id")
-      .notNull()
-      .references(() => appointments.id, { onDelete: "restrict" }),
+    /** Set for charges created when the dashboard still keyed rows by appointment. */
+    appointmentId: uuid("appointment_id").references(() => appointments.id, { onDelete: "restrict" }),
     depositSourceKind: text("deposit_source_kind").notNull(),
     paymentOrderId: uuid("payment_order_id").references(() => ghlPaymentOrders.id, {
       onDelete: "restrict"
@@ -743,7 +742,15 @@ export const clientResultCharges = pgTable(
     reversedAt: timestamp("reversed_at", { withTimezone: true })
   },
   (table) => ({
-    appointmentUnique: uniqueIndex("client_result_charges_appointment_unique").on(table.appointmentId),
+    appointmentUnique: uniqueIndex("client_result_charges_appointment_unique")
+      .on(table.appointmentId)
+      .where(sql`${table.appointmentId} is not null`),
+    paymentOrderUnique: uniqueIndex("client_result_charges_payment_order_unique")
+      .on(table.paymentOrderId)
+      .where(sql`${table.paymentOrderId} is not null`),
+    invoiceUnique: uniqueIndex("client_result_charges_invoice_unique")
+      .on(table.invoiceId)
+      .where(sql`${table.invoiceId} is not null`),
     idempotencyUnique: uniqueIndex("client_result_charges_idempotency_unique").on(table.idempotencyKey),
     locationCreatedIdx: index("client_result_charges_location_created_idx").on(
       table.locationId,

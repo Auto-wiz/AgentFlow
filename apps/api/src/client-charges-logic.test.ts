@@ -93,10 +93,20 @@ describe("amount and currency validation", () => {
 });
 
 describe("idempotency and retry gates", () => {
-  it("builds a stable appointment-scoped idempotency key", () => {
+  it("builds a stable idempotency key per collected order or invoice", () => {
     assert.equal(
-      clientChargeIdempotencyKey(" 11111111-1111-4111-8111-111111111111 "),
-      "agentflow-result-11111111-1111-4111-8111-111111111111"
+      clientChargeIdempotencyKey({
+        kind: "payment_order",
+        id: " 11111111-1111-4111-8111-111111111111 "
+      }),
+      "agentflow-result-order-11111111-1111-4111-8111-111111111111"
+    );
+    assert.equal(
+      clientChargeIdempotencyKey({
+        kind: "invoice",
+        id: "22222222-2222-4222-8222-222222222222"
+      }),
+      "agentflow-result-invoice-22222222-2222-4222-8222-222222222222"
     );
   });
 

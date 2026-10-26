@@ -49,8 +49,24 @@ export function isChargeActionDisabled(status: string | null | undefined): boole
   return s === "succeeded" || s === "pending";
 }
 
-export function clientChargeIdempotencyKey(appointmentId: string): string {
-  return `agentflow-result-${appointmentId.trim()}`;
+/**
+ * How close an invoice and a collected order must be, for the same contact and amount,
+ * before Client Charges treats them as one payment.
+ */
+export const COLLECTED_PAYMENT_MIRROR_WINDOW_SECONDS = 48 * 60 * 60;
+
+/**
+ * Ledger key for a collected payment. Legacy rows used `agentflow-result-${appointmentId}`
+ * and stay unique on their own; new charges key off the order or invoice so a second
+ * contact email cannot open a second charge for the same money.
+ */
+export function clientChargeIdempotencyKey(target: {
+  kind: "payment_order" | "invoice";
+  id: string;
+}): string {
+  const id = target.id.trim();
+  const prefix = target.kind === "invoice" ? "agentflow-result-invoice" : "agentflow-result-order";
+  return `${prefix}-${id}`;
 }
 
 /** Label for “charged by” in UI — prefers display name, then email local-part. */

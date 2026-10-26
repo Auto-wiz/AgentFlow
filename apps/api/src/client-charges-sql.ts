@@ -1,18 +1,19 @@
 import {
-  appointments,
   clientResultCharges,
   contacts,
   createDb,
+  ghlPaymentOrders,
+  invoices,
   locationBillingConfig,
   locations,
-  workspaceUsers
+  paymentSources
 } from "@agentflow/db";
-import { and, asc, eq, gte, inArray, lt, not, notInArray, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 
-import { appointmentCancelledOnlySql } from "./appointment-payment-sql.js";
 import {
   chargeActorDisplayName,
+  COLLECTED_PAYMENT_MIRROR_WINDOW_SECONDS,
   emptyOverviewAccountRow,
   overviewAccountMatchesView,
   type OverviewAccountView
@@ -27,7 +28,7 @@ export type CanonicalDepositEvidence = {
   externalId: string;
   amount: number;
   currency: string;
-  matchedBy: "direct_appointment_order" | "correlated_order" | "correlated_invoice";
+  matchedBy: "collected_order" | "collected_invoice";
   paidAt: string | null;
 };
 
@@ -122,7 +123,7 @@ export type ClientChargeFetchParams = {
   appointmentId?: string;
   query?: string;
   status?: "all" | "unbilled" | "pending" | "succeeded" | "failed";
-  /** Overview search: match location name/id only (not appointment fields). */
+  /** Overview search: match location name/id only (not payment fields). */
   subaccountQueryOnly?: boolean;
 };
 
@@ -182,214 +183,357 @@ function matchesSubaccountQuery(
   return haystack.includes(needle);
 }
 
-/** Sum of collected transaction amounts for one stored order. Zero means the client did not pay. */
-function collectedOrderAmountSql(orderAlias: "direct_order" | "correlated_order") {
+/** Net collected amount for one order. Zero means nothing entered the account. */
+function collectedAmountSql(orderId: SQL): SQL {
   const statuses = COLLECTED_TRANSACTION_STATUSES.map((status) => sql`${status}`);
   return sql`(
     select coalesce(sum(greatest(coalesce(paid_tx.amount, 0) - coalesce(paid_tx.amount_refunded, 0), 0)), 0)::int
     from ghl_payment_transactions paid_tx
-    where paid_tx.order_id = ${sql.raw(`${orderAlias}.id`)}
+    where paid_tx.order_id = ${orderId}
       and lower(trim(coalesce(paid_tx.status, ''))) in (${sql.join(statuses, sql`, `)})
   )`;
 }
 
-function canonicalDepositSql(): SQL<CanonicalDepositEvidence | null> {
-  /*
-   * The three scalar subqueries deliberately encode the confirmed precedence. They select only one row,
-   * so an order mirrored as an invoice cannot be summed twice for one appointment.
-   */
-  return sql<CanonicalDepositEvidence | null>`coalesce(
-    (
-      select jsonb_build_object(
-        'kind', 'payment_order',
-        'id', direct_order.id,
-        'externalId', direct_order.ghl_order_id,
-        'amount', ${collectedOrderAmountSql("direct_order")},
-        'currency', upper(coalesce(nullif(trim(direct_order.currency), ''), ${locationBillingConfig.currency}, 'USD')),
-        'matchedBy', 'direct_appointment_order',
-        'paidAt', coalesce(direct_order.ghl_updated_at, direct_order.ghl_created_at, direct_order.updated_at, direct_order.created_at)
+function collectedAmountForAlias(alias: "ghl_payment_orders" | "mirror_order" | "closer_order"): SQL {
+  return collectedAmountSql(sql.raw(`${alias}.id`));
+}
+
+/**
+ * Money that entered the account. Uses collected transactions, and falls back to the
+ * order total when HighLevel marks a manual payment succeeded but stores the transaction at 0.
+ */
+function billableAmountForAlias(alias: "ghl_payment_orders" | "mirror_order" | "closer_order"): SQL {
+  const collected = collectedAmountForAlias(alias);
+  const order = sql.raw(alias);
+  return sql`greatest(
+    ${collected},
+    case
+      when ${collected} = 0
+        and exists (
+          select 1
+          from ghl_payment_transactions paid_marker
+          where paid_marker.order_id = ${order}.id
+            and lower(trim(coalesce(paid_marker.status, ''))) in (${sql.join(
+              COLLECTED_TRANSACTION_STATUSES.map((status) => sql`${status}`),
+              sql`, `
+            )})
+        )
+        and lower(trim(coalesce(${order}.status, ''))) in ('completed', 'complete', 'paid', 'succeeded', 'successful')
+        and coalesce(${order}.amount, 0) > 0
+      then ${order}.amount
+      else 0
+    end
+  )`;
+}
+
+/** Same contact and amount within 48h, or explicit cross-ids, means one payment stored twice. */
+function orderMirrorsInvoiceSql(orderAlias: "ghl_payment_orders" | "mirror_order" | "closer_order", invoiceAlias: "invoices" | "mirrored_invoice"): SQL {
+  const order = sql.raw(orderAlias);
+  const invoice = sql.raw(invoiceAlias);
+  const orderPaid = sql`coalesce(${order}.ghl_created_at, ${order}.created_at)`;
+  const invoicePaid = sql`coalesce(${invoice}.ghl_updated_at, ${invoice}.issue_date, ${invoice}.ghl_created_at, ${invoice}.created_at)`;
+  return sql`(
+    ${order}.location_id = ${invoice}.location_id
+    and (
+      (
+        nullif(trim(coalesce(${order}.alt_id, '')), '') is not null
+        and ${order}.alt_id = ${invoice}.ghl_invoice_id
       )
-      from ghl_payment_orders direct_order
-      where direct_order.location_id = ${appointments.locationId}
-        and direct_order.is_deleted = false
-        and lower(trim(coalesce(direct_order.status, ''))) not in ('cancelled', 'canceled', 'void', 'voided')
-        and ${collectedOrderAmountSql("direct_order")} > 0
-        and direct_order.alt_id = ${appointments.ghlAppointmentId}
-        and strpos(lower(trim(coalesce(direct_order.alt_type, ''))), 'appointment') > 0
-      order by coalesce(direct_order.ghl_updated_at, direct_order.ghl_created_at, direct_order.updated_at, direct_order.created_at) desc,
-        direct_order.id desc
-      limit 1
-    ),
-    (
-      select jsonb_build_object(
-        'kind', 'payment_order',
-        'id', correlated_order.id,
-        'externalId', correlated_order.ghl_order_id,
-        'amount', ${collectedOrderAmountSql("correlated_order")},
-        'currency', upper(coalesce(nullif(trim(correlated_order.currency), ''), ${locationBillingConfig.currency}, 'USD')),
-        'matchedBy', 'correlated_order',
-        'paidAt', coalesce(correlated_order.ghl_updated_at, correlated_order.ghl_created_at, correlated_order.updated_at, correlated_order.created_at)
+      or (
+        nullif(trim(coalesce(${invoice}.alt_id, '')), '') is not null
+        and ${invoice}.alt_id = ${order}.ghl_order_id
       )
-      from ghl_payment_orders correlated_order
-      left join contacts correlated_order_contact on correlated_order_contact.id = correlated_order.contact_id
-      where correlated_order.location_id = ${appointments.locationId}
-        and correlated_order.is_deleted = false
-        and lower(trim(coalesce(correlated_order.status, ''))) not in ('cancelled', 'canceled', 'void', 'voided')
-        and ${collectedOrderAmountSql("correlated_order")} > 0
-        and (
-          (${appointments.contactId} is not null and correlated_order.contact_id = ${appointments.contactId})
-          or (
-            nullif(trim(coalesce(
-              ${appointments.raw}->'appointment'->>'contactId',
-              ${appointments.raw}->>'contactId',
-              ''
-            )), '') is not null
-            and correlated_order_contact.location_id = ${appointments.locationId}
-            and correlated_order_contact.ghl_contact_id = nullif(trim(coalesce(
-              ${appointments.raw}->'appointment'->>'contactId',
-              ${appointments.raw}->>'contactId',
-              ''
-            )), '')
-          )
-        )
-        and (
-          (
-            ${appointments.startTime} is not null
-            and coalesce(correlated_order.ghl_updated_at, correlated_order.ghl_created_at, correlated_order.updated_at, correlated_order.created_at)
-              >= least(coalesce(${appointments.dateAdded}, ${appointments.createdAt}), ${appointments.startTime}) - interval '35 days'
-            and coalesce(correlated_order.ghl_updated_at, correlated_order.ghl_created_at, correlated_order.updated_at, correlated_order.created_at)
-              <= greatest(coalesce(${appointments.dateAdded}, ${appointments.createdAt}), ${appointments.startTime}) + interval '180 days'
-          )
-          or (
-            ${appointments.startTime} is null
-            and coalesce(correlated_order.ghl_updated_at, correlated_order.ghl_created_at, correlated_order.updated_at, correlated_order.created_at)
-              >= coalesce(${appointments.dateAdded}, ${appointments.createdAt}) - interval '35 days'
-            and coalesce(correlated_order.ghl_updated_at, correlated_order.ghl_created_at, correlated_order.updated_at, correlated_order.created_at)
-              <= coalesce(${appointments.dateUpdated}, ${appointments.updatedAt}) + interval '366 days'
-          )
-        )
-      order by coalesce(correlated_order.ghl_updated_at, correlated_order.ghl_created_at, correlated_order.updated_at, correlated_order.created_at) desc,
-        correlated_order.id desc
-      limit 1
-    ),
-    (
-      select jsonb_build_object(
-        'kind', 'invoice',
-        'id', correlated_invoice.id,
-        'externalId', correlated_invoice.ghl_invoice_id,
-        'amount', correlated_invoice.amount_paid,
-        'currency', upper(coalesce(nullif(trim(correlated_invoice.currency), ''), ${locationBillingConfig.currency}, 'USD')),
-        'matchedBy', 'correlated_invoice',
-        'paidAt', coalesce(correlated_invoice.ghl_updated_at, correlated_invoice.issue_date, correlated_invoice.due_date, correlated_invoice.updated_at, correlated_invoice.created_at)
+      or (
+        ${invoice}.contact_id is not null
+        and ${order}.contact_id = ${invoice}.contact_id
+        and ${billableAmountForAlias(orderAlias)} = ${invoice}.amount_paid
+        and abs(extract(epoch from (${orderPaid} - ${invoicePaid}))) <= ${COLLECTED_PAYMENT_MIRROR_WINDOW_SECONDS}
       )
-      from invoices correlated_invoice
-      left join contacts correlated_invoice_contact on correlated_invoice_contact.id = correlated_invoice.contact_id
-      where correlated_invoice.location_id = ${appointments.locationId}
-        and correlated_invoice.is_deleted = false
-        and coalesce(correlated_invoice.amount_paid, 0) > 0
-        and (
-          lower(coalesce(correlated_invoice.last_event_type, '')) = 'invoicepaid'
-          or lower(coalesce(correlated_invoice.status, '')) = 'paid'
-          or (
-            coalesce(correlated_invoice.amount_paid, 0) > 0
-            and coalesce(correlated_invoice.total, correlated_invoice.amount_paid, 0) > 0
-            and correlated_invoice.amount_paid >= coalesce(correlated_invoice.total, correlated_invoice.amount_paid)
-          )
-        )
-        and (
-          (${appointments.contactId} is not null and correlated_invoice.contact_id = ${appointments.contactId})
-          or (
-            nullif(trim(coalesce(
-              ${appointments.raw}->'appointment'->>'contactId',
-              ${appointments.raw}->>'contactId',
-              ''
-            )), '') is not null
-            and correlated_invoice_contact.location_id = ${appointments.locationId}
-            and correlated_invoice_contact.ghl_contact_id = nullif(trim(coalesce(
-              ${appointments.raw}->'appointment'->>'contactId',
-              ${appointments.raw}->>'contactId',
-              ''
-            )), '')
-          )
-        )
-        and (
-          (
-            ${appointments.startTime} is not null
-            and coalesce(correlated_invoice.ghl_updated_at, correlated_invoice.issue_date, correlated_invoice.due_date, correlated_invoice.updated_at, correlated_invoice.created_at)
-              >= least(coalesce(${appointments.dateAdded}, ${appointments.createdAt}), ${appointments.startTime}) - interval '35 days'
-            and coalesce(correlated_invoice.ghl_updated_at, correlated_invoice.issue_date, correlated_invoice.due_date, correlated_invoice.updated_at, correlated_invoice.created_at)
-              <= greatest(coalesce(${appointments.dateAdded}, ${appointments.createdAt}), ${appointments.startTime}) + interval '180 days'
-          )
-          or (
-            ${appointments.startTime} is null
-            and coalesce(correlated_invoice.ghl_updated_at, correlated_invoice.issue_date, correlated_invoice.due_date, correlated_invoice.updated_at, correlated_invoice.created_at)
-              >= coalesce(${appointments.dateAdded}, ${appointments.createdAt}) - interval '35 days'
-            and coalesce(correlated_invoice.ghl_updated_at, correlated_invoice.issue_date, correlated_invoice.due_date, correlated_invoice.updated_at, correlated_invoice.created_at)
-              <= coalesce(${appointments.dateUpdated}, ${appointments.updatedAt}) + interval '366 days'
-          )
-        )
-      order by coalesce(correlated_invoice.ghl_updated_at, correlated_invoice.issue_date, correlated_invoice.due_date, correlated_invoice.updated_at, correlated_invoice.created_at) desc,
-        correlated_invoice.id desc
-      limit 1
     )
   )`;
 }
 
-function iso(value: Date | string | null | undefined): string | null {
-  if (!value) return null;
-  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+const NOT_CANCELLED = sql`('cancelled', 'canceled', 'void', 'voided')`;
+
+function chargeJsonSql(where: SQL): SQL {
+  return sql`(
+    select jsonb_build_object(
+      'id', ch.id,
+      'status', ch.status,
+      'amount', ch.charge_amount,
+      'currency', ch.charge_currency,
+      'attemptCount', ch.attempt_count,
+      'ghlReferenceId', ch.ghl_reference_id,
+      'ghlTransactionId', ch.ghl_transaction_id,
+      'lastError', ch.last_error,
+      'createdAt', ch.created_at,
+      'updatedAt', ch.updated_at,
+      'succeededAt', ch.succeeded_at,
+      'failedAt', ch.failed_at,
+      'chargedByName', wu.display_name,
+      'chargedByEmail', wu.email
+    )
+    from client_result_charges ch
+    left join workspace_users wu on wu.id = ch.created_by_workspace_user_id
+    where ${where}
+    order by case lower(coalesce(ch.status, ''))
+      when 'succeeded' then 0
+      when 'pending' then 1
+      when 'failed' then 2
+      else 3
+    end,
+    ch.updated_at desc
+    limit 1
+  )`;
 }
 
-function normalizeEvidence(value: CanonicalDepositEvidence | null): CanonicalDepositEvidence | null {
-  if (!value || (value.kind !== "payment_order" && value.kind !== "invoice")) return null;
-  const amount = Number(value.amount);
-  if (!value.id || !Number.isFinite(amount) || amount <= 0) return null;
+function orderChargeSql(): SQL {
+  const invoicePaid = sql`coalesce(mirrored_invoice.ghl_updated_at, mirrored_invoice.issue_date, mirrored_invoice.ghl_created_at, mirrored_invoice.created_at)`;
+  const orderPaid = sql`coalesce(${ghlPaymentOrders.ghlCreatedAt}, ${ghlPaymentOrders.createdAt})`;
+  return chargeJsonSql(sql`
+    ch.payment_order_id = ${ghlPaymentOrders.id}
+    or (
+      ch.invoice_id is not null
+      and ch.payment_order_id is null
+      and exists (
+        select 1
+        from invoices mirrored_invoice
+        where mirrored_invoice.id = ch.invoice_id
+          and ${orderMirrorsInvoiceSql("ghl_payment_orders", "mirrored_invoice")}
+          and not exists (
+            select 1
+            from ghl_payment_orders closer_order
+            where closer_order.id <> ${ghlPaymentOrders.id}
+              and closer_order.is_deleted = false
+              and lower(trim(coalesce(closer_order.status, ''))) not in ${NOT_CANCELLED}
+              and ${billableAmountForAlias("closer_order")} > 0
+              and ${orderMirrorsInvoiceSql("closer_order", "mirrored_invoice")}
+              and (
+                abs(extract(epoch from (coalesce(closer_order.ghl_created_at, closer_order.created_at) - ${invoicePaid})))
+                  < abs(extract(epoch from (${orderPaid} - ${invoicePaid})))
+                or (
+                  abs(extract(epoch from (coalesce(closer_order.ghl_created_at, closer_order.created_at) - ${invoicePaid})))
+                    = abs(extract(epoch from (${orderPaid} - ${invoicePaid})))
+                  and closer_order.id < ${ghlPaymentOrders.id}
+                )
+              )
+          )
+      )
+    )
+  `);
+}
+
+function iso(value: Date | string | null | undefined): string | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
+
+function moneyCurrency(rowCurrency: string | null | undefined, configCurrency: string | null | undefined): string {
+  const raw = rowCurrency?.trim() || configCurrency?.trim() || "USD";
+  return raw.toUpperCase();
+}
+
+type ChargeJson = {
+  id?: string;
+  status?: string;
+  amount?: number | string;
+  currency?: string;
+  attemptCount?: number | string;
+  ghlReferenceId?: string | null;
+  ghlTransactionId?: string | null;
+  lastError?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  succeededAt?: string | null;
+  failedAt?: string | null;
+  chargedByName?: string | null;
+  chargedByEmail?: string | null;
+};
+
+function mapCharge(value: unknown, fallbackCurrency: string): ClientChargeCandidate["charge"] {
+  const row =
+    value && typeof value === "object"
+      ? (value as ChargeJson)
+      : typeof value === "string" && value.trim().startsWith("{")
+        ? (JSON.parse(value) as ChargeJson)
+        : null;
+  if (!row?.id) return null;
   return {
-    ...value,
-    amount,
-    currency: String(value.currency || "USD").trim().toUpperCase() || "USD",
-    paidAt: iso(value.paidAt)
+    id: row.id,
+    status: row.status || "pending",
+    amount: Number(row.amount ?? 0),
+    currency: row.currency?.trim() || fallbackCurrency,
+    attemptCount: Number(row.attemptCount ?? 0),
+    ghlReferenceId: row.ghlReferenceId ?? null,
+    ghlTransactionId: row.ghlTransactionId ?? null,
+    lastError: row.lastError ?? null,
+    createdAt: iso(row.createdAt) ?? new Date(0).toISOString(),
+    updatedAt: iso(row.updatedAt) ?? new Date(0).toISOString(),
+    succeededAt: iso(row.succeededAt),
+    failedAt: iso(row.failedAt),
+    chargedBy: chargeActorDisplayName(row.chargedByName, row.chargedByEmail)
   };
+}
+
+type PaymentCandidateRow = {
+  targetId: string;
+  externalId: string;
+  sourceLabel: string | null;
+  paidAt: Date | string;
+  locationId: string;
+  ghlLocationId: string;
+  locationName: string | null;
+  contactId: string | null;
+  contactFirstName: string | null;
+  contactLastName: string | null;
+  contactEmail: string | null;
+  amount: unknown;
+  currency: string | null;
+  configCurrency: string;
+  charge: unknown;
+};
+
+function mapPaymentRow(row: PaymentCandidateRow, kind: CanonicalDepositEvidence["kind"]): ClientChargeCandidate | null {
+  const amount = Number(row.amount);
+  if (!row.targetId || !Number.isFinite(amount) || amount <= 0) return null;
+  const currency = moneyCurrency(row.currency, row.configCurrency);
+  const paidAt = iso(row.paidAt);
+  if (!paidAt) return null;
+  const contactName =
+    [row.contactFirstName, row.contactLastName]
+      .map((value) => (value ?? "").trim())
+      .filter(Boolean)
+      .join(" ") || null;
+  return {
+    appointmentId: row.targetId,
+    ghlAppointmentId: row.externalId,
+    appointmentTitle: row.sourceLabel?.trim() || null,
+    appointmentStartTime: null,
+    appointmentBookedAt: paidAt,
+    locationId: row.locationId,
+    ghlLocationId: row.ghlLocationId,
+    locationName: row.locationName,
+    contactId: row.contactId,
+    contactName,
+    contactEmail: row.contactEmail,
+    deposit: {
+      kind,
+      id: row.targetId,
+      externalId: row.externalId,
+      amount,
+      currency,
+      matchedBy: kind === "invoice" ? "collected_invoice" : "collected_order",
+      paidAt
+    },
+    charge: mapCharge(row.charge, currency)
+  };
+}
+
+function scopeFilters(params: ClientChargeFetchParams): SQL[] {
+  const filters: SQL[] = [eq(locationBillingConfig.enabled, true)];
+  if (params.allowedLocationIds !== null) {
+    filters.push(
+      params.allowedLocationIds.length === 0 ? sql`false` : inArray(locations.id, params.allowedLocationIds)
+    );
+  }
+  if (params.hiddenLocationIds?.length) {
+    filters.push(notInArray(locations.id, params.hiddenLocationIds));
+  }
+  if (params.locationId) filters.push(eq(locations.id, params.locationId));
+  return filters;
+}
+
+function candidateMatches(candidate: ClientChargeCandidate, params: ClientChargeFetchParams): boolean {
+  const query = (params.query ?? "").trim().toLowerCase();
+  const status = params.status ?? "all";
+  if (params.subaccountQueryOnly) {
+    if (!matchesSubaccountQuery(candidate, query)) return false;
+  } else if (query) {
+    const haystack = [
+      candidate.locationName,
+      candidate.ghlLocationId,
+      candidate.appointmentTitle,
+      candidate.ghlAppointmentId,
+      candidate.contactName,
+      candidate.contactEmail,
+      candidate.deposit.externalId
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    if (!haystack.includes(query)) return false;
+  }
+  if (status === "unbilled" && candidate.charge) return false;
+  if (status !== "all" && status !== "unbilled" && candidate.charge?.status !== status) return false;
+  return true;
+}
+
+async function resolveChargeTarget(
+  db: Db,
+  id: string
+): Promise<{ orderId: string | null; invoiceId: string | null }> {
+  const [linked] = await db
+    .select({
+      paymentOrderId: clientResultCharges.paymentOrderId,
+      invoiceId: clientResultCharges.invoiceId
+    })
+    .from(clientResultCharges)
+    .where(eq(clientResultCharges.appointmentId, id))
+    .limit(1);
+  if (linked && (linked.paymentOrderId || linked.invoiceId)) {
+    return { orderId: linked.paymentOrderId, invoiceId: linked.invoiceId };
+  }
+  return { orderId: id, invoiceId: id };
 }
 
 export async function fetchClientChargeCandidates(
   db: Db,
   params: ClientChargeFetchParams
 ): Promise<ClientChargeCandidate[]> {
-  const bookingCapturedAt = sql<Date>`coalesce(${appointments.dateAdded}, ${appointments.createdAt})`;
-  const filters: SQL[] = [
-    eq(locationBillingConfig.enabled, true),
-    eq(appointments.hiddenFromUi, false),
-    not(appointmentCancelledOnlySql()),
-    gte(bookingCapturedAt, params.from),
-    lt(bookingCapturedAt, params.toExclusive)
+  const target = params.appointmentId ? await resolveChargeTarget(db, params.appointmentId) : null;
+  const orderPaidAt = sql<Date>`coalesce(${ghlPaymentOrders.ghlCreatedAt}, ${ghlPaymentOrders.createdAt})`;
+  const invoicePaidAt = sql<Date>`coalesce(${invoices.ghlUpdatedAt}, ${invoices.issueDate}, ${invoices.ghlCreatedAt}, ${invoices.createdAt})`;
+
+  const orderFilters: SQL[] = [
+    ...scopeFilters(params),
+    eq(ghlPaymentOrders.isDeleted, false),
+    sql`lower(trim(coalesce(${ghlPaymentOrders.status}, ''))) not in ${NOT_CANCELLED}`,
+    sql`${billableAmountForAlias("ghl_payment_orders")} > 0`
   ];
-  if (params.allowedLocationIds !== null) {
-    filters.push(
-      params.allowedLocationIds.length === 0
-        ? sql`false`
-        : inArray(appointments.locationId, params.allowedLocationIds)
-    );
-  }
-  if (params.hiddenLocationIds?.length) {
-    filters.push(notInArray(appointments.locationId, params.hiddenLocationIds));
-  }
-  if (params.locationId) {
-    filters.push(eq(appointments.locationId, params.locationId));
-  }
-  if (params.appointmentId) {
-    filters.push(eq(appointments.id, params.appointmentId));
+  if (target) {
+    orderFilters.push(target.orderId ? eq(ghlPaymentOrders.id, target.orderId) : sql`false`);
+  } else {
+    orderFilters.push(gte(orderPaidAt, params.from), lt(orderPaidAt, params.toExclusive));
   }
 
-  filters.push(sql`${canonicalDepositSql()} is not null`);
-  const depositExpr = canonicalDepositSql();
-  const rawRows = await db
+  const invoiceFilters: SQL[] = [
+    ...scopeFilters(params),
+    eq(invoices.isDeleted, false),
+    sql`lower(trim(coalesce(${invoices.status}, ''))) not in ${NOT_CANCELLED}`,
+    sql`coalesce(${invoices.amountPaid}, 0) > 0`
+  ];
+  if (target) {
+    invoiceFilters.push(target.invoiceId ? eq(invoices.id, target.invoiceId) : sql`false`);
+  } else {
+    invoiceFilters.push(gte(invoicePaidAt, params.from), lt(invoicePaidAt, params.toExclusive));
+    invoiceFilters.push(sql`not exists (
+      select 1
+      from ghl_payment_orders mirror_order
+      where mirror_order.is_deleted = false
+        and lower(trim(coalesce(mirror_order.status, ''))) not in ${NOT_CANCELLED}
+        and ${billableAmountForAlias("mirror_order")} > 0
+        and ${orderMirrorsInvoiceSql("mirror_order", "invoices")}
+    )`);
+  }
+
+  const orderRows = await db
     .select({
-      appointmentId: appointments.id,
-      ghlAppointmentId: appointments.ghlAppointmentId,
-      appointmentTitle: appointments.title,
-      appointmentStartTime: appointments.startTime,
-      appointmentBookedAt: bookingCapturedAt,
+      targetId: ghlPaymentOrders.id,
+      externalId: ghlPaymentOrders.ghlOrderId,
+      sourceLabel: sql<string | null>`coalesce(nullif(trim(${paymentSources.displayName}), ''), nullif(trim(${ghlPaymentOrders.raw}->'source'->>'name'), ''))`,
+      paidAt: orderPaidAt,
       locationId: locations.id,
       ghlLocationId: locations.ghlLocationId,
       locationName: locations.name,
@@ -397,100 +541,52 @@ export async function fetchClientChargeCandidates(
       contactFirstName: contacts.firstName,
       contactLastName: contacts.lastName,
       contactEmail: contacts.email,
-      deposit: depositExpr,
-      chargeId: clientResultCharges.id,
-      chargeStatus: clientResultCharges.status,
-      chargeAmount: clientResultCharges.chargeAmount,
-      chargeCurrency: clientResultCharges.chargeCurrency,
-      chargeAttemptCount: clientResultCharges.attemptCount,
-      chargeGhlReferenceId: clientResultCharges.ghlReferenceId,
-      chargeGhlTransactionId: clientResultCharges.ghlTransactionId,
-      chargeLastError: clientResultCharges.lastError,
-      chargeCreatedAt: clientResultCharges.createdAt,
-      chargeUpdatedAt: clientResultCharges.updatedAt,
-      chargeSucceededAt: clientResultCharges.succeededAt,
-      chargeFailedAt: clientResultCharges.failedAt,
-      chargeCreatorDisplayName: workspaceUsers.displayName,
-      chargeCreatorEmail: workspaceUsers.email
+      amount: billableAmountForAlias("ghl_payment_orders"),
+      currency: ghlPaymentOrders.currency,
+      configCurrency: locationBillingConfig.currency,
+      charge: orderChargeSql()
     })
-    .from(appointments)
-    .innerJoin(locations, eq(appointments.locationId, locations.id))
-    .innerJoin(locationBillingConfig, eq(locationBillingConfig.locationId, appointments.locationId))
-    .leftJoin(contacts, eq(appointments.contactId, contacts.id))
-    .leftJoin(clientResultCharges, eq(clientResultCharges.appointmentId, appointments.id))
-    .leftJoin(workspaceUsers, eq(clientResultCharges.createdByWorkspaceUserId, workspaceUsers.id))
-    .where(and(...filters))
-    .orderBy(asc(bookingCapturedAt), asc(appointments.id));
+    .from(ghlPaymentOrders)
+    .innerJoin(locations, eq(ghlPaymentOrders.locationId, locations.id))
+    .innerJoin(locationBillingConfig, eq(locationBillingConfig.locationId, ghlPaymentOrders.locationId))
+    .leftJoin(contacts, eq(ghlPaymentOrders.contactId, contacts.id))
+    .leftJoin(paymentSources, eq(ghlPaymentOrders.paymentSourceId, paymentSources.id))
+    .where(and(...orderFilters));
 
-  const query = (params.query ?? "").trim().toLowerCase();
-  const status = params.status ?? "all";
+  const invoiceRows = await db
+    .select({
+      targetId: invoices.id,
+      externalId: invoices.ghlInvoiceId,
+      sourceLabel: sql<string | null>`coalesce(nullif(trim(${invoices.name}), ''), nullif(trim(${invoices.title}), ''), nullif(trim(${invoices.invoiceNumber}), ''))`,
+      paidAt: invoicePaidAt,
+      locationId: locations.id,
+      ghlLocationId: locations.ghlLocationId,
+      locationName: locations.name,
+      contactId: contacts.id,
+      contactFirstName: contacts.firstName,
+      contactLastName: contacts.lastName,
+      contactEmail: contacts.email,
+      amount: invoices.amountPaid,
+      currency: invoices.currency,
+      configCurrency: locationBillingConfig.currency,
+      charge: chargeJsonSql(sql`ch.invoice_id = ${invoices.id}`)
+    })
+    .from(invoices)
+    .innerJoin(locations, eq(invoices.locationId, locations.id))
+    .innerJoin(locationBillingConfig, eq(locationBillingConfig.locationId, invoices.locationId))
+    .leftJoin(contacts, eq(invoices.contactId, contacts.id))
+    .where(and(...invoiceFilters));
+
   const normalized: ClientChargeCandidate[] = [];
-
-  for (const row of rawRows) {
-    const deposit = normalizeEvidence(row.deposit);
-    if (!deposit) continue;
-
-    const contactName = [row.contactFirstName, row.contactLastName]
-      .map((v) => (v ?? "").trim())
-      .filter(Boolean)
-      .join(" ") || null;
-    const charge = row.chargeId
-      ? {
-          id: row.chargeId,
-          status: row.chargeStatus ?? "pending",
-          amount: Number(row.chargeAmount ?? 0),
-          currency: row.chargeCurrency ?? deposit.currency,
-          attemptCount: Number(row.chargeAttemptCount ?? 0),
-          ghlReferenceId: row.chargeGhlReferenceId,
-          ghlTransactionId: row.chargeGhlTransactionId,
-          lastError: row.chargeLastError,
-          createdAt: iso(row.chargeCreatedAt)!,
-          updatedAt: iso(row.chargeUpdatedAt)!,
-          succeededAt: iso(row.chargeSucceededAt),
-          failedAt: iso(row.chargeFailedAt),
-          chargedBy: chargeActorDisplayName(row.chargeCreatorDisplayName, row.chargeCreatorEmail)
-        }
-      : null;
-
-    const candidate: ClientChargeCandidate = {
-      appointmentId: row.appointmentId,
-      ghlAppointmentId: row.ghlAppointmentId,
-      appointmentTitle: row.appointmentTitle,
-      appointmentStartTime: iso(row.appointmentStartTime),
-      appointmentBookedAt: iso(row.appointmentBookedAt)!,
-      locationId: row.locationId,
-      ghlLocationId: row.ghlLocationId,
-      locationName: row.locationName,
-      contactId: row.contactId,
-      contactName,
-      contactEmail: row.contactEmail,
-      deposit,
-      charge
-    };
-
-    if (params.subaccountQueryOnly) {
-      if (!matchesSubaccountQuery(candidate, query)) continue;
-    } else if (query) {
-      const haystack = [
-        candidate.locationName,
-        candidate.ghlLocationId,
-        candidate.appointmentTitle,
-        candidate.ghlAppointmentId,
-        candidate.contactName,
-        candidate.contactEmail,
-        candidate.deposit.externalId
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      if (!haystack.includes(query)) continue;
-    }
-    if (status === "unbilled" && charge) continue;
-    if (status !== "all" && status !== "unbilled" && charge?.status !== status) continue;
-    normalized.push(candidate);
+  for (const row of orderRows) {
+    const candidate = mapPaymentRow(row, "payment_order");
+    if (candidate && candidateMatches(candidate, params)) normalized.push(candidate);
   }
-
-  normalized.sort((a, b) => b.appointmentBookedAt.localeCompare(a.appointmentBookedAt));
+  for (const row of invoiceRows) {
+    const candidate = mapPaymentRow(row as PaymentCandidateRow, "invoice");
+    if (candidate && candidateMatches(candidate, params)) normalized.push(candidate);
+  }
+  normalized.sort((a, b) => b.appointmentBookedAt.localeCompare(a.appointmentBookedAt) || a.appointmentId.localeCompare(b.appointmentId));
   return normalized;
 }
 
