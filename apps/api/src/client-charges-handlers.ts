@@ -38,9 +38,10 @@ import {
   resolveSessionUser,
   type WorkspaceJwtEnv
 } from "./workspace-access.js";
+import { notifyClientChargeStripeFailure, type SlackChargeFailureEnv } from "./client-charges-slack.js";
 import { insertWorkspaceAuditLog } from "./workspace-audit.js";
 
-export type ClientChargesEnv = WorkspaceJwtEnv & ClientChargeStripeEnv;
+export type ClientChargesEnv = WorkspaceJwtEnv & ClientChargeStripeEnv & SlackChargeFailureEnv;
 type Bindings = { Bindings: ClientChargesEnv };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -411,6 +412,19 @@ async function writeChargeOutcome(params: {
       error: result.error,
       status: result.status
     }
+  });
+
+  await notifyClientChargeStripeFailure(c.env, {
+    locationName: candidate.locationName,
+    ghlLocationId: candidate.ghlLocationId || locationRow.ghlLocationId,
+    paymentLabel: candidate.appointmentTitle,
+    externalId: candidate.deposit.externalId,
+    contactName: candidate.contactName,
+    contactEmail: candidate.contactEmail,
+    amount: charge.chargeAmount,
+    currency: charge.chargeCurrency,
+    error: result.error,
+    ambiguous: result.ambiguous
   });
 
   return {

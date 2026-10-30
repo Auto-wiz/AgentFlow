@@ -33,6 +33,8 @@ import {
   pickCanonicalDepositSource,
   stripeConnectedChargeRequestOptions,
   stripeDashboardPaymentUrl,
+  formatClientChargeFailureSlackMessage,
+  redactChargeFailureText,
   toStripeMinorUnits
 } from "./client-charges-logic.ts";
 
@@ -349,6 +351,57 @@ describe("Stripe amount and error mapping", () => {
     assert.match(mapStripeChargeErrorMessage("authentication_required", ""), /authentication/i);
     assert.equal(mapStripeChargeErrorMessage("card_declined", "Your card was declined."), "Your card was declined.");
     assert.equal(mapStripeChargeErrorMessage(undefined, "Network error"), "Network error");
+  });
+});
+
+describe("stripe charge failure slack message", () => {
+  it("names the subaccount, payment, contact, amount, and Stripe error", () => {
+    assert.equal(
+      formatClientChargeFailureSlackMessage({
+        locationName: "Tanisha from Beauty Elevation",
+        ghlLocationId: "9qBRRyLb0AjOdYNrD1lD",
+        paymentLabel: "Deposit Link - Cut & Mini Highlight",
+        externalId: "6adb662e924eaa467903be53",
+        contactName: "Samantha Dietz",
+        contactEmail: "samanthamason07@gmail.com",
+        amount: 25,
+        currency: "usd",
+        error: "Card was declined."
+      }),
+      [
+        "Cobro fallido en Stripe",
+        "Subcuenta: Tanisha from Beauty Elevation (9qBRRyLb0AjOdYNrD1lD)",
+        "Pago: Deposit Link - Cut & Mini Highlight (6adb662e924eaa467903be53)",
+        "Contacto: Samantha Dietz (samanthamason07@gmail.com)",
+        "Monto: 25 USD",
+        "Qué falló: Card was declined."
+      ].join("\n")
+    );
+  });
+
+  it("uses a distinct headline when Stripe has not confirmed the outcome", () => {
+    const message = formatClientChargeFailureSlackMessage({
+      ambiguous: true,
+      error: "PaymentIntent is processing (processing)",
+      amount: 10,
+      currency: "USD"
+    });
+    assert.match(message, /^Cobro de Stripe sin confirmación/);
+    assert.match(message, /Subcuenta: sin subcuenta/);
+    assert.match(message, /Contacto: sin contacto/);
+    assert.match(message, /Qué falló: PaymentIntent is processing \(processing\)/);
+  });
+
+  it("redacts card numbers and secret keys from the failure text", () => {
+    const message = formatClientChargeFailureSlackMessage({
+      error: "declined for 4242 4242 4242 4242 with sk_live_abc123secret",
+      amount: 1,
+      currency: "USD"
+    });
+    assert.equal(message.includes("4242"), false);
+    assert.equal(message.includes("sk_live_"), false);
+    assert.match(message, /Qué falló: declined for \[redacted\] with \[redacted\]/);
+    assert.equal(redactChargeFailureText("  Card was declined.  "), "Card was declined.");
   });
 });
 

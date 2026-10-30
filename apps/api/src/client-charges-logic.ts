@@ -490,6 +490,59 @@ export function isStripeChargeAmbiguousHttpStatus(status: number | undefined): b
   return status == null || status >= 500;
 }
 
+export type ClientChargeFailureSlackInput = {
+  locationName?: string | null;
+  ghlLocationId?: string | null;
+  paymentLabel?: string | null;
+  externalId?: string | null;
+  contactName?: string | null;
+  contactEmail?: string | null;
+  amount?: number | string | null;
+  currency?: string | null;
+  error?: string | null;
+  ambiguous?: boolean;
+};
+
+function cleanSlackLine(value: string | null | undefined): string {
+  return (value ?? "").replace(/\s+/g, " ").trim();
+}
+
+/** Strip card numbers and API keys before a failure string is posted outside the app. */
+export function redactChargeFailureText(value: string | null | undefined): string {
+  const cleaned = cleanSlackLine(value)
+    .replace(/\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]+\b/g, "[redacted]")
+    .replace(/\d(?:[ -]?\d){12,18}/g, "[redacted]");
+  if (!cleaned) return "";
+  return cleaned.length > 500 ? `${cleaned.slice(0, 497)}...` : cleaned;
+}
+
+function labeledId(label: string, id: string): string {
+  if (label && id && label !== id) return `${label} (${id})`;
+  return label || id;
+}
+
+/** Slack workflow body for a Stripe client-charge failure. The webhook URL stays out of this string. */
+export function formatClientChargeFailureSlackMessage(input: ClientChargeFailureSlackInput): string {
+  const location = labeledId(cleanSlackLine(input.locationName), cleanSlackLine(input.ghlLocationId)) || "sin subcuenta";
+  const payment = labeledId(cleanSlackLine(input.paymentLabel), cleanSlackLine(input.externalId)) || "sin identificar";
+  const contact = labeledId(cleanSlackLine(input.contactName), cleanSlackLine(input.contactEmail)) || "sin contacto";
+  const amount = input.amount == null || String(input.amount).trim() === "" ? "sin monto" : String(input.amount).trim();
+  const currency = cleanSlackLine(input.currency).toUpperCase();
+  const money = currency ? `${amount} ${currency}` : amount;
+  const error = redactChargeFailureText(input.error) || "Stripe no devolvió un detalle";
+  const headline = input.ambiguous
+    ? "Cobro de Stripe sin confirmación. Revisalo en Stripe antes de reintentarlo."
+    : "Cobro fallido en Stripe";
+  return [
+    headline,
+    `Subcuenta: ${location}`,
+    `Pago: ${payment}`,
+    `Contacto: ${contact}`,
+    `Monto: ${money}`,
+    `Qué falló: ${error}`
+  ].join("\n");
+}
+
 /** Overview table: all billing-enabled subaccounts, or only those with activity in the period. */
 export const OVERVIEW_ACCOUNT_VIEWS = [
   "all",
