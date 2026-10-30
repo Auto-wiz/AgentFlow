@@ -206,6 +206,11 @@ type Env = {
   STRIPE_WEBHOOK_SECRET?: string;
   /** When unset or not true/1/yes, POST …/charge and …/retry return 503 (sync/billing still work). */
   CLIENT_CHARGES_CHARGING_ENABLED?: string;
+  /**
+   * Slack workflow trigger for a failed Stripe client charge. POST `{ "message": "..." }`.
+   * Set with `wrangler secret put SLACK_CHARGE_FAILURE_WEBHOOK_URL`. Do not commit the URL.
+   */
+  SLACK_CHARGE_FAILURE_WEBHOOK_URL?: string;
   MESSAGE_QUEUE: Queue<NormalizedGhlWebhookEvent>;
   JWT_SECRET?: string;
   /**

@@ -4,16 +4,18 @@ import type { Context } from "hono";
 import type Stripe from "stripe";
 
 import { createStripeClient, type ClientChargeStripeEnv } from "./client-charges-stripe.js";
+import { notifyStoredClientChargeStripeFailure, type SlackChargeFailureEnv } from "./client-charges-slack.js";
 import {
   applyStripeAccountSnapshot,
   findLocationIdByStripeAccountId,
   setLocationPaymentMethod
 } from "./location-billing-stripe.js";
 
-export type StripeWebhookEnv = ClientChargeStripeEnv & {
-  DATABASE_URL: string;
-  STRIPE_WEBHOOK_SECRET?: string;
-};
+export type StripeWebhookEnv = ClientChargeStripeEnv &
+  SlackChargeFailureEnv & {
+    DATABASE_URL: string;
+    STRIPE_WEBHOOK_SECRET?: string;
+  };
 
 type Bindings = { Bindings: StripeWebhookEnv };
 
@@ -41,6 +43,7 @@ async function loadConnectedAccountIdForLocation(
 
 async function reconcilePaymentIntent(
   db: ReturnType<typeof createDb>,
+  env: StripeWebhookEnv,
   intent: Stripe.PaymentIntent,
   now: Date
 ) {
@@ -88,16 +91,23 @@ async function reconcilePaymentIntent(
   }
 
   if (intent.status === "canceled" || intent.status === "requires_payment_method") {
+    const priorError = charge.lastError ?? "";
+    const confirmsAmbiguousFailure =
+      charge.status === "pending" && priorError.startsWith("Ambiguous Stripe outcome");
+    const error = intent.last_payment_error?.message ?? `PaymentIntent ${intent.status}`;
     await db
       .update(clientResultCharges)
       .set({
         status: "failed",
         stripePaymentIntentId: piId,
-        lastError: intent.last_payment_error?.message ?? `PaymentIntent ${intent.status}`,
+        lastError: error,
         failedAt: now,
         updatedAt: now
       })
       .where(eq(clientResultCharges.id, charge.id));
+    if (confirmsAmbiguousFailure) {
+      await notifyStoredClientChargeStripeFailure(db, env, charge, { error });
+    }
   }
 }
 
@@ -219,7 +229,7 @@ export async function postStripeWebhookHandler(c: Context<Bindings>) {
       }
       case "payment_intent.succeeded":
       case "payment_intent.payment_failed": {
-        await reconcilePaymentIntent(db, event.data.object as Stripe.PaymentIntent, now);
+        await reconcilePaymentIntent(db, c.env, event.data.object as Stripe.PaymentIntent, now);
         break;
       }
       default:
