@@ -369,12 +369,12 @@ describe("stripe charge failure slack message", () => {
         error: "Card was declined."
       }),
       [
-        "Cobro fallido en Stripe",
-        "Subcuenta: Tanisha from Beauty Elevation (9qBRRyLb0AjOdYNrD1lD)",
-        "Pago: Deposit Link - Cut & Mini Highlight (6adb662e924eaa467903be53)",
-        "Contacto: Samantha Dietz (samanthamason07@gmail.com)",
-        "Monto: 25 USD",
-        "Qué falló: Card was declined."
+        "Stripe charge failed",
+        "Subaccount: Tanisha from Beauty Elevation (9qBRRyLb0AjOdYNrD1lD)",
+        "Payment: Deposit Link - Cut & Mini Highlight (6adb662e924eaa467903be53)",
+        "Contact: Samantha Dietz (samanthamason07@gmail.com)",
+        "Amount: 25 USD",
+        "What failed: Card was declined."
       ].join("\n")
     );
   });
@@ -386,10 +386,10 @@ describe("stripe charge failure slack message", () => {
       amount: 10,
       currency: "USD"
     });
-    assert.match(message, /^Cobro de Stripe sin confirmación/);
-    assert.match(message, /Subcuenta: sin subcuenta/);
-    assert.match(message, /Contacto: sin contacto/);
-    assert.match(message, /Qué falló: PaymentIntent is processing \(processing\)/);
+    assert.match(message, /^Stripe charge outcome is unconfirmed/);
+    assert.match(message, /Subaccount: unknown subaccount/);
+    assert.match(message, /Contact: unknown contact/);
+    assert.match(message, /What failed: PaymentIntent is processing \(processing\)/);
   });
 
   it("redacts card numbers and secret keys from the failure text", () => {
@@ -400,7 +400,7 @@ describe("stripe charge failure slack message", () => {
     });
     assert.equal(message.includes("4242"), false);
     assert.equal(message.includes("sk_live_"), false);
-    assert.match(message, /Qué falló: declined for \[redacted\] with \[redacted\]/);
+    assert.match(message, /What failed: declined for \[redacted\] with \[redacted\]/);
     assert.equal(redactChargeFailureText("  Card was declined.  "), "Card was declined.");
   });
 });

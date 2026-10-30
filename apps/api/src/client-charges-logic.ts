@@ -523,23 +523,23 @@ function labeledId(label: string, id: string): string {
 
 /** Slack workflow body for a Stripe client-charge failure. The webhook URL stays out of this string. */
 export function formatClientChargeFailureSlackMessage(input: ClientChargeFailureSlackInput): string {
-  const location = labeledId(cleanSlackLine(input.locationName), cleanSlackLine(input.ghlLocationId)) || "sin subcuenta";
-  const payment = labeledId(cleanSlackLine(input.paymentLabel), cleanSlackLine(input.externalId)) || "sin identificar";
-  const contact = labeledId(cleanSlackLine(input.contactName), cleanSlackLine(input.contactEmail)) || "sin contacto";
-  const amount = input.amount == null || String(input.amount).trim() === "" ? "sin monto" : String(input.amount).trim();
+  const location = labeledId(cleanSlackLine(input.locationName), cleanSlackLine(input.ghlLocationId)) || "unknown subaccount";
+  const payment = labeledId(cleanSlackLine(input.paymentLabel), cleanSlackLine(input.externalId)) || "unidentified payment";
+  const contact = labeledId(cleanSlackLine(input.contactName), cleanSlackLine(input.contactEmail)) || "unknown contact";
+  const amount = input.amount == null || String(input.amount).trim() === "" ? "unknown amount" : String(input.amount).trim();
   const currency = cleanSlackLine(input.currency).toUpperCase();
   const money = currency ? `${amount} ${currency}` : amount;
-  const error = redactChargeFailureText(input.error) || "Stripe no devolvió un detalle";
+  const error = redactChargeFailureText(input.error) || "Stripe did not return a detail";
   const headline = input.ambiguous
-    ? "Cobro de Stripe sin confirmación. Revisalo en Stripe antes de reintentarlo."
-    : "Cobro fallido en Stripe";
+    ? "Stripe charge outcome is unconfirmed. Check Stripe before retrying."
+    : "Stripe charge failed";
   return [
     headline,
-    `Subcuenta: ${location}`,
-    `Pago: ${payment}`,
-    `Contacto: ${contact}`,
-    `Monto: ${money}`,
-    `Qué falló: ${error}`
+    `Subaccount: ${location}`,
+    `Payment: ${payment}`,
+    `Contact: ${contact}`,
+    `Amount: ${money}`,
+    `What failed: ${error}`
   ].join("\n");
 }
 
