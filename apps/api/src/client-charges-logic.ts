@@ -431,6 +431,27 @@ export function pickDefaultPaymentMethodIdFromStripeCustomer(
   return null;
 }
 
+const STRIPE_DASHBOARD_PAYMENT_ID = /^(?:pi|ch|py)_[A-Za-z0-9]+$/;
+const STRIPE_DASHBOARD_ACCOUNT_ID = /^acct_[A-Za-z0-9]+$/;
+
+/**
+ * Dashboard page for a Client Charges PaymentIntent. Direct charges live on the
+ * connected account, so the account id is part of the path when we have one.
+ */
+export function stripeDashboardPaymentUrl(input: {
+  paymentIntentId?: string | null;
+  chargeId?: string | null;
+  stripeAccountId?: string | null;
+  livemode?: boolean;
+}): string | null {
+  const paymentId = (input.paymentIntentId ?? "").trim() || (input.chargeId ?? "").trim();
+  if (!STRIPE_DASHBOARD_PAYMENT_ID.test(paymentId)) return null;
+  const account = (input.stripeAccountId ?? "").trim();
+  const accountSegment = STRIPE_DASHBOARD_ACCOUNT_ID.test(account) ? `${account}/` : "";
+  const modeSegment = input.livemode === false ? "test/" : "";
+  return `https://dashboard.stripe.com/${accountSegment}${modeSegment}payments/${paymentId}`;
+}
+
 /** Stripe SDK request options for direct charges on a connected account. */
 export function stripeConnectedChargeRequestOptions(connectedAccountId: string, idempotencyKey: string) {
   return {

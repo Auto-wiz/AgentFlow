@@ -40,6 +40,7 @@ type ChargeLedger = {
   attemptCount: number;
   ghlReferenceId: string | null;
   ghlTransactionId: string | null;
+  stripeDashboardUrl: string | null;
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
@@ -235,6 +236,13 @@ function stripeBillingStatusLabel(loc: BillingLocationConfig) {
   const hasConnect = Boolean(loc.stripeAccountMasked || loc.stripeAccountId?.trim());
   if (hasConnect && (!loc.connectDetailsSubmitted || !loc.connectChargesEnabled)) return "Connect onboarding";
   return "Almost ready";
+}
+
+function stripeChargeUrl(row: ClientChargeRow): string | null {
+  if (row.charge?.status.toLowerCase() !== "succeeded") return null;
+  const url = row.charge.stripeDashboardUrl?.trim() ?? "";
+  if (!url.startsWith("https://dashboard.stripe.com/")) return null;
+  return url;
 }
 
 function buildGhlPaymentOrderUrl(
@@ -485,6 +493,7 @@ function ClientChargesLocationDetail({
                     Deposit (charge amount)
                   </th>
                   <th scope="col">Charge status</th>
+                  <th scope="col">Stripe</th>
                   {isAdmin ? (
                     <th className="dashboard-th-actions" scope="col">
                       Action
@@ -495,7 +504,7 @@ function ClientChargesLocationDetail({
               <tbody>
                 {rows.length === 0 ? (
                   <tr>
-                    <td colSpan={isAdmin ? 5 : 4}>
+                    <td colSpan={isAdmin ? 6 : 5}>
                       <p className="muted" style={{ margin: "8px 0" }}>
                         No collected payments in this period
                         {statusFilter !== "all" ? ` for status “${statusFilter}”` : ""}.
@@ -509,6 +518,7 @@ function ClientChargesLocationDetail({
                     const pending = row.charge?.status.toLowerCase() === "pending";
                     const succeeded = row.charge?.status.toLowerCase() === "succeeded";
                     const paymentOrderUrl = buildGhlPaymentOrderUrl(row.ghlLocationId, row.deposit);
+                    const stripeUrl = stripeChargeUrl(row);
                     return (
                       <tr key={row.appointmentId}>
                         <td>
@@ -556,6 +566,21 @@ function ClientChargesLocationDetail({
                               Ambiguous / in flight — do not retry until reconciled
                             </div>
                           ) : null}
+                        </td>
+                        <td>
+                          {stripeUrl ? (
+                            <a
+                              className="button secondary"
+                              href={stripeUrl}
+                              rel="noopener noreferrer"
+                              style={{ display: "inline-block", fontSize: "0.85em", padding: "4px 10px" }}
+                              target="_blank"
+                            >
+                              Open in Stripe
+                            </a>
+                          ) : (
+                            <span className="muted">—</span>
+                          )}
                         </td>
                         {isAdmin ? (
                           <td className="dashboard-th-actions">

@@ -32,6 +32,7 @@ import {
   emptyOverviewAccountRow,
   pickCanonicalDepositSource,
   stripeConnectedChargeRequestOptions,
+  stripeDashboardPaymentUrl,
   toStripeMinorUnits
 } from "./client-charges-logic.ts";
 
@@ -279,6 +280,43 @@ describe("Stripe Connect account id", () => {
     assert.equal(normalizeStripeConnectAccountId("cus_123"), null);
     assert.equal(normalizeStripeConnectAccountId(""), null);
     assert.equal(isValidStripeConnectAccountId(null), false);
+  });
+});
+
+describe("stripe dashboard payment link", () => {
+  it("opens the connected-account payment in the live dashboard", () => {
+    assert.equal(
+      stripeDashboardPaymentUrl({
+        paymentIntentId: " pi_3Abc123 ",
+        chargeId: "ch_ignored",
+        stripeAccountId: " acct_1Merchant "
+      }),
+      "https://dashboard.stripe.com/acct_1Merchant/payments/pi_3Abc123"
+    );
+  });
+
+  it("uses the charge id and test mode when there is no payment intent", () => {
+    assert.equal(
+      stripeDashboardPaymentUrl({
+        chargeId: "ch_3Abc",
+        stripeAccountId: "acct_1Merchant",
+        livemode: false
+      }),
+      "https://dashboard.stripe.com/acct_1Merchant/test/payments/ch_3Abc"
+    );
+  });
+
+  it("omits an account segment when the connected account id is missing", () => {
+    assert.equal(
+      stripeDashboardPaymentUrl({ paymentIntentId: "pi_3Abc" }),
+      "https://dashboard.stripe.com/payments/pi_3Abc"
+    );
+  });
+
+  it("returns null unless the id is a Stripe payment or charge", () => {
+    assert.equal(stripeDashboardPaymentUrl({ paymentIntentId: "ghl_123", stripeAccountId: "acct_1" }), null);
+    assert.equal(stripeDashboardPaymentUrl({ paymentIntentId: "pi_3Abc", stripeAccountId: "not-an-account" }), "https://dashboard.stripe.com/payments/pi_3Abc");
+    assert.equal(stripeDashboardPaymentUrl({}), null);
   });
 });
 

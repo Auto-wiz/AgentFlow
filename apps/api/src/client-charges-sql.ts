@@ -16,6 +16,7 @@ import {
   COLLECTED_PAYMENT_MIRROR_WINDOW_SECONDS,
   emptyOverviewAccountRow,
   overviewAccountMatchesView,
+  stripeDashboardPaymentUrl,
   type OverviewAccountView
 } from "./client-charges-logic.js";
 import { COLLECTED_TRANSACTION_STATUSES } from "./ghl-payment-transaction-amount.js";
@@ -53,6 +54,7 @@ export type ClientChargeCandidate = {
     attemptCount: number;
     ghlReferenceId: string | null;
     ghlTransactionId: string | null;
+    stripeDashboardUrl: string | null;
     lastError: string | null;
     createdAt: string;
     updatedAt: string;
@@ -265,6 +267,10 @@ function chargeJsonSql(where: SQL): SQL {
       'attemptCount', ch.attempt_count,
       'ghlReferenceId', ch.ghl_reference_id,
       'ghlTransactionId', ch.ghl_transaction_id,
+      'stripePaymentIntentId', ch.stripe_payment_intent_id,
+      'stripeChargeId', ch.stripe_charge_id,
+      'stripeAccountId', charge_billing.stripe_account_id,
+      'livemode', ch.response_snapshot->'livemode',
       'lastError', ch.last_error,
       'createdAt', ch.created_at,
       'updatedAt', ch.updated_at,
@@ -275,6 +281,7 @@ function chargeJsonSql(where: SQL): SQL {
     )
     from client_result_charges ch
     left join workspace_users wu on wu.id = ch.created_by_workspace_user_id
+    left join location_billing_config charge_billing on charge_billing.location_id = ch.location_id
     where ${where}
     order by case lower(coalesce(ch.status, ''))
       when 'succeeded' then 0
@@ -343,6 +350,10 @@ type ChargeJson = {
   attemptCount?: number | string;
   ghlReferenceId?: string | null;
   ghlTransactionId?: string | null;
+  stripePaymentIntentId?: string | null;
+  stripeChargeId?: string | null;
+  stripeAccountId?: string | null;
+  livemode?: boolean | null;
   lastError?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
@@ -368,6 +379,12 @@ function mapCharge(value: unknown, fallbackCurrency: string): ClientChargeCandid
     attemptCount: Number(row.attemptCount ?? 0),
     ghlReferenceId: row.ghlReferenceId ?? null,
     ghlTransactionId: row.ghlTransactionId ?? null,
+    stripeDashboardUrl: stripeDashboardPaymentUrl({
+      paymentIntentId: row.stripePaymentIntentId,
+      chargeId: row.stripeChargeId,
+      stripeAccountId: row.stripeAccountId,
+      livemode: typeof row.livemode === "boolean" ? row.livemode : undefined
+    }),
     lastError: row.lastError ?? null,
     createdAt: iso(row.createdAt) ?? new Date(0).toISOString(),
     updatedAt: iso(row.updatedAt) ?? new Date(0).toISOString(),
