@@ -3,8 +3,9 @@ main = "src/index.ts"
 compatibility_date = "2026-05-12"
 compatibility_flags = ["nodejs_compat"]
 
-# Subrequest budget: custom [limits] subrequests requires a paid Workers plan (Free deploy fails API 100328).
-# On Free, rely on default limits + small hydrate batches. Upgrade and set limits in the dashboard if needed.
+# Subrequest budget: Workers Free is ~50 external subrequests per invocation. Workers Paid
+# defaults to 10_000. A custom [limits] block fails deploy on Free (API 100328), so this
+# file does not pin one. The order-transaction cron batch assumes the paid budget.
 
 # Cron runs every 15m; LOCATION_NAME_CRON_BATCH="0" (default below) skips GHL hydration for unnamed locations.
 # Set LOCATION_NAME_CRON_BATCH to e.g. 8 in Dashboard or `[vars]` to drain blank `locations.name` over time.

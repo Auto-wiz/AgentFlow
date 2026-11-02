@@ -154,10 +154,10 @@ import {
 } from "./ghl-oauth-location-token.js";
 import { fetchSelectionLocationRows, rowsToNullableSelectionSet } from "./workspace-selection-db.js";
 import {
+  ORDER_TRANSACTION_CRON_BATCH,
   ORDER_TRANSACTION_SYNC_DELAY_MS,
-  scheduleOrderTransactionSync,
-  syncDueOrderTransactions,
-  syncRecentOrderTransactions
+  drainDueOrderTransactions,
+  scheduleOrderTransactionSync
 } from "./ghl-payment-transactions.js";
 import {
   WORKSPACE_AUDIT_RETENTION_DAYS,
@@ -6085,12 +6085,10 @@ export default {
     }
 
     try {
-      const recent = await syncRecentOrderTransactions(env, { withinDays: 30, limit: 4 });
-      console.log("[scheduled.order_transactions.recent]", recent);
-      if (recent.checked === 0) {
-        const summary = await syncDueOrderTransactions(env, 4, { olderThanDays: 30 });
-        console.log("[scheduled.order_transactions]", summary);
-      }
+      const summary = await drainDueOrderTransactions(env, {
+        limit: ORDER_TRANSACTION_CRON_BATCH
+      });
+      console.log("[scheduled.order_transactions.drain]", summary);
     } catch (error) {
       console.warn("[scheduled.order_transactions.failed]", error);
     }
