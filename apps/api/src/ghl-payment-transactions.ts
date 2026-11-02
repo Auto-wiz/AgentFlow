@@ -3,7 +3,13 @@
  * Order webhooks schedule a delayed lookup. Client Charges reads the rows from SQL.
  */
 
-import { createDb, ghlPaymentOrders, ghlPaymentTransactions, locations } from "@agentflow/db";
+import {
+  createDb,
+  ghlOAuthInstallations,
+  ghlPaymentOrders,
+  ghlPaymentTransactions,
+  locations
+} from "@agentflow/db";
 import { and, asc, desc, eq, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 
 import {
@@ -13,6 +19,8 @@ import {
 } from "./ghl-payment-transaction-amount.js";
 import {
   getAccessTokensForLocation,
+  refreshLocationOAuthAccessTokens,
+  refreshOAuthAccessTokensForCompany,
   type GhlOAuthRefreshCredentialEnv
 } from "./ghl-oauth-location-token.js";
 
@@ -30,6 +38,11 @@ export const ORDER_TRANSACTION_EMPTY_RETRY_MS = 3 * 60 * 1000;
 export const ORDER_TRANSACTION_ERROR_RETRY_MS = 5 * 60 * 1000;
 export const ORDER_TRANSACTION_AUTH_RETRY_MS = 6 * 60 * 60 * 1000;
 export const ORDER_TRANSACTION_MAX_EMPTY_ATTEMPTS = 3;
+/** Orders per cron tick. Workers Paid allows 10k subrequests; this stays far under that. */
+export const ORDER_TRANSACTION_CRON_BATCH = 80;
+const ORDER_TRANSACTION_DRAIN_MAX = 400;
+/** A successful lookup this old will not gain transactions later. */
+const ORDER_TRANSACTION_HISTORICAL_EMPTY_MS = 7 * 24 * 60 * 60 * 1000;
 const TRANSACTION_PAGE_SIZE = 100;
 const TRANSACTION_MAX_PAGES = 3;
 
@@ -414,4 +427,131 @@ export async function syncDueOrderTransactions(
     }
   }
   return { checked: due.length, results };
+}
+
+/**
+ * Pull transactions for many due orders in one invocation.
+ * Refreshes each agency token at most once, then reuses one location token set
+ * per subaccount. Workers Paid can do this; the old cron capped at 4 because
+ * the Free plan allowed only ~50 subrequests.
+ */
+export async function drainDueOrderTransactions(
+  env: OrderTransactionSyncEnv,
+  options?: { limit?: number; refreshCompany?: boolean }
+): Promise<RecentOrderTransactionSyncSummary & { locations: number }> {
+  const limit = Math.min(Math.max(options?.limit ?? ORDER_TRANSACTION_CRON_BATCH, 1), ORDER_TRANSACTION_DRAIN_MAX);
+  const db = createDb(env.DATABASE_URL);
+
+  if (options?.refreshCompany === true) {
+    const companies = await db
+      .select({ companyId: ghlOAuthInstallations.companyId })
+      .from(ghlOAuthInstallations)
+      .where(eq(ghlOAuthInstallations.userType, "Company"));
+    const companyIds = new Set(
+      companies.map((row) => row.companyId?.trim()).filter((companyId): companyId is string => Boolean(companyId))
+    );
+    for (const companyId of companyIds) {
+      try {
+        await refreshOAuthAccessTokensForCompany(env, db, companyId);
+      } catch (error) {
+        console.warn("[order.transactions.drain.company_refresh_failed]", companyId, error);
+      }
+    }
+  }
+
+  const due = await db
+    .select({
+      id: ghlPaymentOrders.id,
+      locationId: ghlPaymentOrders.locationId,
+      ghlOrderId: ghlPaymentOrders.ghlOrderId,
+      ghlLocationId: locations.ghlLocationId,
+      transactionSyncAttempts: ghlPaymentOrders.transactionSyncAttempts,
+      ghlCreatedAt: ghlPaymentOrders.ghlCreatedAt,
+      createdAt: ghlPaymentOrders.createdAt
+    })
+    .from(ghlPaymentOrders)
+    .innerJoin(locations, eq(locations.id, ghlPaymentOrders.locationId))
+    .where(dueOrderFilter(new Date(), "any"))
+    .orderBy(desc(orderRecencySql()))
+    .limit(limit);
+
+  const groups = new Map<string, typeof due>();
+  for (const order of due) {
+    const list = groups.get(order.ghlLocationId) ?? [];
+    list.push(order);
+    groups.set(order.ghlLocationId, list);
+  }
+
+  const results: OrderTransactionSyncResult[] = [];
+  const historicalCutoff = Date.now() - ORDER_TRANSACTION_HISTORICAL_EMPTY_MS;
+  for (const [ghlLocationId, orders] of groups) {
+    let tokens: string[] = [];
+    try {
+      const [liveLocationToken] = await db
+        .select({ id: ghlOAuthInstallations.id })
+        .from(ghlOAuthInstallations)
+        .where(
+          and(
+            eq(ghlOAuthInstallations.locationId, ghlLocationId),
+            eq(ghlOAuthInstallations.userType, "Location"),
+            sql`${ghlOAuthInstallations.expiresAt} > now()`
+          )
+        )
+        .limit(1);
+      if (!liveLocationToken) {
+        await refreshLocationOAuthAccessTokens(env, db, ghlLocationId);
+      }
+      tokens = await getAccessTokensForLocation(env, db, ghlLocationId);
+    } catch (error) {
+      console.warn("[order.transactions.drain.token_failed]", ghlLocationId, error);
+    }
+    for (const order of orders) {
+      let result: OrderTransactionSyncResult;
+      try {
+        result = await writeOrderTransactions(env, db, order, tokens);
+      } catch (error) {
+        console.warn("[order.transactions.drain.failed]", order.ghlOrderId, error);
+        result = {
+          ok: false,
+          ghlOrderId: order.ghlOrderId,
+          reason: error instanceof Error ? error.message : "sync_failed"
+        };
+      }
+      const occurredAt = order.ghlCreatedAt ?? order.createdAt;
+      if (result.ok && (result.collected ?? 0) <= 0 && occurredAt.getTime() < historicalCutoff) {
+        const now = new Date();
+        await db
+          .update(ghlPaymentOrders)
+          .set({
+            transactionSyncedAt: now,
+            transactionSyncAfter: null,
+            updatedAt: now
+          })
+          .where(eq(ghlPaymentOrders.id, order.id));
+        result = { ...result, synced: true };
+      }
+      results.push(result);
+    }
+  }
+
+  const [remainingRow] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(ghlPaymentOrders)
+    .where(dueOrderFilter(new Date(), "any"));
+  const reasons: Record<string, number> = {};
+  for (const result of results) {
+    if (result.ok) continue;
+    const reason = result.reason ?? "failed";
+    reasons[reason] = (reasons[reason] ?? 0) + 1;
+  }
+
+  return {
+    checked: results.length,
+    ok: results.filter((result) => result.ok).length,
+    failed: results.filter((result) => !result.ok).length,
+    withCollected: results.filter((result) => (result.collected ?? 0) > 0).length,
+    remainingDue: Number(remainingRow?.n ?? 0),
+    reasons,
+    locations: groups.size
+  };
 }

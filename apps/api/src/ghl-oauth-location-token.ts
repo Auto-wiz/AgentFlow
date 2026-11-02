@@ -331,6 +331,54 @@ export async function refreshGhlAccessTokenWithRefreshToken(
 }
 
 /**
+ * Rotate Location OAuth rows for one subaccount. Does not touch the agency Company token.
+ */
+export async function refreshLocationOAuthAccessTokens(
+  env: GhlOAuthRefreshCredentialEnv,
+  db: AgentFlowDb,
+  ghlLocationId: string
+): Promise<number> {
+  const clientId = env.GHL_CLIENT_ID?.trim();
+  const clientSecret = env.GHL_CLIENT_SECRET?.trim();
+  const locationId = ghlLocationId.trim();
+  if (!clientId || !clientSecret || !locationId) {
+    return 0;
+  }
+
+  const installations = await db
+    .select({
+      id: ghlOAuthInstallations.id,
+      refreshToken: ghlOAuthInstallations.refreshToken,
+      userType: ghlOAuthInstallations.userType
+    })
+    .from(ghlOAuthInstallations)
+    .where(
+      and(eq(ghlOAuthInstallations.locationId, locationId), eq(ghlOAuthInstallations.userType, "Location"))
+    )
+    .orderBy(desc(ghlOAuthInstallations.updatedAt))
+    .limit(3);
+
+  let refreshedCount = 0;
+  for (const installation of installations) {
+    const refreshToken = installation.refreshToken?.trim();
+    if (!refreshToken) continue;
+    const refreshed = await refreshGhlAccessTokenWithRefreshToken(env, refreshToken, installation.userType);
+    if (!refreshed) continue;
+    await db
+      .update(ghlOAuthInstallations)
+      .set({
+        accessToken: refreshed.accessToken,
+        refreshToken: refreshed.refreshToken,
+        expiresAt: addSecondsToNow(refreshed.expiresIn),
+        updatedAt: new Date()
+      })
+      .where(eq(ghlOAuthInstallations.id, installation.id));
+    refreshedCount += 1;
+  }
+  return refreshedCount;
+}
+
+/**
  * Rotate access tokens via refresh_token for Location + Agency Company installs scoped to `ghlLocationId`.
  */
 export async function refreshOAuthAccessTokensForLocation(
